@@ -1,0 +1,30 @@
+{
+  "id": "value_prop",
+  "version": "rubrics.v1",
+  "kpi_id": "CCL.VALUE_PROP_CLARITY",
+  "snippet_kinds": [
+    "headline",
+    "cta"
+  ],
+  "stages": [
+    "home",
+    "plp",
+    "pdp"
+  ],
+  "grouping": {
+    "per": "page",
+    "max_snippets": 8
+  },
+  "question": "Gli snippet sono il titolo principale e le call to action della pagina. Chi arriva per la prima volta capisce subito che cosa viene venduto (o che cos'è il prodotto) e perché sceglierlo? Scegli una sola etichetta secondo le descrizioni. Copia in evidence il titolo o la CTA su cui basi il giudizio, carattere per carattere, con il suo snippet_id.",
+  "labels": {
+    "clear": "Il testo dice che cosa si vende o che cos'è il prodotto e indica almeno un beneficio o un elemento distintivo concreto (prezzo, qualità, consegna, assortimento, garanzia).",
+    "partial": "Il testo dice che cosa si vende ma senza benefici o differenze concrete, oppure indica un beneficio ma l'oggetto dell'offerta resta implicito.",
+    "unclear": "Solo slogan generici o etichette di navigazione: non si capisce che cosa si vende né perché sceglierlo."
+  },
+  "no_quote_labels": [],
+  "values": {
+    "clear": "clear",
+    "partial": "partial",
+    "unclear": "unclear"
+  }
+}

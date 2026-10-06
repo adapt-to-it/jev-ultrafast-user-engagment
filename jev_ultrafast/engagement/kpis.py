@@ -9,7 +9,9 @@ from typing import Literal
 
 Owner = Literal["PERF", "FAI", "TRI", "PTI", "CCL", "MPI", "DPR"]
 Producer = Literal["checks", "friction", "judgments", "deception"]
-Aggregate = Literal["wmedian", "median", "max", "min", "mean", "sum", "any", "all", "first"]
+# "best": the observation whose value scores highest in anchors.json (ties: earliest), for judged site cues that a
+# shopper benefits from on the clearest page they reach.
+Aggregate = Literal["wmedian", "median", "max", "min", "mean", "sum", "any", "all", "first", "best"]
 Scope = Literal["page", "site", "journey"]
 ValueType = Literal["number", "bool", "enum", "confidence"]
 
@@ -97,7 +99,7 @@ KPI_LIST: tuple[Kpi, ...] = (
     _k("FAI.TARGET_SIZE_24", "FAI", "%", "checks", "page", "wmedian", "number", "Target interattivi >= 24 px"),
     _k("FAI.TARGET_SIZE_44", "FAI", "%", "checks", "page", "wmedian", "number", "Target interattivi >= 44 px"),
     _k("FAI.A11Y_BASIC", "FAI", "count", "checks", "page", "wmedian", "number",
-       "Problemi base di accessibilita (alt, label, lang)"),
+       "Problemi base di accessibilita (alt, lang)"),
     _k("FAI.OVERLAY_INTERRUPTIONS", "FAI", "count", "checks", "page", "max", "number",
        "Overlay/popup che interrompono la pagina"),
     _k("FAI.OVERLAY_COVERAGE", "FAI", "%", "checks", "page", "max", "number",
@@ -137,7 +139,7 @@ KPI_LIST: tuple[Kpi, ...] = (
        "Fascia di rating: 4.0-4.7 | 4.8-5.0 | 3.5-3.9 | <3.5", stages=_PDP),
     _k("TRI.DELIVERY_TIME_STATED", "TRI", "bool", "checks", "page", "any", "bool",
        "Tempi di consegna indicati prima del checkout", stages=("pdp", "cart")),
-    _k("TRI.RETURNS_CLARITY", "TRI", "label", "judgments", "site", "first", "enum",
+    _k("TRI.RETURNS_CLARITY", "TRI", "label", "judgments", "site", "best", "enum",
        "Chiarezza della politica di reso: clear | vague | absent", judged=True),
     # ------------------------------------------------------------ PTI: price and cost transparency
     _k("PTI.PRICE_VISIBLE_PDP", "PTI", "bool", "checks", "page", "all", "bool", "Prezzo visibile above the fold",
@@ -171,7 +173,7 @@ KPI_LIST: tuple[Kpi, ...] = (
     _k("CCL.FORM_LABELS", "CCL", "%", "checks", "page", "min", "number", "Campi con etichetta associata"),
     _k("CCL.VISUAL_COMPLEXITY", "CCL", "score", "checks", "page", "wmedian", "number",
        "Complessita visiva dallo screenshot (ancore provvisorie)"),
-    _k("CCL.VALUE_PROP_CLARITY", "CCL", "label", "judgments", "site", "first", "enum",
+    _k("CCL.VALUE_PROP_CLARITY", "CCL", "label", "judgments", "site", "best", "enum",
        "Chiarezza della proposta di valore: clear | partial | unclear", judged=True),
     # ------------------------------------------------------------ MPI: persuasion supply (genuine only)
     _k("MPI.SCARCITY_SIGNALS", "MPI", "count", "checks", "site", "max", "number",
@@ -180,9 +182,9 @@ KPI_LIST: tuple[Kpi, ...] = (
        "Segnali di urgenza con scadenza dichiarata", credit_unless="DPR.COUNTDOWN_RESET"),
     _k("MPI.RECIPROCITY", "MPI", "count", "checks", "site", "max", "number",
        "Reciprocita: spedizione/resi gratuiti, omaggi, campioni"),
-    _k("MPI.AUTHORITY", "MPI", "label", "judgments", "site", "first", "enum",
+    _k("MPI.AUTHORITY", "MPI", "label", "judgments", "site", "best", "enum",
        "Segnali di autorita: present | weak | absent", judged=True),
-    _k("MPI.SOCIAL_PROOF_RICH", "MPI", "label", "judgments", "site", "first", "enum",
+    _k("MPI.SOCIAL_PROOF_RICH", "MPI", "label", "judgments", "site", "best", "enum",
        "Social proof oltre al rating: rich | basic | absent", judged=True),
     # ------------------------------------------------------------ DPR: dark-pattern risk signals (penalty only)
     _k("DPR.COUNTDOWN_RESET", "DPR", "confidence", "deception", "site", "max", "confidence",

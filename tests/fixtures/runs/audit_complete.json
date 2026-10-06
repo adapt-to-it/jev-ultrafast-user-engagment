@@ -1,0 +1,1883 @@
+{
+ "run_id": "20261006T101500000000Z_audit_shop.example",
+ "schema_version": "engagement.v1",
+ "kind": "audit",
+ "site": {
+  "host": "shop.example",
+  "start_url": "https://shop.example/"
+ },
+ "created_at": "2026-10-06T10:15:00Z",
+ "finished_at": "2026-10-06T10:18:42Z",
+ "settings": {
+  "profiles": [
+   "mobile",
+   "desktop"
+  ],
+  "stages": [
+   "home",
+   "plp",
+   "pdp",
+   "cart",
+   "checkout_entry"
+  ],
+  "browser": {
+   "mode": "launch",
+   "product": "Chromium/141",
+   "headless": true
+  },
+  "locale": "it",
+  "consent": "auto",
+  "anchors_version": "anchors.v1",
+  "rubrics_version": "rubrics.v1",
+  "profiles_version": "profiles.v1",
+  "repeats": 1
+ },
+ "pages": [
+  {
+   "page_id": "mobile-home-1",
+   "stage": "home",
+   "profile": "mobile",
+   "url": "https://shop.example/",
+   "final_url": "https://shop.example/",
+   "status_code": 200,
+   "classification": {
+    "type": "home",
+    "confidence": 0.9,
+    "signals": [
+     "fixture:home"
+    ]
+   },
+   "vitals": {
+    "ttfb": 620,
+    "fcp": 1900,
+    "lcp": 3100,
+    "cls": 0.08,
+    "tbt_approx": 420,
+    "loaf_count": 3,
+    "visibility_state_at_load": "visible",
+    "settled_reason": "quiet"
+   },
+   "network": {
+    "requests": 78,
+    "bytes_transfer": 2300000,
+    "bytes_js": 610000,
+    "third_party_share": 0.34,
+    "http_errors": 0,
+    "source": "cdp"
+   },
+   "errors": {
+    "console": 1,
+    "page": 0,
+    "samples": []
+   },
+   "audit": {
+    "url": "https://shop.example/",
+    "title": "RunShop – scarpe da corsa",
+    "lang": "it",
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "headline",
+      "text": "Scarpe da corsa per ogni distanza, spedite in 24 ore",
+      "locator": "headline #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "cta",
+      "text": "Scopri la collezione",
+      "locator": "cta #2"
+     },
+     {
+      "snippet_id": "s3",
+      "kind": "consent",
+      "text": "Usiamo i cookie per migliorare la tua esperienza. Accetta tutto · Gestisci preferenze",
+      "locator": "consent #3"
+     },
+     {
+      "snippet_id": "s4",
+      "kind": "authority",
+      "text": "Certificato B Corp dal 2021 · Premio Netcomm eCommerce Award 2024",
+      "locator": "authority #4"
+     },
+     {
+      "snippet_id": "s5",
+      "kind": "returns_policy",
+      "text": "Reso gratuito entro 30 giorni",
+      "locator": "returns_policy #5"
+     },
+     {
+      "snippet_id": "s6",
+      "kind": "testimonial",
+      "text": "4,6/5 su 1.284 recensioni",
+      "locator": "testimonial #6"
+     }
+    ]
+   },
+   "screenshot": null,
+   "snapshot": null,
+   "loaded_ms": 4600,
+   "notes": []
+  },
+  {
+   "page_id": "mobile-plp-1",
+   "stage": "plp",
+   "profile": "mobile",
+   "url": "https://shop.example/uomo/scarpe-running",
+   "final_url": "https://shop.example/uomo/scarpe-running",
+   "status_code": 200,
+   "classification": {
+    "type": "plp",
+    "confidence": 0.9,
+    "signals": [
+     "fixture:plp"
+    ]
+   },
+   "vitals": {
+    "ttfb": 700,
+    "fcp": 2100,
+    "lcp": 3600,
+    "cls": 0.14,
+    "tbt_approx": 520,
+    "loaf_count": 4,
+    "visibility_state_at_load": "visible",
+    "settled_reason": "quiet"
+   },
+   "network": {
+    "requests": 92,
+    "bytes_transfer": 2700000,
+    "bytes_js": 640000,
+    "third_party_share": 0.31,
+    "http_errors": 1,
+    "source": "cdp"
+   },
+   "errors": {
+    "console": 0,
+    "page": 0,
+    "samples": []
+   },
+   "audit": {
+    "url": "https://shop.example/uomo/scarpe-running",
+    "title": "Scarpe running uomo | RunShop",
+    "lang": "it",
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "headline",
+      "text": "Scarpe running uomo",
+      "locator": "headline #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "cta",
+      "text": "Filtra",
+      "locator": "cta #2"
+     },
+     {
+      "snippet_id": "s3",
+      "kind": "cta",
+      "text": "Carica altri prodotti",
+      "locator": "cta #3"
+     }
+    ]
+   },
+   "screenshot": null,
+   "snapshot": null,
+   "loaded_ms": 5100,
+   "notes": []
+  },
+  {
+   "page_id": "mobile-pdp-1",
+   "stage": "pdp",
+   "profile": "mobile",
+   "url": "https://shop.example/p/runner-x2",
+   "final_url": "https://shop.example/p/runner-x2",
+   "status_code": 200,
+   "classification": {
+    "type": "pdp",
+    "confidence": 0.9,
+    "signals": [
+     "fixture:pdp"
+    ]
+   },
+   "vitals": {
+    "ttfb": 650,
+    "fcp": 1800,
+    "lcp": 2900,
+    "cls": 0.05,
+    "tbt_approx": 380,
+    "loaf_count": 2,
+    "visibility_state_at_load": "visible",
+    "settled_reason": "quiet"
+   },
+   "network": {
+    "requests": 70,
+    "bytes_transfer": 2100000,
+    "bytes_js": 600000,
+    "third_party_share": 0.36,
+    "http_errors": 0,
+    "source": "cdp"
+   },
+   "errors": {
+    "console": 2,
+    "page": 0,
+    "samples": []
+   },
+   "audit": {
+    "url": "https://shop.example/p/runner-x2",
+    "title": "Runner X2 | RunShop",
+    "lang": "it",
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "headline",
+      "text": "Runner X2 – scarpa da corsa leggera da 220 g",
+      "locator": "headline #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "cta",
+      "text": "Aggiungi al carrello",
+      "locator": "cta #2"
+     },
+     {
+      "snippet_id": "s3",
+      "kind": "returns_policy",
+      "text": "Reso gratuito entro 30 giorni: stampa l'etichetta prepagata dal tuo account e ricevi il rimborso in 5 giorni lavorativi.",
+      "locator": "returns_policy #3"
+     },
+     {
+      "snippet_id": "s4",
+      "kind": "shipping_policy",
+      "text": "Spedizione gratuita sopra i 49 €, consegna in 24/48 ore",
+      "locator": "shipping_policy #4"
+     },
+     {
+      "snippet_id": "s5",
+      "kind": "testimonial",
+      "text": "«Leggerissime, le uso per le maratone» — Giulia R., acquisto verificato, 12/09/2026",
+      "locator": "testimonial #5"
+     },
+     {
+      "snippet_id": "s6",
+      "kind": "urgency",
+      "text": "L'offerta scade tra 00:59:59",
+      "locator": "urgency #6"
+     },
+     {
+      "snippet_id": "s7",
+      "kind": "modal_decline",
+      "text": "No grazie, preferisco pagare di più",
+      "locator": "modal_decline #7"
+     }
+    ]
+   },
+   "screenshot": null,
+   "snapshot": null,
+   "loaded_ms": 4400,
+   "notes": []
+  },
+  {
+   "page_id": "mobile-cart-1",
+   "stage": "cart",
+   "profile": "mobile",
+   "url": "https://shop.example/carrello",
+   "final_url": "https://shop.example/carrello",
+   "status_code": 200,
+   "classification": {
+    "type": "cart",
+    "confidence": 0.9,
+    "signals": [
+     "fixture:cart"
+    ]
+   },
+   "vitals": {
+    "ttfb": 540,
+    "fcp": 1500,
+    "lcp": 2400,
+    "cls": 0.02,
+    "tbt_approx": 300,
+    "loaf_count": 1,
+    "visibility_state_at_load": "visible",
+    "settled_reason": "quiet"
+   },
+   "network": {
+    "requests": 55,
+    "bytes_transfer": 1500000,
+    "bytes_js": 560000,
+    "third_party_share": 0.28,
+    "http_errors": 0,
+    "source": "cdp"
+   },
+   "errors": {
+    "console": 0,
+    "page": 0,
+    "samples": []
+   },
+   "audit": {
+    "url": "https://shop.example/carrello",
+    "title": "Carrello | RunShop",
+    "lang": "it",
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "checkbox_label",
+      "text": "Non desidero non ricevere offerte personalizzate",
+      "locator": "checkbox_label #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "checkbox_label",
+      "text": "Aggiungi Protezione spedizione (2,90 €)",
+      "locator": "checkbox_label #2"
+     },
+     {
+      "snippet_id": "s3",
+      "kind": "fee_line",
+      "text": "Protezione spedizione    2,90 €",
+      "locator": "fee_line #3"
+     },
+     {
+      "snippet_id": "s4",
+      "kind": "cta",
+      "text": "Procedi al checkout",
+      "locator": "cta #4"
+     },
+     {
+      "snippet_id": "s5",
+      "kind": "returns_policy",
+      "text": "Resi facili",
+      "locator": "returns_policy #5"
+     }
+    ]
+   },
+   "screenshot": null,
+   "snapshot": null,
+   "loaded_ms": 3900,
+   "notes": []
+  },
+  {
+   "page_id": "mobile-checkout_entry-1",
+   "stage": "checkout_entry",
+   "profile": "mobile",
+   "url": "https://shop.example/checkout",
+   "final_url": "https://shop.example/checkout",
+   "status_code": 200,
+   "classification": {
+    "type": "checkout",
+    "confidence": 0.9,
+    "signals": [
+     "fixture:checkout_entry"
+    ]
+   },
+   "vitals": {
+    "ttfb": 590,
+    "fcp": 1400,
+    "lcp": 2200,
+    "cls": 0.01,
+    "tbt_approx": 260,
+    "loaf_count": 1,
+    "visibility_state_at_load": "visible",
+    "settled_reason": "quiet"
+   },
+   "network": {
+    "requests": 48,
+    "bytes_transfer": 1300000,
+    "bytes_js": 540000,
+    "third_party_share": 0.25,
+    "http_errors": 0,
+    "source": "cdp"
+   },
+   "errors": {
+    "console": 0,
+    "page": 0,
+    "samples": []
+   },
+   "audit": {
+    "url": "https://shop.example/checkout",
+    "title": "Checkout | RunShop",
+    "lang": "it",
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "checkbox_label",
+      "text": "Iscrivimi a Runner Club",
+      "locator": "checkbox_label #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "subscription",
+      "text": "Runner Club: prova gratuita di 30 giorni, poi 9,99 €/mese con rinnovo automatico",
+      "locator": "subscription #2"
+     },
+     {
+      "snippet_id": "s3",
+      "kind": "fee_line",
+      "text": "Runner Club – prova gratuita 0,00 €",
+      "locator": "fee_line #3"
+     },
+     {
+      "snippet_id": "s4",
+      "kind": "cta",
+      "text": "Continua",
+      "locator": "cta #4"
+     }
+    ]
+   },
+   "screenshot": null,
+   "snapshot": null,
+   "loaded_ms": 3700,
+   "notes": []
+  },
+  {
+   "page_id": "desktop-home-1",
+   "stage": "home",
+   "profile": "desktop",
+   "url": "https://shop.example/",
+   "final_url": "https://shop.example/",
+   "status_code": 200,
+   "classification": {
+    "type": "home",
+    "confidence": 0.9,
+    "signals": [
+     "fixture:home"
+    ]
+   },
+   "vitals": {
+    "ttfb": 310,
+    "fcp": 800,
+    "lcp": 1500,
+    "cls": 0.04,
+    "tbt_approx": 90,
+    "loaf_count": 0,
+    "visibility_state_at_load": "visible",
+    "settled_reason": "quiet"
+   },
+   "network": {
+    "requests": 80,
+    "bytes_transfer": 2350000,
+    "bytes_js": 620000,
+    "third_party_share": 0.34,
+    "http_errors": 0,
+    "source": "cdp"
+   },
+   "errors": {
+    "console": 1,
+    "page": 0,
+    "samples": []
+   },
+   "audit": {
+    "url": "https://shop.example/",
+    "title": "RunShop – scarpe da corsa",
+    "lang": "it",
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "headline",
+      "text": "Scarpe da corsa per ogni distanza, spedite in 24 ore",
+      "locator": "headline #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "cta",
+      "text": "Scopri la collezione",
+      "locator": "cta #2"
+     },
+     {
+      "snippet_id": "s3",
+      "kind": "consent",
+      "text": "Usiamo i cookie per migliorare la tua esperienza. Accetta tutto · Gestisci preferenze",
+      "locator": "consent #3"
+     },
+     {
+      "snippet_id": "s4",
+      "kind": "authority",
+      "text": "Certificato B Corp dal 2021 · Premio Netcomm eCommerce Award 2024",
+      "locator": "authority #4"
+     },
+     {
+      "snippet_id": "s5",
+      "kind": "returns_policy",
+      "text": "Reso gratuito entro 30 giorni",
+      "locator": "returns_policy #5"
+     },
+     {
+      "snippet_id": "s6",
+      "kind": "testimonial",
+      "text": "4,6/5 su 1.284 recensioni",
+      "locator": "testimonial #6"
+     }
+    ]
+   },
+   "screenshot": null,
+   "snapshot": null,
+   "loaded_ms": 3000,
+   "notes": []
+  },
+  {
+   "page_id": "desktop-plp-1",
+   "stage": "plp",
+   "profile": "desktop",
+   "url": "https://shop.example/uomo/scarpe-running",
+   "final_url": "https://shop.example/uomo/scarpe-running",
+   "status_code": 200,
+   "classification": {
+    "type": "plp",
+    "confidence": 0.9,
+    "signals": [
+     "fixture:plp"
+    ]
+   },
+   "vitals": {
+    "ttfb": 360,
+    "fcp": 900,
+    "lcp": 1900,
+    "cls": 0.09,
+    "tbt_approx": 140,
+    "loaf_count": 1,
+    "visibility_state_at_load": "visible",
+    "settled_reason": "quiet"
+   },
+   "network": {
+    "requests": 95,
+    "bytes_transfer": 2750000,
+    "bytes_js": 650000,
+    "third_party_share": 0.31,
+    "http_errors": 1,
+    "source": "cdp"
+   },
+   "errors": {
+    "console": 0,
+    "page": 0,
+    "samples": []
+   },
+   "audit": {
+    "url": "https://shop.example/uomo/scarpe-running",
+    "title": "Scarpe running uomo | RunShop",
+    "lang": "it",
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "headline",
+      "text": "Scarpe running uomo",
+      "locator": "headline #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "cta",
+      "text": "Filtra",
+      "locator": "cta #2"
+     },
+     {
+      "snippet_id": "s3",
+      "kind": "cta",
+      "text": "Carica altri prodotti",
+      "locator": "cta #3"
+     }
+    ]
+   },
+   "screenshot": null,
+   "snapshot": null,
+   "loaded_ms": 3400,
+   "notes": []
+  },
+  {
+   "page_id": "desktop-pdp-1",
+   "stage": "pdp",
+   "profile": "desktop",
+   "url": "https://shop.example/p/runner-x2",
+   "final_url": "https://shop.example/p/runner-x2",
+   "status_code": 200,
+   "classification": {
+    "type": "pdp",
+    "confidence": 0.9,
+    "signals": [
+     "fixture:pdp"
+    ]
+   },
+   "vitals": {
+    "ttfb": 330,
+    "fcp": 850,
+    "lcp": 1700,
+    "cls": 0.03,
+    "tbt_approx": 110,
+    "loaf_count": 0,
+    "visibility_state_at_load": "visible",
+    "settled_reason": "quiet"
+   },
+   "network": {
+    "requests": 72,
+    "bytes_transfer": 2150000,
+    "bytes_js": 610000,
+    "third_party_share": 0.36,
+    "http_errors": 0,
+    "source": "cdp"
+   },
+   "errors": {
+    "console": 1,
+    "page": 0,
+    "samples": []
+   },
+   "audit": {
+    "url": "https://shop.example/p/runner-x2",
+    "title": "Runner X2 | RunShop",
+    "lang": "it",
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "headline",
+      "text": "Runner X2 – scarpa da corsa leggera da 220 g",
+      "locator": "headline #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "cta",
+      "text": "Aggiungi al carrello",
+      "locator": "cta #2"
+     },
+     {
+      "snippet_id": "s3",
+      "kind": "returns_policy",
+      "text": "Reso gratuito entro 30 giorni: stampa l'etichetta prepagata dal tuo account e ricevi il rimborso in 5 giorni lavorativi.",
+      "locator": "returns_policy #3"
+     },
+     {
+      "snippet_id": "s4",
+      "kind": "shipping_policy",
+      "text": "Spedizione gratuita sopra i 49 €, consegna in 24/48 ore",
+      "locator": "shipping_policy #4"
+     },
+     {
+      "snippet_id": "s5",
+      "kind": "testimonial",
+      "text": "«Leggerissime, le uso per le maratone» — Giulia R., acquisto verificato, 12/09/2026",
+      "locator": "testimonial #5"
+     },
+     {
+      "snippet_id": "s6",
+      "kind": "urgency",
+      "text": "L'offerta scade tra 00:59:59",
+      "locator": "urgency #6"
+     }
+    ]
+   },
+   "screenshot": null,
+   "snapshot": null,
+   "loaded_ms": 3200,
+   "notes": []
+  },
+  {
+   "page_id": "desktop-cart-1",
+   "stage": "cart",
+   "profile": "desktop",
+   "url": "https://shop.example/carrello",
+   "final_url": "https://shop.example/carrello",
+   "status_code": 200,
+   "classification": {
+    "type": "cart",
+    "confidence": 0.9,
+    "signals": [
+     "fixture:cart"
+    ]
+   },
+   "vitals": {
+    "ttfb": 280,
+    "fcp": 700,
+    "lcp": 1200,
+    "cls": 0.01,
+    "tbt_approx": 60,
+    "loaf_count": 0,
+    "visibility_state_at_load": "visible",
+    "settled_reason": "quiet"
+   },
+   "network": {
+    "requests": 56,
+    "bytes_transfer": 1550000,
+    "bytes_js": 570000,
+    "third_party_share": 0.28,
+    "http_errors": 0,
+    "source": "cdp"
+   },
+   "errors": {
+    "console": 0,
+    "page": 0,
+    "samples": []
+   },
+   "audit": {
+    "url": "https://shop.example/carrello",
+    "title": "Carrello | RunShop",
+    "lang": "it",
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "checkbox_label",
+      "text": "Non desidero non ricevere offerte personalizzate",
+      "locator": "checkbox_label #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "checkbox_label",
+      "text": "Aggiungi Protezione spedizione (2,90 €)",
+      "locator": "checkbox_label #2"
+     },
+     {
+      "snippet_id": "s3",
+      "kind": "fee_line",
+      "text": "Protezione spedizione    2,90 €",
+      "locator": "fee_line #3"
+     },
+     {
+      "snippet_id": "s4",
+      "kind": "cta",
+      "text": "Procedi al checkout",
+      "locator": "cta #4"
+     },
+     {
+      "snippet_id": "s5",
+      "kind": "returns_policy",
+      "text": "Resi facili",
+      "locator": "returns_policy #5"
+     }
+    ]
+   },
+   "screenshot": null,
+   "snapshot": null,
+   "loaded_ms": 2700,
+   "notes": []
+  }
+ ],
+ "not_assessable": [
+  {
+   "stage": "checkout_entry",
+   "profile": "desktop",
+   "kpi_id": null,
+   "reason": "timeout"
+  }
+ ],
+ "deception": {},
+ "journey": null,
+ "observations": [
+  {"kpi_id": "PERF.TTFB", "value": 620, "unit": "ms", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.FCP", "value": 1900, "unit": "ms", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LCP", "value": 3100, "unit": "ms", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CLS", "value": 0.08, "unit": "score", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TBT_APPROX", "value": 420, "unit": "ms", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LOAF_COUNT", "value": 3, "unit": "count", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_TOTAL", "value": 2300, "unit": "KB", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_JS", "value": 610, "unit": "KB", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.REQUESTS", "value": 78, "unit": "count", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.THIRD_PARTY_SHARE", "value": 34, "unit": "%", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.IMG_OVERSIZED", "value": 2, "unit": "count", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CONSOLE_ERRORS", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.HTTP_ERRORS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TTFB", "value": 700, "unit": "ms", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.FCP", "value": 2100, "unit": "ms", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LCP", "value": 3600, "unit": "ms", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CLS", "value": 0.14, "unit": "score", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TBT_APPROX", "value": 520, "unit": "ms", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LOAF_COUNT", "value": 4, "unit": "count", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_TOTAL", "value": 2700, "unit": "KB", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_JS", "value": 640, "unit": "KB", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.REQUESTS", "value": 92, "unit": "count", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.THIRD_PARTY_SHARE", "value": 31, "unit": "%", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.IMG_OVERSIZED", "value": 4, "unit": "count", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CONSOLE_ERRORS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.HTTP_ERRORS", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TTFB", "value": 650, "unit": "ms", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.FCP", "value": 1800, "unit": "ms", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LCP", "value": 2900, "unit": "ms", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CLS", "value": 0.05, "unit": "score", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TBT_APPROX", "value": 380, "unit": "ms", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LOAF_COUNT", "value": 2, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_TOTAL", "value": 2100, "unit": "KB", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_JS", "value": 600, "unit": "KB", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.REQUESTS", "value": 70, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.THIRD_PARTY_SHARE", "value": 36, "unit": "%", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.IMG_OVERSIZED", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CONSOLE_ERRORS", "value": 2, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.HTTP_ERRORS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TTFB", "value": 540, "unit": "ms", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.FCP", "value": 1500, "unit": "ms", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LCP", "value": 2400, "unit": "ms", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CLS", "value": 0.02, "unit": "score", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TBT_APPROX", "value": 300, "unit": "ms", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LOAF_COUNT", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_TOTAL", "value": 1500, "unit": "KB", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_JS", "value": 560, "unit": "KB", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.REQUESTS", "value": 55, "unit": "count", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.THIRD_PARTY_SHARE", "value": 28, "unit": "%", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.IMG_OVERSIZED", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CONSOLE_ERRORS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.HTTP_ERRORS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TTFB", "value": 590, "unit": "ms", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.FCP", "value": 1400, "unit": "ms", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LCP", "value": 2200, "unit": "ms", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CLS", "value": 0.01, "unit": "score", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TBT_APPROX", "value": 260, "unit": "ms", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LOAF_COUNT", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_TOTAL", "value": 1300, "unit": "KB", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_JS", "value": 540, "unit": "KB", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.REQUESTS", "value": 48, "unit": "count", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.THIRD_PARTY_SHARE", "value": 25, "unit": "%", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.IMG_OVERSIZED", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CONSOLE_ERRORS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.HTTP_ERRORS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TTFB", "value": 310, "unit": "ms", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.FCP", "value": 800, "unit": "ms", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LCP", "value": 1500, "unit": "ms", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CLS", "value": 0.04, "unit": "score", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TBT_APPROX", "value": 90, "unit": "ms", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LOAF_COUNT", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_TOTAL", "value": 2350, "unit": "KB", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_JS", "value": 620, "unit": "KB", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.REQUESTS", "value": 80, "unit": "count", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.THIRD_PARTY_SHARE", "value": 34, "unit": "%", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.IMG_OVERSIZED", "value": 3, "unit": "count", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CONSOLE_ERRORS", "value": 1, "unit": "count", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.HTTP_ERRORS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TTFB", "value": 360, "unit": "ms", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.FCP", "value": 900, "unit": "ms", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LCP", "value": 1900, "unit": "ms", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CLS", "value": 0.09, "unit": "score", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TBT_APPROX", "value": 140, "unit": "ms", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LOAF_COUNT", "value": 1, "unit": "count", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_TOTAL", "value": 2750, "unit": "KB", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_JS", "value": 650, "unit": "KB", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.REQUESTS", "value": 95, "unit": "count", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.THIRD_PARTY_SHARE", "value": 31, "unit": "%", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.IMG_OVERSIZED", "value": 5, "unit": "count", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CONSOLE_ERRORS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.HTTP_ERRORS", "value": 1, "unit": "count", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TTFB", "value": 330, "unit": "ms", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.FCP", "value": 850, "unit": "ms", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LCP", "value": 1700, "unit": "ms", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CLS", "value": 0.03, "unit": "score", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TBT_APPROX", "value": 110, "unit": "ms", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LOAF_COUNT", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_TOTAL", "value": 2150, "unit": "KB", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_JS", "value": 610, "unit": "KB", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.REQUESTS", "value": 72, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.THIRD_PARTY_SHARE", "value": 36, "unit": "%", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.IMG_OVERSIZED", "value": 2, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CONSOLE_ERRORS", "value": 1, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.HTTP_ERRORS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TTFB", "value": 280, "unit": "ms", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.FCP", "value": 700, "unit": "ms", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LCP", "value": 1200, "unit": "ms", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CLS", "value": 0.01, "unit": "score", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.TBT_APPROX", "value": 60, "unit": "ms", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.LOAF_COUNT", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_TOTAL", "value": 1550, "unit": "KB", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.BYTES_JS", "value": 570, "unit": "KB", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.REQUESTS", "value": 56, "unit": "count", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.THIRD_PARTY_SHARE", "value": 28, "unit": "%", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.IMG_OVERSIZED", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CONSOLE_ERRORS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.HTTP_ERRORS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.SEARCH_VISIBLE", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.SEARCH_WIDTH", "value": 340, "unit": "px", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.PLP_FILTERS", "value": 2, "unit": "count", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.PLP_SORT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.PLP_RESULT_COUNT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.PLP_PAGINATION", "value": "load_more", "unit": "enum", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.BREADCRUMBS", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.BREADCRUMBS", "value": false, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.PDP_CTA_ABOVE_FOLD", "value": false, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {"cta": "Aggiungi al carrello", "rect_y": 910}},
+  {"kpi_id": "FAI.PDP_VARIANT_SELECTOR", "value": "buttons", "unit": "enum", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.CART_EDITABLE", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.GUEST_CHECKOUT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.FORCED_ACCOUNT", "value": false, "unit": "bool", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.HTTPS", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.CONTACT_INFO", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.LEGAL_ID", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {"text": "P.IVA 01234567890"}},
+  {"kpi_id": "TRI.JSONLD_RETURN_POLICY", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.JSONLD_SHIPPING", "value": false, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.PAYMENT_LOGOS", "value": 4, "unit": "count", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.REVIEWS_PRESENT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.REVIEW_COUNT", "value": 37, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.RATING_BAND", "value": "4.0-4.7", "unit": "enum", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.DELIVERY_TIME_STATED", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.DELIVERY_TIME_STATED", "value": false, "unit": "bool", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.PRICE_VISIBLE_PDP", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.PRICE_JSONLD_MATCH", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.SHIPPING_COST_PRE_CHECKOUT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.FREE_SHIPPING_THRESHOLD", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.VAT_STATED", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.STRIKETHROUGH_LOWEST30", "value": null, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": false, "reason": "not_applicable: nessun prezzo barrato", "evidence": {}},
+  {"kpi_id": "PTI.UNEXPLAINED_FEES", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {"lines": ["Protezione spedizione 2,90 €"]}},
+  {"kpi_id": "CCL.CTA_SALIENCE", "value": 58, "unit": "score", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.CTA_SALIENCE", "value": 66, "unit": "score", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.CHOICE_SUPPORT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "MPI.SCARCITY_SIGNALS", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {"texts": ["Solo 2 rimasti"]}},
+  {"kpi_id": "MPI.URGENCY_SIGNALS", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {"texts": ["L'offerta scade tra 00:59:59"]}},
+  {"kpi_id": "MPI.RECIPROCITY", "value": 2, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "DPR.COUNTDOWN_RESET", "value": 0.9, "unit": "confidence", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {"text": "L'offerta scade tra 00:59:59", "remaining_s": [3599, 3600]}},
+  {"kpi_id": "DPR.FAKE_LOW_STOCK", "value": 0.3, "unit": "confidence", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {"texts": ["Solo 2 rimasti", "Solo 2 rimasti"]}},
+  {"kpi_id": "DPR.SNEAK_INTO_BASKET", "value": 0.0, "unit": "confidence", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "DPR.PRECHECKED_PAID_ADDONS", "value": 1.0, "unit": "confidence", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {"label": "Aggiungi Protezione spedizione (2,90 €)", "price_text": "2,90 €"}},
+  {"kpi_id": "DPR.CONSENT_ASYMMETRY", "value": 0.7, "unit": "confidence", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {"reject_first_layer": false, "accept_labels": ["Accetta tutto"], "reject_labels": []}},
+  {"kpi_id": "FAI.TARGET_SIZE_24", "value": 91, "unit": "%", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_44", "value": 48, "unit": "%", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.A11Y_BASIC", "value": 4, "unit": "count", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.OVERLAY_INTERRUPTIONS", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.MIXED_CONTENT", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.PRIMARY_CTA_COUNT", "value": 2, "unit": "count", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.HEADINGS", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.VISUAL_COMPLEXITY", "value": 55, "unit": "score", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.READABILITY", "value": 58, "unit": "score", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_24", "value": 88, "unit": "%", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_44", "value": 41, "unit": "%", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.A11Y_BASIC", "value": 9, "unit": "count", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.OVERLAY_INTERRUPTIONS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.MIXED_CONTENT", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.PRIMARY_CTA_COUNT", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.HEADINGS", "value": false, "unit": "bool", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.VISUAL_COMPLEXITY", "value": 62, "unit": "score", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.READABILITY", "value": 52, "unit": "score", "source": "deterministic", "page_id": "mobile-plp-1", "profile": "mobile", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_24", "value": 94, "unit": "%", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_44", "value": 62, "unit": "%", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.A11Y_BASIC", "value": 3, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.OVERLAY_INTERRUPTIONS", "value": 2, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.MIXED_CONTENT", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.PRIMARY_CTA_COUNT", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.HEADINGS", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.VISUAL_COMPLEXITY", "value": 41, "unit": "score", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.READABILITY", "value": 61, "unit": "score", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_24", "value": 97, "unit": "%", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_44", "value": 70, "unit": "%", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.A11Y_BASIC", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.OVERLAY_INTERRUPTIONS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.MIXED_CONTENT", "value": 0, "unit": "count", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.PRIMARY_CTA_COUNT", "value": 1, "unit": "count", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.HEADINGS", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.VISUAL_COMPLEXITY", "value": 33, "unit": "score", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.OVERLAY_COVERAGE", "value": 42, "unit": "%", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.FUNNEL_PRICE_DELTA", "value": 3.2, "unit": "%", "source": "deterministic", "page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.SEARCH_VISIBLE", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.SEARCH_WIDTH", "value": 420, "unit": "px", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.PLP_FILTERS", "value": 6, "unit": "count", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.PLP_SORT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.PLP_RESULT_COUNT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.PLP_PAGINATION", "value": "load_more", "unit": "enum", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.BREADCRUMBS", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.BREADCRUMBS", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.PDP_CTA_ABOVE_FOLD", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {"cta": "Aggiungi al carrello", "rect_y": 520}},
+  {"kpi_id": "FAI.PDP_VARIANT_SELECTOR", "value": "buttons", "unit": "enum", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.CART_EDITABLE", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.GUEST_CHECKOUT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.FORCED_ACCOUNT", "value": false, "unit": "bool", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.HTTPS", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.CONTACT_INFO", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.LEGAL_ID", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {"text": "P.IVA 01234567890"}},
+  {"kpi_id": "TRI.JSONLD_RETURN_POLICY", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.JSONLD_SHIPPING", "value": false, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.PAYMENT_LOGOS", "value": 4, "unit": "count", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.REVIEWS_PRESENT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.REVIEW_COUNT", "value": 37, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.RATING_BAND", "value": "4.0-4.7", "unit": "enum", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.DELIVERY_TIME_STATED", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.DELIVERY_TIME_STATED", "value": false, "unit": "bool", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.PRICE_VISIBLE_PDP", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.PRICE_JSONLD_MATCH", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.SHIPPING_COST_PRE_CHECKOUT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.FREE_SHIPPING_THRESHOLD", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.VAT_STATED", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.STRIKETHROUGH_LOWEST30", "value": null, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": false, "reason": "not_applicable: nessun prezzo barrato", "evidence": {}},
+  {"kpi_id": "PTI.UNEXPLAINED_FEES", "value": 1, "unit": "count", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {"lines": ["Protezione spedizione 2,90 €"]}},
+  {"kpi_id": "CCL.CTA_SALIENCE", "value": 72, "unit": "score", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.CTA_SALIENCE", "value": 66, "unit": "score", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.CHOICE_SUPPORT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "MPI.SCARCITY_SIGNALS", "value": 1, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {"texts": ["Solo 2 rimasti"]}},
+  {"kpi_id": "MPI.URGENCY_SIGNALS", "value": 1, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {"texts": ["L'offerta scade tra 00:59:59"]}},
+  {"kpi_id": "MPI.RECIPROCITY", "value": 2, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "DPR.COUNTDOWN_RESET", "value": 0.9, "unit": "confidence", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {"text": "L'offerta scade tra 00:59:59", "remaining_s": [3599, 3600]}},
+  {"kpi_id": "DPR.FAKE_LOW_STOCK", "value": 0.3, "unit": "confidence", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {"texts": ["Solo 2 rimasti", "Solo 2 rimasti"]}},
+  {"kpi_id": "DPR.SNEAK_INTO_BASKET", "value": 0.0, "unit": "confidence", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "DPR.PRECHECKED_PAID_ADDONS", "value": 1.0, "unit": "confidence", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {"label": "Aggiungi Protezione spedizione (2,90 €)", "price_text": "2,90 €"}},
+  {"kpi_id": "DPR.CONSENT_ASYMMETRY", "value": 0.7, "unit": "confidence", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {"reject_first_layer": false, "accept_labels": ["Accetta tutto"], "reject_labels": []}},
+  {"kpi_id": "FAI.TARGET_SIZE_24", "value": 91, "unit": "%", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_44", "value": 48, "unit": "%", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.A11Y_BASIC", "value": 4, "unit": "count", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.OVERLAY_INTERRUPTIONS", "value": 1, "unit": "count", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.MIXED_CONTENT", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.PRIMARY_CTA_COUNT", "value": 2, "unit": "count", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.HEADINGS", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.VISUAL_COMPLEXITY", "value": 55, "unit": "score", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.READABILITY", "value": 58, "unit": "score", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_24", "value": 88, "unit": "%", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_44", "value": 41, "unit": "%", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.A11Y_BASIC", "value": 9, "unit": "count", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.OVERLAY_INTERRUPTIONS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.MIXED_CONTENT", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.PRIMARY_CTA_COUNT", "value": 1, "unit": "count", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.HEADINGS", "value": false, "unit": "bool", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.VISUAL_COMPLEXITY", "value": 62, "unit": "score", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.READABILITY", "value": 52, "unit": "score", "source": "deterministic", "page_id": "desktop-plp-1", "profile": "desktop", "stage": "plp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_24", "value": 94, "unit": "%", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_44", "value": 62, "unit": "%", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.A11Y_BASIC", "value": 3, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.OVERLAY_INTERRUPTIONS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.MIXED_CONTENT", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.PRIMARY_CTA_COUNT", "value": 1, "unit": "count", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.HEADINGS", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.VISUAL_COMPLEXITY", "value": 41, "unit": "score", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.READABILITY", "value": 61, "unit": "score", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_24", "value": 97, "unit": "%", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.TARGET_SIZE_44", "value": 70, "unit": "%", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.A11Y_BASIC", "value": 1, "unit": "count", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.OVERLAY_INTERRUPTIONS", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.MIXED_CONTENT", "value": 0, "unit": "count", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.PRIMARY_CTA_COUNT", "value": 1, "unit": "count", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.HEADINGS", "value": true, "unit": "bool", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "CCL.VISUAL_COMPLEXITY", "value": 33, "unit": "score", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.OVERLAY_COVERAGE", "value": 22, "unit": "%", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PTI.FUNNEL_PRICE_DELTA", "value": 0.0, "unit": "%", "source": "deterministic", "page_id": "desktop-cart-1", "profile": "desktop", "stage": "cart", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.SEARCH_AUTOCOMPLETE", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "assessed": true, "reason": null, "evidence": {"typed": "scarpe", "options": 6}},
+  {"kpi_id": "FAI.SEARCH_AUTOCOMPLETE", "value": null, "unit": "bool", "source": "deterministic", "page_id": "desktop-home-1", "profile": "desktop", "stage": "home", "assessed": false, "reason": "probe_timeout", "evidence": {}},
+  {"kpi_id": "FAI.CHECKOUT_FIELDS", "value": 14, "unit": "count", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.CHECKOUT_FIELDS", "value": null, "unit": "count", "source": "deterministic", "page_id": null, "profile": "desktop", "stage": "checkout_entry", "assessed": false, "reason": "timeout", "evidence": {}},
+  {"kpi_id": "FAI.GUEST_CHECKOUT", "value": false, "unit": "bool", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.FORCED_ACCOUNT", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {"password_field": true}},
+  {"kpi_id": "FAI.AUTOCOMPLETE_ATTRS", "value": 57.1, "unit": "%", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.AUTOCOMPLETE_ATTRS", "value": null, "unit": "%", "source": "deterministic", "page_id": null, "profile": "desktop", "stage": "checkout_entry", "assessed": false, "reason": "timeout", "evidence": {}},
+  {"kpi_id": "CCL.FORM_LABELS", "value": 92.9, "unit": "%", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.HTTPS", "value": true, "unit": "bool", "source": "deterministic", "page_id": "mobile-checkout_entry-1", "profile": "mobile", "stage": "checkout_entry", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "DPR.NAGGING_OVERLAYS", "value": null, "unit": "confidence", "source": "deterministic", "page_id": "mobile-pdp-1", "profile": "mobile", "stage": "pdp", "assessed": false, "reason": "timeout", "evidence": {}},
+  {"kpi_id": "DPR.NAGGING_OVERLAYS", "value": 0.0, "unit": "confidence", "source": "deterministic", "page_id": "desktop-pdp-1", "profile": "desktop", "stage": "pdp", "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "TRI.POLICY_LINKS", "value": 3, "unit": "count", "source": "deterministic", "page_id": null, "profile": null, "stage": null, "assessed": true, "reason": null, "evidence": {"returns": true, "shipping": true, "privacy": true, "terms": false}},
+  {"kpi_id": "CCL.INFO_SCENT_GENERIC", "value": 12.5, "unit": "%", "source": "deterministic", "page_id": null, "profile": null, "stage": null, "assessed": true, "reason": null, "evidence": {"generic": ["Scopri", "Clicca qui"], "links": 16}}
+ ],
+ "judgments": {
+  "tasks": [
+   {
+    "task_id": "authority:mobile-home-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "authority",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "MPI.AUTHORITY",
+    "page_id": "mobile-home-1",
+    "profile": "mobile",
+    "question": "Gli snippet contengono segnali di autorità verificabili, come certificazioni, premi, citazioni della stampa, approvazioni di esperti o di enti, identificativi regolatori? Scegli una sola etichetta secondo le descrizioni. Se l'etichetta non è 'absent', copia in evidence il segnale esatto, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "present": "Almeno un segnale specifico e verificabile: nome dell'ente certificatore, del premio, della testata o dell'esperto, oppure un numero di certificazione.",
+     "weak": "Solo affermazioni generiche di autorevolezza senza nomi o riferimenti verificabili ('qualità certificata', 'scelto dagli esperti').",
+     "absent": "Nessun segnale di autorità negli snippet."
+    },
+    "no_quote_labels": [
+     "absent"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s4",
+      "kind": "authority",
+      "text": "Certificato B Corp dal 2021 · Premio Netcomm eCommerce Award 2024",
+      "locator": "authority #4"
+     }
+    ],
+    "context": {
+     "page_type": "home",
+     "stage": "home",
+     "locale": "it",
+     "url": "https://shop.example/",
+     "pages": [
+      {
+       "page_id": "mobile-home-1",
+       "profile": "mobile",
+       "stage": "home"
+      },
+      {
+       "page_id": "desktop-home-1",
+       "profile": "desktop",
+       "stage": "home"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "confirmshaming:mobile-home-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "confirmshaming",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "DPR.CONFIRMSHAMING",
+    "page_id": "mobile-home-1",
+    "profile": "mobile",
+    "question": "Le etichette per rifiutare un'offerta, chiudere un popup o negare il consenso fanno sentire in colpa o ridicolizzano chi rifiuta (confirmshaming, per esempio 'No grazie, preferisco pagare di più')? Valuta solo il testo delle opzioni di rifiuto. Scegli una sola etichetta secondo le descrizioni. Se scegli 'present', copia in evidence l'etichetta esatta, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "present": "Almeno un'etichetta di rifiuto usa colpa, vergogna o ironia verso chi rifiuta, oppure presenta il rifiuto come una scelta stupida o dannosa.",
+     "absent": "C'è almeno un'opzione di rifiuto e tutte le etichette di rifiuto sono neutre, per esempio 'No grazie', 'Chiudi', 'Rifiuta tutto'.",
+     "unclear": "Gli snippet non contengono opzioni di rifiuto valutabili (un rimando come 'Gestisci preferenze' o 'Impostazioni' non è un'opzione di rifiuto), oppure il tono è ambiguo."
+    },
+    "no_quote_labels": [
+     "absent",
+     "unclear"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s3",
+      "kind": "consent",
+      "text": "Usiamo i cookie per migliorare la tua esperienza. Accetta tutto · Gestisci preferenze",
+      "locator": "consent #3"
+     }
+    ],
+    "context": {
+     "page_type": "home",
+     "stage": "home",
+     "locale": "it",
+     "url": "https://shop.example/",
+     "pages": [
+      {
+       "page_id": "mobile-home-1",
+       "profile": "mobile",
+       "stage": "home"
+      },
+      {
+       "page_id": "desktop-home-1",
+       "profile": "desktop",
+       "stage": "home"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "confirmshaming:mobile-pdp-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "confirmshaming",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "DPR.CONFIRMSHAMING",
+    "page_id": "mobile-pdp-1",
+    "profile": "mobile",
+    "question": "Le etichette per rifiutare un'offerta, chiudere un popup o negare il consenso fanno sentire in colpa o ridicolizzano chi rifiuta (confirmshaming, per esempio 'No grazie, preferisco pagare di più')? Valuta solo il testo delle opzioni di rifiuto. Scegli una sola etichetta secondo le descrizioni. Se scegli 'present', copia in evidence l'etichetta esatta, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "present": "Almeno un'etichetta di rifiuto usa colpa, vergogna o ironia verso chi rifiuta, oppure presenta il rifiuto come una scelta stupida o dannosa.",
+     "absent": "C'è almeno un'opzione di rifiuto e tutte le etichette di rifiuto sono neutre, per esempio 'No grazie', 'Chiudi', 'Rifiuta tutto'.",
+     "unclear": "Gli snippet non contengono opzioni di rifiuto valutabili (un rimando come 'Gestisci preferenze' o 'Impostazioni' non è un'opzione di rifiuto), oppure il tono è ambiguo."
+    },
+    "no_quote_labels": [
+     "absent",
+     "unclear"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s7",
+      "kind": "modal_decline",
+      "text": "No grazie, preferisco pagare di più",
+      "locator": "modal_decline #7"
+     }
+    ],
+    "context": {
+     "page_type": "pdp",
+     "stage": "pdp",
+     "locale": "it",
+     "url": "https://shop.example/p/runner-x2",
+     "pages": [
+      {
+       "page_id": "mobile-pdp-1",
+       "profile": "mobile",
+       "stage": "pdp"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "hidden_subscription:mobile-pdp-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "hidden_subscription",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "DPR.HIDDEN_SUBSCRIPTION",
+    "page_id": "mobile-pdp-1",
+    "profile": "mobile",
+    "question": "Gli snippet rivelano un addebito ricorrente (abbonamento, membership, rinnovo automatico, prova gratuita che diventa a pagamento) mentre una CTA o una voce di costo presenta lo stesso acquisto come gratuito o come pagamento singolo? Giudica solo il testo degli snippet: posizione ed evidenza grafica non sono note. Scegli una sola etichetta secondo le descrizioni. Se scegli 'present', copia in evidence il passaggio esatto che rivela l'addebito ricorrente, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "present": "Un testo di abbonamento o una voce di costo rivela un addebito ricorrente o un rinnovo automatico, mentre una CTA o una voce di costo presenta lo stesso acquisto come gratuito o con un prezzo senza frequenza, senza dichiarare importo e frequenza dell'addebito ricorrente (per esempio una voce 'prova gratuita 0,00 €' insieme a 'poi 9,99 €/mese con rinnovo automatico').",
+     "absent": "Gli snippet non contengono alcuna formulazione di addebito ricorrente (abbonamento, membership, rinnovo automatico, prova che diventa a pagamento), oppure la CTA o la voce di costo stessa dichiara importo e frequenza dell'addebito ricorrente (per esempio 'Abbonati a 9,99 €/mese'). Una CTA di acquisto semplice come 'Aggiungi al carrello' da sola vale 'absent'.",
+     "unclear": "Compare una formulazione che potrebbe indicare un addebito ricorrente, ma gli snippet non bastano per stabilire se esiste o se l'acquisto è presentato come gratuito o singolo, per esempio perché nessuna CTA o voce di costo lo presenta."
+    },
+    "no_quote_labels": [
+     "absent",
+     "unclear"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s2",
+      "kind": "cta",
+      "text": "Aggiungi al carrello",
+      "locator": "cta #2"
+     }
+    ],
+    "context": {
+     "page_type": "pdp",
+     "stage": "pdp",
+     "locale": "it",
+     "url": "https://shop.example/p/runner-x2",
+     "pages": [
+      {
+       "page_id": "mobile-pdp-1",
+       "profile": "mobile",
+       "stage": "pdp"
+      },
+      {
+       "page_id": "desktop-pdp-1",
+       "profile": "desktop",
+       "stage": "pdp"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "hidden_subscription:mobile-cart-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "hidden_subscription",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "DPR.HIDDEN_SUBSCRIPTION",
+    "page_id": "mobile-cart-1",
+    "profile": "mobile",
+    "question": "Gli snippet rivelano un addebito ricorrente (abbonamento, membership, rinnovo automatico, prova gratuita che diventa a pagamento) mentre una CTA o una voce di costo presenta lo stesso acquisto come gratuito o come pagamento singolo? Giudica solo il testo degli snippet: posizione ed evidenza grafica non sono note. Scegli una sola etichetta secondo le descrizioni. Se scegli 'present', copia in evidence il passaggio esatto che rivela l'addebito ricorrente, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "present": "Un testo di abbonamento o una voce di costo rivela un addebito ricorrente o un rinnovo automatico, mentre una CTA o una voce di costo presenta lo stesso acquisto come gratuito o con un prezzo senza frequenza, senza dichiarare importo e frequenza dell'addebito ricorrente (per esempio una voce 'prova gratuita 0,00 €' insieme a 'poi 9,99 €/mese con rinnovo automatico').",
+     "absent": "Gli snippet non contengono alcuna formulazione di addebito ricorrente (abbonamento, membership, rinnovo automatico, prova che diventa a pagamento), oppure la CTA o la voce di costo stessa dichiara importo e frequenza dell'addebito ricorrente (per esempio 'Abbonati a 9,99 €/mese'). Una CTA di acquisto semplice come 'Aggiungi al carrello' da sola vale 'absent'.",
+     "unclear": "Compare una formulazione che potrebbe indicare un addebito ricorrente, ma gli snippet non bastano per stabilire se esiste o se l'acquisto è presentato come gratuito o singolo, per esempio perché nessuna CTA o voce di costo lo presenta."
+    },
+    "no_quote_labels": [
+     "absent",
+     "unclear"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s3",
+      "kind": "fee_line",
+      "text": "Protezione spedizione 2,90 €",
+      "locator": "fee_line #3"
+     },
+     {
+      "snippet_id": "s4",
+      "kind": "cta",
+      "text": "Procedi al checkout",
+      "locator": "cta #4"
+     }
+    ],
+    "context": {
+     "page_type": "cart",
+     "stage": "cart",
+     "locale": "it",
+     "url": "https://shop.example/carrello",
+     "pages": [
+      {
+       "page_id": "mobile-cart-1",
+       "profile": "mobile",
+       "stage": "cart"
+      },
+      {
+       "page_id": "desktop-cart-1",
+       "profile": "desktop",
+       "stage": "cart"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "hidden_subscription:mobile-checkout_entry-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "hidden_subscription",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "DPR.HIDDEN_SUBSCRIPTION",
+    "page_id": "mobile-checkout_entry-1",
+    "profile": "mobile",
+    "question": "Gli snippet rivelano un addebito ricorrente (abbonamento, membership, rinnovo automatico, prova gratuita che diventa a pagamento) mentre una CTA o una voce di costo presenta lo stesso acquisto come gratuito o come pagamento singolo? Giudica solo il testo degli snippet: posizione ed evidenza grafica non sono note. Scegli una sola etichetta secondo le descrizioni. Se scegli 'present', copia in evidence il passaggio esatto che rivela l'addebito ricorrente, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "present": "Un testo di abbonamento o una voce di costo rivela un addebito ricorrente o un rinnovo automatico, mentre una CTA o una voce di costo presenta lo stesso acquisto come gratuito o con un prezzo senza frequenza, senza dichiarare importo e frequenza dell'addebito ricorrente (per esempio una voce 'prova gratuita 0,00 €' insieme a 'poi 9,99 €/mese con rinnovo automatico').",
+     "absent": "Gli snippet non contengono alcuna formulazione di addebito ricorrente (abbonamento, membership, rinnovo automatico, prova che diventa a pagamento), oppure la CTA o la voce di costo stessa dichiara importo e frequenza dell'addebito ricorrente (per esempio 'Abbonati a 9,99 €/mese'). Una CTA di acquisto semplice come 'Aggiungi al carrello' da sola vale 'absent'.",
+     "unclear": "Compare una formulazione che potrebbe indicare un addebito ricorrente, ma gli snippet non bastano per stabilire se esiste o se l'acquisto è presentato come gratuito o singolo, per esempio perché nessuna CTA o voce di costo lo presenta."
+    },
+    "no_quote_labels": [
+     "absent",
+     "unclear"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s2",
+      "kind": "subscription",
+      "text": "Runner Club: prova gratuita di 30 giorni, poi 9,99 €/mese con rinnovo automatico",
+      "locator": "subscription #2"
+     },
+     {
+      "snippet_id": "s3",
+      "kind": "fee_line",
+      "text": "Runner Club – prova gratuita 0,00 €",
+      "locator": "fee_line #3"
+     },
+     {
+      "snippet_id": "s4",
+      "kind": "cta",
+      "text": "Continua",
+      "locator": "cta #4"
+     }
+    ],
+    "context": {
+     "page_type": "checkout",
+     "stage": "checkout_entry",
+     "locale": "it",
+     "url": "https://shop.example/checkout",
+     "pages": [
+      {
+       "page_id": "mobile-checkout_entry-1",
+       "profile": "mobile",
+       "stage": "checkout_entry"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "returns_clarity:mobile-home-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "returns_clarity",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "TRI.RETURNS_CLARITY",
+    "page_id": "mobile-home-1",
+    "profile": "mobile",
+    "question": "Considera solo gli snippet del task: sono testi estratti dalla pagina. La politica di reso (il diritto di recesso conta come informazione sul reso) è comunicata in modo chiaro a chi sta per acquistare? Scegli una sola etichetta secondo le descrizioni. Se l'etichetta non è 'absent', copia in evidence la frase esatta dello snippet che giustifica la scelta, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "clear": "Il testo indica la finestra temporale del reso o del recesso (per esempio '30 giorni') e almeno una condizione concreta: chi paga la spedizione di ritorno (un reso 'gratuito' la indica: 'Reso gratuito entro 30 giorni' vale 'clear'), come avviare il reso, oppure tempi e modalità del rimborso.",
+     "vague": "Il reso o il diritto di recesso è menzionato ma il testo non soddisfa 'clear': per esempio solo la finestra temporale ('Diritto di recesso entro 14 giorni'), solo formule generiche ('resi facili', 'soddisfatti o rimborsati') o solo un rimando a un'altra pagina.",
+     "absent": "Gli snippet non contengono alcuna informazione sul reso o sul diritto di recesso."
+    },
+    "no_quote_labels": [
+     "absent"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s5",
+      "kind": "returns_policy",
+      "text": "Reso gratuito entro 30 giorni",
+      "locator": "returns_policy #5"
+     }
+    ],
+    "context": {
+     "page_type": "home",
+     "stage": "home",
+     "locale": "it",
+     "url": "https://shop.example/",
+     "pages": [
+      {
+       "page_id": "mobile-home-1",
+       "profile": "mobile",
+       "stage": "home"
+      },
+      {
+       "page_id": "desktop-home-1",
+       "profile": "desktop",
+       "stage": "home"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "returns_clarity:mobile-pdp-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "returns_clarity",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "TRI.RETURNS_CLARITY",
+    "page_id": "mobile-pdp-1",
+    "profile": "mobile",
+    "question": "Considera solo gli snippet del task: sono testi estratti dalla pagina. La politica di reso (il diritto di recesso conta come informazione sul reso) è comunicata in modo chiaro a chi sta per acquistare? Scegli una sola etichetta secondo le descrizioni. Se l'etichetta non è 'absent', copia in evidence la frase esatta dello snippet che giustifica la scelta, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "clear": "Il testo indica la finestra temporale del reso o del recesso (per esempio '30 giorni') e almeno una condizione concreta: chi paga la spedizione di ritorno (un reso 'gratuito' la indica: 'Reso gratuito entro 30 giorni' vale 'clear'), come avviare il reso, oppure tempi e modalità del rimborso.",
+     "vague": "Il reso o il diritto di recesso è menzionato ma il testo non soddisfa 'clear': per esempio solo la finestra temporale ('Diritto di recesso entro 14 giorni'), solo formule generiche ('resi facili', 'soddisfatti o rimborsati') o solo un rimando a un'altra pagina.",
+     "absent": "Gli snippet non contengono alcuna informazione sul reso o sul diritto di recesso."
+    },
+    "no_quote_labels": [
+     "absent"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s3",
+      "kind": "returns_policy",
+      "text": "Reso gratuito entro 30 giorni: stampa l'etichetta prepagata dal tuo account e ricevi il rimborso in 5 giorni lavorativi.",
+      "locator": "returns_policy #3"
+     }
+    ],
+    "context": {
+     "page_type": "pdp",
+     "stage": "pdp",
+     "locale": "it",
+     "url": "https://shop.example/p/runner-x2",
+     "pages": [
+      {
+       "page_id": "mobile-pdp-1",
+       "profile": "mobile",
+       "stage": "pdp"
+      },
+      {
+       "page_id": "desktop-pdp-1",
+       "profile": "desktop",
+       "stage": "pdp"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "returns_clarity:mobile-cart-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "returns_clarity",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "TRI.RETURNS_CLARITY",
+    "page_id": "mobile-cart-1",
+    "profile": "mobile",
+    "question": "Considera solo gli snippet del task: sono testi estratti dalla pagina. La politica di reso (il diritto di recesso conta come informazione sul reso) è comunicata in modo chiaro a chi sta per acquistare? Scegli una sola etichetta secondo le descrizioni. Se l'etichetta non è 'absent', copia in evidence la frase esatta dello snippet che giustifica la scelta, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "clear": "Il testo indica la finestra temporale del reso o del recesso (per esempio '30 giorni') e almeno una condizione concreta: chi paga la spedizione di ritorno (un reso 'gratuito' la indica: 'Reso gratuito entro 30 giorni' vale 'clear'), come avviare il reso, oppure tempi e modalità del rimborso.",
+     "vague": "Il reso o il diritto di recesso è menzionato ma il testo non soddisfa 'clear': per esempio solo la finestra temporale ('Diritto di recesso entro 14 giorni'), solo formule generiche ('resi facili', 'soddisfatti o rimborsati') o solo un rimando a un'altra pagina.",
+     "absent": "Gli snippet non contengono alcuna informazione sul reso o sul diritto di recesso."
+    },
+    "no_quote_labels": [
+     "absent"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s5",
+      "kind": "returns_policy",
+      "text": "Resi facili",
+      "locator": "returns_policy #5"
+     }
+    ],
+    "context": {
+     "page_type": "cart",
+     "stage": "cart",
+     "locale": "it",
+     "url": "https://shop.example/carrello",
+     "pages": [
+      {
+       "page_id": "mobile-cart-1",
+       "profile": "mobile",
+       "stage": "cart"
+      },
+      {
+       "page_id": "desktop-cart-1",
+       "profile": "desktop",
+       "stage": "cart"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "social_proof:mobile-home-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "social_proof",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "MPI.SOCIAL_PROOF_RICH",
+    "page_id": "mobile-home-1",
+    "profile": "mobile",
+    "question": "Gli snippet mostrano una riprova sociale più ricca del solo punteggio a stelle, cioè recensioni o testimonianze con testo specifico e con elementi di autenticità (autore o iniziali, data, acquisto verificato, foto dei clienti)? Scegli una sola etichetta secondo le descrizioni. Se l'etichetta non è 'absent', copia in evidence il passaggio esatto, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "rich": "Almeno una recensione o testimonianza con testo specifico e almeno un elemento di autenticità: autore o iniziali, data, acquisto verificato, foto.",
+     "basic": "C'è riprova sociale ma non soddisfa 'rich': solo punteggi o conteggi, oppure recensioni o testimonianze senza testo specifico o senza elementi di autenticità (per esempio 'Ottimo! — Marco R.').",
+     "absent": "Nessuna riprova sociale negli snippet."
+    },
+    "no_quote_labels": [
+     "absent"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s6",
+      "kind": "testimonial",
+      "text": "4,6/5 su 1.284 recensioni",
+      "locator": "testimonial #6"
+     }
+    ],
+    "context": {
+     "page_type": "home",
+     "stage": "home",
+     "locale": "it",
+     "url": "https://shop.example/",
+     "pages": [
+      {
+       "page_id": "mobile-home-1",
+       "profile": "mobile",
+       "stage": "home"
+      },
+      {
+       "page_id": "desktop-home-1",
+       "profile": "desktop",
+       "stage": "home"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "social_proof:mobile-pdp-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "social_proof",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "MPI.SOCIAL_PROOF_RICH",
+    "page_id": "mobile-pdp-1",
+    "profile": "mobile",
+    "question": "Gli snippet mostrano una riprova sociale più ricca del solo punteggio a stelle, cioè recensioni o testimonianze con testo specifico e con elementi di autenticità (autore o iniziali, data, acquisto verificato, foto dei clienti)? Scegli una sola etichetta secondo le descrizioni. Se l'etichetta non è 'absent', copia in evidence il passaggio esatto, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "rich": "Almeno una recensione o testimonianza con testo specifico e almeno un elemento di autenticità: autore o iniziali, data, acquisto verificato, foto.",
+     "basic": "C'è riprova sociale ma non soddisfa 'rich': solo punteggi o conteggi, oppure recensioni o testimonianze senza testo specifico o senza elementi di autenticità (per esempio 'Ottimo! — Marco R.').",
+     "absent": "Nessuna riprova sociale negli snippet."
+    },
+    "no_quote_labels": [
+     "absent"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s5",
+      "kind": "testimonial",
+      "text": "«Leggerissime, le uso per le maratone» — Giulia R., acquisto verificato, 12/09/2026",
+      "locator": "testimonial #5"
+     }
+    ],
+    "context": {
+     "page_type": "pdp",
+     "stage": "pdp",
+     "locale": "it",
+     "url": "https://shop.example/p/runner-x2",
+     "pages": [
+      {
+       "page_id": "mobile-pdp-1",
+       "profile": "mobile",
+       "stage": "pdp"
+      },
+      {
+       "page_id": "desktop-pdp-1",
+       "profile": "desktop",
+       "stage": "pdp"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "trick_questions:mobile-cart-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "trick_questions",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "DPR.TRICK_QUESTIONS",
+    "page_id": "mobile-cart-1",
+    "profile": "mobile",
+    "question": "Le etichette delle caselle di controllo sono formulate in modo ingannevole, per esempio con doppie negazioni o con una logica invertita rispetto alle altre caselle ('Deseleziona per non ricevere...'), così che si rischi di accettare ciò che non si vuole? Scegli una sola etichetta secondo le descrizioni. Se scegli 'present', copia in evidence l'etichetta esatta, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "present": "Almeno un'etichetta usa doppie negazioni, logica invertita o una formulazione confusa che porta facilmente a una scelta non voluta.",
+     "absent": "Le etichette sono dirette: si capisce che cosa succede selezionando o deselezionando la casella.",
+     "unclear": "Non ci sono etichette valutabili, oppure il significato non è determinabile dal testo."
+    },
+    "no_quote_labels": [
+     "absent",
+     "unclear"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "checkbox_label",
+      "text": "Non desidero non ricevere offerte personalizzate",
+      "locator": "checkbox_label #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "checkbox_label",
+      "text": "Aggiungi Protezione spedizione (2,90 €)",
+      "locator": "checkbox_label #2"
+     }
+    ],
+    "context": {
+     "page_type": "cart",
+     "stage": "cart",
+     "locale": "it",
+     "url": "https://shop.example/carrello",
+     "pages": [
+      {
+       "page_id": "mobile-cart-1",
+       "profile": "mobile",
+       "stage": "cart"
+      },
+      {
+       "page_id": "desktop-cart-1",
+       "profile": "desktop",
+       "stage": "cart"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "trick_questions:mobile-checkout_entry-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "trick_questions",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "DPR.TRICK_QUESTIONS",
+    "page_id": "mobile-checkout_entry-1",
+    "profile": "mobile",
+    "question": "Le etichette delle caselle di controllo sono formulate in modo ingannevole, per esempio con doppie negazioni o con una logica invertita rispetto alle altre caselle ('Deseleziona per non ricevere...'), così che si rischi di accettare ciò che non si vuole? Scegli una sola etichetta secondo le descrizioni. Se scegli 'present', copia in evidence l'etichetta esatta, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "present": "Almeno un'etichetta usa doppie negazioni, logica invertita o una formulazione confusa che porta facilmente a una scelta non voluta.",
+     "absent": "Le etichette sono dirette: si capisce che cosa succede selezionando o deselezionando la casella.",
+     "unclear": "Non ci sono etichette valutabili, oppure il significato non è determinabile dal testo."
+    },
+    "no_quote_labels": [
+     "absent",
+     "unclear"
+    ],
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "checkbox_label",
+      "text": "Iscrivimi a Runner Club",
+      "locator": "checkbox_label #1"
+     }
+    ],
+    "context": {
+     "page_type": "checkout",
+     "stage": "checkout_entry",
+     "locale": "it",
+     "url": "https://shop.example/checkout",
+     "pages": [
+      {
+       "page_id": "mobile-checkout_entry-1",
+       "profile": "mobile",
+       "stage": "checkout_entry"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "value_prop:mobile-home-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "value_prop",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "CCL.VALUE_PROP_CLARITY",
+    "page_id": "mobile-home-1",
+    "profile": "mobile",
+    "question": "Gli snippet sono il titolo principale e le call to action della pagina. Chi arriva per la prima volta capisce subito che cosa viene venduto (o che cos'è il prodotto) e perché sceglierlo? Scegli una sola etichetta secondo le descrizioni. Copia in evidence il titolo o la CTA su cui basi il giudizio, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "clear": "Il testo dice che cosa si vende o che cos'è il prodotto e indica almeno un beneficio o un elemento distintivo concreto (prezzo, qualità, consegna, assortimento, garanzia).",
+     "partial": "Il testo dice che cosa si vende ma senza benefici o differenze concrete, oppure indica un beneficio ma l'oggetto dell'offerta resta implicito.",
+     "unclear": "Solo slogan generici o etichette di navigazione: non si capisce che cosa si vende né perché sceglierlo."
+    },
+    "no_quote_labels": [],
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "headline",
+      "text": "Scarpe da corsa per ogni distanza, spedite in 24 ore",
+      "locator": "headline #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "cta",
+      "text": "Scopri la collezione",
+      "locator": "cta #2"
+     }
+    ],
+    "context": {
+     "page_type": "home",
+     "stage": "home",
+     "locale": "it",
+     "url": "https://shop.example/",
+     "pages": [
+      {
+       "page_id": "mobile-home-1",
+       "profile": "mobile",
+       "stage": "home"
+      },
+      {
+       "page_id": "desktop-home-1",
+       "profile": "desktop",
+       "stage": "home"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "value_prop:mobile-plp-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "value_prop",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "CCL.VALUE_PROP_CLARITY",
+    "page_id": "mobile-plp-1",
+    "profile": "mobile",
+    "question": "Gli snippet sono il titolo principale e le call to action della pagina. Chi arriva per la prima volta capisce subito che cosa viene venduto (o che cos'è il prodotto) e perché sceglierlo? Scegli una sola etichetta secondo le descrizioni. Copia in evidence il titolo o la CTA su cui basi il giudizio, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "clear": "Il testo dice che cosa si vende o che cos'è il prodotto e indica almeno un beneficio o un elemento distintivo concreto (prezzo, qualità, consegna, assortimento, garanzia).",
+     "partial": "Il testo dice che cosa si vende ma senza benefici o differenze concrete, oppure indica un beneficio ma l'oggetto dell'offerta resta implicito.",
+     "unclear": "Solo slogan generici o etichette di navigazione: non si capisce che cosa si vende né perché sceglierlo."
+    },
+    "no_quote_labels": [],
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "headline",
+      "text": "Scarpe running uomo",
+      "locator": "headline #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "cta",
+      "text": "Filtra",
+      "locator": "cta #2"
+     },
+     {
+      "snippet_id": "s3",
+      "kind": "cta",
+      "text": "Carica altri prodotti",
+      "locator": "cta #3"
+     }
+    ],
+    "context": {
+     "page_type": "plp",
+     "stage": "plp",
+     "locale": "it",
+     "url": "https://shop.example/uomo/scarpe-running",
+     "pages": [
+      {
+       "page_id": "mobile-plp-1",
+       "profile": "mobile",
+       "stage": "plp"
+      },
+      {
+       "page_id": "desktop-plp-1",
+       "profile": "desktop",
+       "stage": "plp"
+      }
+     ]
+    },
+    "samples_required": 3
+   },
+   {
+    "task_id": "value_prop:mobile-pdp-1",
+    "run_id": "20261006T101500000000Z_audit_shop.example",
+    "rubric_id": "value_prop",
+    "rubric_version": "rubrics.v1",
+    "kpi_id": "CCL.VALUE_PROP_CLARITY",
+    "page_id": "mobile-pdp-1",
+    "profile": "mobile",
+    "question": "Gli snippet sono il titolo principale e le call to action della pagina. Chi arriva per la prima volta capisce subito che cosa viene venduto (o che cos'è il prodotto) e perché sceglierlo? Scegli una sola etichetta secondo le descrizioni. Copia in evidence il titolo o la CTA su cui basi il giudizio, carattere per carattere, con il suo snippet_id.",
+    "labels": {
+     "clear": "Il testo dice che cosa si vende o che cos'è il prodotto e indica almeno un beneficio o un elemento distintivo concreto (prezzo, qualità, consegna, assortimento, garanzia).",
+     "partial": "Il testo dice che cosa si vende ma senza benefici o differenze concrete, oppure indica un beneficio ma l'oggetto dell'offerta resta implicito.",
+     "unclear": "Solo slogan generici o etichette di navigazione: non si capisce che cosa si vende né perché sceglierlo."
+    },
+    "no_quote_labels": [],
+    "snippets": [
+     {
+      "snippet_id": "s1",
+      "kind": "headline",
+      "text": "Runner X2 – scarpa da corsa leggera da 220 g",
+      "locator": "headline #1"
+     },
+     {
+      "snippet_id": "s2",
+      "kind": "cta",
+      "text": "Aggiungi al carrello",
+      "locator": "cta #2"
+     }
+    ],
+    "context": {
+     "page_type": "pdp",
+     "stage": "pdp",
+     "locale": "it",
+     "url": "https://shop.example/p/runner-x2",
+     "pages": [
+      {
+       "page_id": "mobile-pdp-1",
+       "profile": "mobile",
+       "stage": "pdp"
+      },
+      {
+       "page_id": "desktop-pdp-1",
+       "profile": "desktop",
+       "stage": "pdp"
+      }
+     ]
+    },
+    "samples_required": 3
+   }
+],
+  "skipped": [],
+  "rubrics_version": "rubrics.v1",
+  "verdicts": [
+   {"task_id": "authority:mobile-home-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "present", "confidence": 0.8, "evidence": [{"snippet_id": "s4", "quote": "Certificato B Corp dal 2021"}], "rationale": "fixture"},
+   {"task_id": "confirmshaming:mobile-home-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "unclear", "confidence": 0.9, "evidence": [], "rationale": "Il banner offre solo 'Accetta tutto' e 'Gestisci preferenze': nessuna opzione di rifiuto da valutare."},
+   {"task_id": "confirmshaming:mobile-pdp-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "present", "confidence": 0.95, "evidence": [{"snippet_id": "s7", "quote": "preferisco pagare di più"}], "rationale": "fixture"},
+   {"task_id": "hidden_subscription:mobile-pdp-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "absent", "confidence": 0.9, "evidence": [], "rationale": "fixture"},
+   {"task_id": "hidden_subscription:mobile-cart-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "absent", "confidence": 0.8, "evidence": [], "rationale": "fixture"},
+   {"task_id": "hidden_subscription:mobile-checkout_entry-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "present", "confidence": 0.8, "evidence": [{"snippet_id": "s2", "quote": "poi 9,99 €/mese con rinnovo automatico"}], "rationale": "fixture"},
+   {"task_id": "returns_clarity:mobile-home-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "clear", "confidence": 0.8, "evidence": [{"snippet_id": "s5", "quote": "Reso gratuito entro 30 giorni"}], "rationale": "fixture"},
+   {"task_id": "returns_clarity:mobile-pdp-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "clear", "confidence": 0.9, "evidence": [{"snippet_id": "s3", "quote": "Reso gratuito entro 30 giorni"}], "rationale": "fixture"},
+   {"task_id": "returns_clarity:mobile-cart-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "vague", "confidence": 0.8, "evidence": [{"snippet_id": "s5", "quote": "Resi facili"}], "rationale": "fixture"},
+   {"task_id": "social_proof:mobile-home-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "basic", "confidence": 0.6, "evidence": [{"snippet_id": "s6", "quote": "4,6/5 su 1.284 recensioni"}], "rationale": "fixture"},
+   {"task_id": "social_proof:mobile-pdp-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "rich", "confidence": 0.9, "evidence": [{"snippet_id": "s5", "quote": "Giulia R., acquisto verificato"}], "rationale": "fixture"},
+   {"task_id": "trick_questions:mobile-cart-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "present", "confidence": 0.8, "evidence": [{"snippet_id": "s1", "quote": "Non desidero non ricevere offerte personalizzate"}], "rationale": "fixture"},
+   {"task_id": "trick_questions:mobile-checkout_entry-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "absent", "confidence": 0.9, "evidence": [], "rationale": "fixture"},
+   {"task_id": "value_prop:mobile-home-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "clear", "confidence": 0.85, "evidence": [{"snippet_id": "s1", "quote": "Scarpe da corsa per ogni distanza, spedite in 24 ore"}], "rationale": "fixture"},
+   {"task_id": "value_prop:mobile-plp-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "partial", "confidence": 0.7, "evidence": [{"snippet_id": "s1", "quote": "Scarpe running uomo"}], "rationale": "fixture"},
+   {"task_id": "value_prop:mobile-pdp-1", "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "clear", "confidence": 0.8, "evidence": [{"snippet_id": "s1", "quote": "Runner X2 – scarpa da corsa leggera"}], "rationale": "fixture"},
+   {"task_id": "authority:mobile-home-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "present", "confidence": 0.7, "evidence": [{"snippet_id": "s4", "quote": "Premio Netcomm eCommerce Award 2024"}], "rationale": "fixture"},
+   {"task_id": "confirmshaming:mobile-home-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "unclear", "confidence": 0.85, "evidence": [], "rationale": "Il banner offre solo 'Accetta tutto' e 'Gestisci preferenze': nessuna opzione di rifiuto da valutare."},
+   {"task_id": "confirmshaming:mobile-pdp-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "present", "confidence": 0.9, "evidence": [{"snippet_id": "s7", "quote": "No grazie, preferisco pagare di più"}], "rationale": "fixture"},
+   {"task_id": "hidden_subscription:mobile-pdp-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "absent", "confidence": 0.9, "evidence": [], "rationale": "fixture"},
+   {"task_id": "hidden_subscription:mobile-cart-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "absent", "confidence": 0.7, "evidence": [], "rationale": "fixture"},
+   {"task_id": "hidden_subscription:mobile-checkout_entry-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "present", "confidence": 0.7, "evidence": [{"snippet_id": "s3", "quote": "Runner Club – prova gratuita 0,00 €"}], "rationale": "fixture"},
+   {"task_id": "returns_clarity:mobile-home-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "clear", "confidence": 0.8, "evidence": [{"snippet_id": "s5", "quote": "Reso gratuito entro 30 giorni"}], "rationale": "fixture"},
+   {"task_id": "returns_clarity:mobile-pdp-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "clear", "confidence": 0.9, "evidence": [{"snippet_id": "s3", "quote": "ricevi il rimborso in 5 giorni lavorativi"}], "rationale": "fixture"},
+   {"task_id": "returns_clarity:mobile-cart-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "vague", "confidence": 0.8, "evidence": [{"snippet_id": "s5", "quote": "Resi facili"}], "rationale": "fixture"},
+   {"task_id": "social_proof:mobile-home-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "rich", "confidence": 0.5, "evidence": [{"snippet_id": "s6", "quote": "1.284 recensioni"}], "rationale": "fixture"},
+   {"task_id": "social_proof:mobile-pdp-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "rich", "confidence": 0.9, "evidence": [{"snippet_id": "s5", "quote": "Giulia R., acquisto verificato"}], "rationale": "fixture"},
+   {"task_id": "trick_questions:mobile-cart-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "present", "confidence": 0.75, "evidence": [{"snippet_id": "s1", "quote": "non ricevere offerte"}], "rationale": "fixture"},
+   {"task_id": "trick_questions:mobile-checkout_entry-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "absent", "confidence": 0.9, "evidence": [], "rationale": "fixture"},
+   {"task_id": "value_prop:mobile-home-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "clear", "confidence": 0.85, "evidence": [{"snippet_id": "s1", "quote": "Scarpe da corsa per ogni distanza, spedite in 24 ore"}], "rationale": "fixture"},
+   {"task_id": "value_prop:mobile-plp-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "partial", "confidence": 0.6, "evidence": [{"snippet_id": "s1", "quote": "Scarpe running uomo"}], "rationale": "fixture"},
+   {"task_id": "value_prop:mobile-pdp-1", "judge_id": "j2", "model": "claude-sonnet-5-5", "label": "clear", "confidence": 0.8, "evidence": [{"snippet_id": "s1", "quote": "Runner X2 – scarpa da corsa leggera"}], "rationale": "fixture"},
+   {"task_id": "authority:mobile-home-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "weak", "confidence": 0.6, "evidence": [{"snippet_id": "s4", "quote": "Certificato B Corp"}], "rationale": "fixture"},
+   {"task_id": "confirmshaming:mobile-home-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "unclear", "confidence": 0.9, "evidence": [], "rationale": "Il banner offre solo 'Accetta tutto' e 'Gestisci preferenze': nessuna opzione di rifiuto da valutare."},
+   {"task_id": "confirmshaming:mobile-pdp-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "present", "confidence": 0.9, "evidence": [{"snippet_id": "s7", "quote": "No grazie, preferisco pagare di più"}], "rationale": "fixture"},
+   {"task_id": "hidden_subscription:mobile-pdp-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "absent", "confidence": 0.8, "evidence": [], "rationale": "fixture"},
+   {"task_id": "hidden_subscription:mobile-cart-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "absent", "confidence": 0.8, "evidence": [], "rationale": "fixture"},
+   {"task_id": "hidden_subscription:mobile-checkout_entry-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "unclear", "confidence": 0.5, "evidence": [], "rationale": "fixture"},
+   {"task_id": "returns_clarity:mobile-home-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "clear", "confidence": 0.8, "evidence": [{"snippet_id": "s5", "quote": "Reso gratuito entro 30 giorni"}], "rationale": "fixture"},
+   {"task_id": "returns_clarity:mobile-pdp-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "clear", "confidence": 0.85, "evidence": [{"snippet_id": "s3", "quote": "stampa l'etichetta prepagata"}], "rationale": "fixture"},
+   {"task_id": "returns_clarity:mobile-cart-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "vague", "confidence": 0.8, "evidence": [{"snippet_id": "s5", "quote": "Resi facili"}], "rationale": "fixture"},
+   {"task_id": "social_proof:mobile-home-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "absent", "confidence": 0.4, "evidence": [], "rationale": "fixture"},
+   {"task_id": "social_proof:mobile-pdp-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "rich", "confidence": 0.9, "evidence": [{"snippet_id": "s5", "quote": "Giulia R., acquisto verificato"}], "rationale": "fixture"},
+   {"task_id": "trick_questions:mobile-cart-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "absent", "confidence": 0.6, "evidence": [], "rationale": "fixture"},
+   {"task_id": "trick_questions:mobile-checkout_entry-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "absent", "confidence": 0.9, "evidence": [], "rationale": "fixture"},
+   {"task_id": "value_prop:mobile-home-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "clear", "confidence": 0.85, "evidence": [{"snippet_id": "s1", "quote": "Scarpe da corsa per ogni distanza, spedite in 24 ore"}], "rationale": "fixture"},
+   {"task_id": "value_prop:mobile-plp-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "unclear", "confidence": 0.5, "evidence": [{"snippet_id": "s2", "quote": "Filtra"}], "rationale": "fixture"},
+   {"task_id": "value_prop:mobile-pdp-1", "judge_id": "j3", "model": "claude-sonnet-5-5", "label": "clear", "confidence": 0.8, "evidence": [{"snippet_id": "s1", "quote": "Runner X2 – scarpa da corsa leggera"}], "rationale": "fixture"}
+  ],
+  "final": [
+   {"task_id": "authority:mobile-home-1", "kpi_id": "MPI.AUTHORITY", "label": "present", "agreement": 0.6667, "samples": 3, "confidence": 0.75, "models": ["claude-sonnet-5-5"], "evidence": [{"snippet_id": "s4", "quote": "Certificato B Corp dal 2021"}, {"snippet_id": "s4", "quote": "Premio Netcomm eCommerce Award 2024"}]},
+   {"task_id": "confirmshaming:mobile-home-1", "kpi_id": "DPR.CONFIRMSHAMING", "label": "unclear", "agreement": 1.0, "samples": 3, "confidence": 0.8833, "models": ["claude-sonnet-5-5"], "evidence": []},
+   {"task_id": "confirmshaming:mobile-pdp-1", "kpi_id": "DPR.CONFIRMSHAMING", "label": "present", "agreement": 1.0, "samples": 3, "confidence": 0.9167, "models": ["claude-sonnet-5-5"], "evidence": [{"snippet_id": "s7", "quote": "preferisco pagare di più"}, {"snippet_id": "s7", "quote": "No grazie, preferisco pagare di più"}]},
+   {"task_id": "hidden_subscription:mobile-pdp-1", "kpi_id": "DPR.HIDDEN_SUBSCRIPTION", "label": "absent", "agreement": 1.0, "samples": 3, "confidence": 0.8667, "models": ["claude-sonnet-5-5"], "evidence": []},
+   {"task_id": "hidden_subscription:mobile-cart-1", "kpi_id": "DPR.HIDDEN_SUBSCRIPTION", "label": "absent", "agreement": 1.0, "samples": 3, "confidence": 0.7667, "models": ["claude-sonnet-5-5"], "evidence": []},
+   {"task_id": "hidden_subscription:mobile-checkout_entry-1", "kpi_id": "DPR.HIDDEN_SUBSCRIPTION", "label": "present", "agreement": 0.6667, "samples": 3, "confidence": 0.75, "models": ["claude-sonnet-5-5"], "evidence": [{"snippet_id": "s2", "quote": "poi 9,99 €/mese con rinnovo automatico"}, {"snippet_id": "s3", "quote": "Runner Club – prova gratuita 0,00 €"}]},
+   {"task_id": "returns_clarity:mobile-home-1", "kpi_id": "TRI.RETURNS_CLARITY", "label": "clear", "agreement": 1.0, "samples": 3, "confidence": 0.8, "models": ["claude-sonnet-5-5"], "evidence": [{"snippet_id": "s5", "quote": "Reso gratuito entro 30 giorni"}]},
+   {"task_id": "returns_clarity:mobile-pdp-1", "kpi_id": "TRI.RETURNS_CLARITY", "label": "clear", "agreement": 1.0, "samples": 3, "confidence": 0.8833, "models": ["claude-sonnet-5-5"], "evidence": [{"snippet_id": "s3", "quote": "Reso gratuito entro 30 giorni"}, {"snippet_id": "s3", "quote": "ricevi il rimborso in 5 giorni lavorativi"}, {"snippet_id": "s3", "quote": "stampa l'etichetta prepagata"}]},
+   {"task_id": "returns_clarity:mobile-cart-1", "kpi_id": "TRI.RETURNS_CLARITY", "label": "vague", "agreement": 1.0, "samples": 3, "confidence": 0.8, "models": ["claude-sonnet-5-5"], "evidence": [{"snippet_id": "s5", "quote": "Resi facili"}]},
+   {"task_id": "social_proof:mobile-home-1", "kpi_id": "MPI.SOCIAL_PROOF_RICH", "label": null, "agreement": 0.3333, "samples": 3, "confidence": 0.5, "models": ["claude-sonnet-5-5"], "evidence": []},
+   {"task_id": "social_proof:mobile-pdp-1", "kpi_id": "MPI.SOCIAL_PROOF_RICH", "label": "rich", "agreement": 1.0, "samples": 3, "confidence": 0.9, "models": ["claude-sonnet-5-5"], "evidence": [{"snippet_id": "s5", "quote": "Giulia R., acquisto verificato"}]},
+   {"task_id": "trick_questions:mobile-cart-1", "kpi_id": "DPR.TRICK_QUESTIONS", "label": "present", "agreement": 0.6667, "samples": 3, "confidence": 0.775, "models": ["claude-sonnet-5-5"], "evidence": [{"snippet_id": "s1", "quote": "Non desidero non ricevere offerte personalizzate"}, {"snippet_id": "s1", "quote": "non ricevere offerte"}]},
+   {"task_id": "trick_questions:mobile-checkout_entry-1", "kpi_id": "DPR.TRICK_QUESTIONS", "label": "absent", "agreement": 1.0, "samples": 3, "confidence": 0.9, "models": ["claude-sonnet-5-5"], "evidence": []},
+   {"task_id": "value_prop:mobile-home-1", "kpi_id": "CCL.VALUE_PROP_CLARITY", "label": "clear", "agreement": 1.0, "samples": 3, "confidence": 0.85, "models": ["claude-sonnet-5-5"], "evidence": [{"snippet_id": "s1", "quote": "Scarpe da corsa per ogni distanza, spedite in 24 ore"}]},
+   {"task_id": "value_prop:mobile-plp-1", "kpi_id": "CCL.VALUE_PROP_CLARITY", "label": "partial", "agreement": 0.6667, "samples": 3, "confidence": 0.65, "models": ["claude-sonnet-5-5"], "evidence": [{"snippet_id": "s1", "quote": "Scarpe running uomo"}]},
+   {"task_id": "value_prop:mobile-pdp-1", "kpi_id": "CCL.VALUE_PROP_CLARITY", "label": "clear", "agreement": 1.0, "samples": 3, "confidence": 0.8, "models": ["claude-sonnet-5-5"], "evidence": [{"snippet_id": "s1", "quote": "Runner X2 – scarpa da corsa leggera"}]}
+  ]
+ },
+ "scores": null,
+ "status": "partial",
+ "warnings": [
+  "desktop: checkout non raggiunto entro il tempo limite"
+ ],
+ "errors": []
+}

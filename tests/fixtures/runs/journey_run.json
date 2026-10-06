@@ -1,0 +1,72 @@
+{
+ "run_id": "20261006T103000000000Z_journey_shop.example",
+ "schema_version": "engagement.v1",
+ "kind": "journey",
+ "site": {
+  "host": "shop.example",
+  "start_url": "https://shop.example/"
+ },
+ "created_at": "2026-10-06T10:30:00Z",
+ "finished_at": "2026-10-06T10:31:45Z",
+ "settings": {
+  "profiles": [
+   "mobile"
+  ],
+  "browser": {
+   "mode": "launch",
+   "product": "Chromium/141",
+   "headless": true
+  },
+  "locale": "it",
+  "consent": "auto",
+  "anchors_version": "anchors.v1",
+  "rubrics_version": "rubrics.v1",
+  "profiles_version": "profiles.v1",
+  "repeats": 1
+ },
+ "pages": [],
+ "not_assessable": [],
+ "deception": {},
+ "journey": {
+  "goal": "Trova delle scarpe da corsa da uomo sotto i 100 € e aggiungine un paio al carrello",
+  "oracle": "cart_contains_item_under_price",
+  "oracle_params": {
+   "max_price": 100
+  },
+  "profile": "mobile",
+  "policy": "host",
+  "max_steps": 40,
+  "status": "done",
+  "verification": {
+   "passed": true,
+   "checks": {
+    "cart_items": 1,
+    "min_price": 89.9,
+    "max_price": 100
+   }
+  },
+  "steps_path": "steps.jsonl",
+  "optimal_steps": 4,
+  "started_at": "2026-10-06T10:30:02Z",
+  "finished_at": "2026-10-06T10:31:40Z"
+ },
+ "observations": [
+  {"kpi_id": "FAI.JOURNEY_SUCCESS", "value": true, "unit": "bool", "source": "deterministic", "page_id": null, "profile": "mobile", "stage": null, "assessed": true, "reason": null, "evidence": {"oracle": "cart_contains_item_under_price"}},
+  {"kpi_id": "FAI.ACTIONS_TO_GOAL", "value": 6, "unit": "count", "source": "deterministic", "page_id": null, "profile": "mobile", "stage": null, "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.ACTIONS_RATIO", "value": 1.5, "unit": "ratio", "source": "deterministic", "page_id": null, "profile": "mobile", "stage": null, "assessed": true, "reason": null, "evidence": {"actions": 6, "optimal": 4}},
+  {"kpi_id": "FAI.TIME_ON_TASK_SITE", "value": 9900, "unit": "ms", "source": "deterministic", "page_id": null, "profile": "mobile", "stage": null, "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.DEAD_CLICK_RATE", "value": 25.0, "unit": "%", "source": "deterministic", "page_id": null, "profile": "mobile", "stage": null, "assessed": true, "reason": null, "evidence": {"dead": 1, "clicks": 4}},
+  {"kpi_id": "FAI.RAGE_EVENTS", "value": 0, "unit": "count", "source": "deterministic", "page_id": null, "profile": "mobile", "stage": null, "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.BACKTRACK_RATE", "value": 0.0, "unit": "%", "source": "deterministic", "page_id": null, "profile": "mobile", "stage": null, "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "FAI.LOSTNESS", "value": 0.25, "unit": "0-1", "source": "deterministic", "page_id": null, "profile": "mobile", "stage": null, "assessed": true, "reason": null, "evidence": {"unique_pages": 4, "visits": 4, "optimal": 3}},
+  {"kpi_id": "FAI.UNEXPECTED_NAV", "value": 0, "unit": "count", "source": "deterministic", "page_id": null, "profile": "mobile", "stage": null, "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.INP_SYNTH", "value": 96, "unit": "ms", "source": "deterministic", "page_id": null, "profile": "mobile", "stage": null, "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.ACTION_RESPONSE_MS", "value": 180, "unit": "ms", "source": "deterministic", "page_id": null, "profile": "mobile", "stage": null, "assessed": true, "reason": null, "evidence": {}},
+  {"kpi_id": "PERF.CLS_POST_INPUT", "value": 0.0, "unit": "score", "source": "deterministic", "page_id": null, "profile": "mobile", "stage": null, "assessed": true, "reason": null, "evidence": {}}
+ ],
+ "judgments": {},
+ "scores": null,
+ "status": "complete",
+ "warnings": [],
+ "errors": []
+}

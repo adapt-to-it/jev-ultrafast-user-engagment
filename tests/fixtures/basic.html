@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pagina di prova</title>
+  <style>
+    body { font: 16px/1.4 system-ui, sans-serif; margin: 24px; }
+    form { display: flex; gap: 8px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <h1>Negozio di prova</h1>
+  <p>Una pagina minima per verificare il trasporto CDP e il browser.</p>
+  <form id="search" onsubmit="event.preventDefault(); document.getElementById('out').textContent = 'Cerca: ' + this.q.value;">
+    <label for="q">Cerca prodotti</label>
+    <input id="q" name="q" type="search" placeholder="Scarpe, borse...">
+    <select id="sort" aria-label="Ordina per">
+      <option value="rel">Rilevanza</option>
+      <option value="price">Prezzo crescente</option>
+    </select>
+    <button type="submit">Cerca</button>
+  </form>
+  <p id="out"></p>
+  <a href="basic.html?page=2">Pagina successiva</a>
+</body>
+</html>

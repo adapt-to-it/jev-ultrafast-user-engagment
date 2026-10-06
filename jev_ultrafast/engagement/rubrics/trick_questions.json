@@ -1,0 +1,28 @@
+{
+  "id": "trick_questions",
+  "version": "rubrics.v1",
+  "kpi_id": "DPR.TRICK_QUESTIONS",
+  "snippet_kinds": [
+    "checkbox_label"
+  ],
+  "stages": null,
+  "grouping": {
+    "per": "page",
+    "max_snippets": 8
+  },
+  "question": "Le etichette delle caselle di controllo sono formulate in modo ingannevole, per esempio con doppie negazioni o con una logica invertita rispetto alle altre caselle ('Deseleziona per non ricevere...'), così che si rischi di accettare ciò che non si vuole? Scegli una sola etichetta secondo le descrizioni. Se scegli 'present', copia in evidence l'etichetta esatta, carattere per carattere, con il suo snippet_id.",
+  "labels": {
+    "present": "Almeno un'etichetta usa doppie negazioni, logica invertita o una formulazione confusa che porta facilmente a una scelta non voluta.",
+    "absent": "Le etichette sono dirette: si capisce che cosa succede selezionando o deselezionando la casella.",
+    "unclear": "Non ci sono etichette valutabili, oppure il significato non è determinabile dal testo."
+  },
+  "no_quote_labels": [
+    "absent",
+    "unclear"
+  ],
+  "values": {
+    "present": 0.8,
+    "absent": 0.0,
+    "unclear": null
+  }
+}

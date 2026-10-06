@@ -193,6 +193,7 @@ class JudgmentTask(TypedDict, total=False):
     profile: str
     question: str
     labels: dict[str, str]  # closed label set {label: description}
+    no_quote_labels: list[str]  # labels that may be returned without evidence quotes
     snippets: list[Snippet]
     context: dict  # {page_type, locale, url}
     samples_required: int
@@ -229,6 +230,7 @@ class JudgmentState(TypedDict, total=False):
     tasks: list[JudgmentTask]
     verdicts: list[Verdict]
     final: list[FinalJudgment]
+    skipped: list[dict]  # rubrics without tasks: [{rubric_id, kpi_id, reason, detail}]
 
 
 # ---------------------------------------------------------------- journey
@@ -297,6 +299,10 @@ class KpiScore(TypedDict, total=False):
     reason: str | None
     observations: int
     provisional: bool  # anchor is editorial, not published
+    weight: float  # weight inside the owner sub-index (0 = informational or DPR)
+    applicable: bool  # False: excluded from coverage (no journey, no judgments, or reason "not_applicable...")
+    profile: str | None  # the profile whose aggregate is the value, when it scores strictly worse than every other
+    #                      profile's; None otherwise (single profile, tie, pooled, site-level without profiles)
 
 
 class SubIndexScore(TypedDict, total=False):
@@ -308,8 +314,12 @@ class SubIndexScore(TypedDict, total=False):
 
 
 class DprScore(TypedDict, total=False):
-    score: float  # 0..100 risk
+    score: float  # 0..100 over the assessed signals; 0 with coverage 0 means "no penalty applied", not "no risk"
     signals: list[dict]  # [{kpi_id, severity, confidence, evidence}]
+    coverage: float  # 0..1, severity-weighted share of applicable DPR KPIs that were assessed
+    assessed: int
+    applicable: int  # deterministic DPR KPIs unless reported not_applicable; judged ones only when context.judged
+    unassessed: list[dict]  # [{kpi_id, reason}]
 
 
 class ErsScore(TypedDict, total=False):
@@ -325,6 +335,8 @@ class ErsScore(TypedDict, total=False):
 class ScoreOutput(TypedDict, total=False):
     anchors_version: str
     weights: dict[str, float]
+    context: dict  # {"journey": bool, "judged": bool, "journey_runs": [run_id]}: applicable KPI families and the
+    #                journey runs merged by scoring.score_run(journeys=...)
     kpis: list[KpiScore]
     sub_indices: dict[str, SubIndexScore]
     dpr: DprScore

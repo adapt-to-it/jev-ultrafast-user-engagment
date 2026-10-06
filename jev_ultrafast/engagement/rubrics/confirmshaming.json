@@ -1,0 +1,29 @@
+{
+  "id": "confirmshaming",
+  "version": "rubrics.v1",
+  "kpi_id": "DPR.CONFIRMSHAMING",
+  "snippet_kinds": [
+    "modal_decline",
+    "consent"
+  ],
+  "stages": null,
+  "grouping": {
+    "per": "page",
+    "max_snippets": 8
+  },
+  "question": "Le etichette per rifiutare un'offerta, chiudere un popup o negare il consenso fanno sentire in colpa o ridicolizzano chi rifiuta (confirmshaming, per esempio 'No grazie, preferisco pagare di più')? Valuta solo il testo delle opzioni di rifiuto. Scegli una sola etichetta secondo le descrizioni. Se scegli 'present', copia in evidence l'etichetta esatta, carattere per carattere, con il suo snippet_id.",
+  "labels": {
+    "present": "Almeno un'etichetta di rifiuto usa colpa, vergogna o ironia verso chi rifiuta, oppure presenta il rifiuto come una scelta stupida o dannosa.",
+    "absent": "C'è almeno un'opzione di rifiuto e tutte le etichette di rifiuto sono neutre, per esempio 'No grazie', 'Chiudi', 'Rifiuta tutto'.",
+    "unclear": "Gli snippet non contengono opzioni di rifiuto valutabili (un rimando come 'Gestisci preferenze' o 'Impostazioni' non è un'opzione di rifiuto), oppure il tono è ambiguo."
+  },
+  "no_quote_labels": [
+    "absent",
+    "unclear"
+  ],
+  "values": {
+    "present": 0.8,
+    "absent": 0.0,
+    "unclear": null
+  }
+}
