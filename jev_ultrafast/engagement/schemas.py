@@ -46,6 +46,7 @@ class Vitals(TypedDict, total=False):
     """Read from window.__jevVitals.read() (vitals.js). Times in ms relative to navigation start."""
 
     ttfb: float | None
+    ttfb_source: NotRequired[str]  # "cdp" (main Document response timing) | "navigation_timing" (fallback)
     fcp: float | None
     lcp: float | None
     lcp_element: str | None  # short descriptor, e.g. "img.hero" (never used as a selector)
@@ -60,6 +61,11 @@ class Vitals(TypedDict, total=False):
     event_timing_max_ms: float | None  # max Event Timing duration observed so far
     js_errors: int | None  # window.onerror + unhandledrejection
     settled_reason: str | None  # "quiet" | "timeout" | "load_only"
+    soft_navigation: NotRequired[bool]  # True: same document as an earlier record (client-side route change or
+    #                                     back-forward cache restore); its load timings are None
+    speculative: NotRequired[str]  # "prefetch" | "prerender": the shop's speculation rules fetched the document before
+    #                                the click (not a cold navigation); its load timings are None
+    activation_start: NotRequired[float | None]  # navigation.activationStart (> 0: a prerendered document activated)
     resources: NotRequired[list[dict]]  # optional trimmed Resource Timing rows (fallback for lossy transports)
 
 
@@ -113,22 +119,27 @@ class AuditPayload(TypedDict, total=False):
     lang: str
     viewport: dict  # {w, h, dpr}
     doc: dict  # {h1s, headings, word_count, sentence_count, letter_count, text_sample}
-    jsonld: list[dict]  # parsed JSON-LD objects (flattened @graph)
-    meta: dict  # {og_type, canonical, og_price_amount, og_price_currency}
+    jsonld: list[dict]  # parsed JSON-LD objects (flattened @graph), trimmed: no long prose, first image only, and
+    #                     past ~30 KB only {@type, other keys: None}
+    meta: dict  # {og_type, canonical, og_price_amount, og_price_currency, jsonld_types, microdata_products,
+    #             microdata_main (schema.org Product itemscopes outside product cards), speculation_rules (bool)}
     prices: list[dict]  # [{text, value, currency, strikethrough, rect, above_fold, near_text}]
     ctas: list[dict]  # [{label, lexicon_hit, rect, above_fold, fg, bg, contrast, area, primary_like}]
     search: dict  # {present, above_fold, width, has_autocomplete_attr, rect}
     nav: dict  # {links, categories:[{label, href}], breadcrumbs, generic_label_share, cart_link}
     products: dict  # {cards_count, cards:[{title, href, price}], itemlist_jsonld}
     filters: dict  # {controls, sort, result_count_text, chips, pagination}
-    pdp: dict  # {add_to_cart, stock_text, delivery_text, shipping_text, returns_text, images, zoom, variants,
-    #            variant_selector, reviews:{count_text, rating_text}}
+    pdp: dict  # {add_to_cart, add_to_cart_count (outside product cards), add_to_cart_all, stock_text, delivery_text,
+    #            shipping_text, returns_text, images, zoom, variants, variant_selector,
+    #            reviews:{count_text, rating_text}}
     cart: dict  # {line_items:[{title, qty, price}], subtotal_text, shipping_text, total_text, checkout_cta,
     #             editable, prechecked_paid:[{label, price_text}]}
     forms: dict  # {fields_total, required, visible, autocomplete_share, labels_share, cc_present, password_present,
-    #              guest_option, login_required}
+    #              password_required (a visible password that is required or not labelled optional), guest_option,
+    #              login_required}
     overlays: list[dict]  # [{kind, coverage, has_close, consent_like, accept_labels, reject_labels, manage_labels,
-    #                         accept_area, reject_area, text_sample}]
+    #                         decline_labels, accept_area, reject_area, text_sample, interrupting, modal, blocking,
+    #                         buttons:[{label (accessible name), text (visible), kind}]}]
     trust: dict  # {https, contact:{email, phone, address}, vat_id, policy_links:{returns, shipping, privacy, terms,
     #              contact}, payment_logos, badges}
     persuasion: dict  # {scarcity:[{text, number}], urgency:[{text, countdown, remaining_s}], reciprocity:[...],
@@ -137,6 +148,8 @@ class AuditPayload(TypedDict, total=False):
     targets: dict  # {interactive, lt24, lt44, lt48}
     a11y: dict  # {img_missing_alt, inputs_missing_label, lang_missing, iframes, shadow_roots_open, shadow_roots_closed}
     snippets: list[Snippet]
+    lexicon_lang: NotRequired[str]  # the page's effective language (lexicon.effective_language): the lexicon audit.js
+    #                                 and the classifier used, and the language of its text
 
 
 class PageRecord(TypedDict, total=False):
@@ -158,6 +171,8 @@ class PageRecord(TypedDict, total=False):
     probes: dict  # active probes run by the crawler, e.g. {"search_autocomplete": {typed, options, latency_ms}}
     consent: dict  # {"choice": "reject"|"accept"|"none", "reason": str} when the crawler handled a consent banner
     notes: list[str]
+    repeat_of: NotRequired[str]  # settings.repeats > 1: page_id of the first load of the same URL (checks.py reports
+    #                              the median over a page and its repeats, one row per distinct page)
 
 
 class NotAssessable(TypedDict, total=False):
@@ -240,9 +255,11 @@ class StepSince(TypedDict, total=False):
     """window.__jevVitals.since(mark) read after an action; all counts are since the mark."""
 
     first_response_ms: float | None  # first mutation / navigation / request after the action
-    mutations: int
-    navigations: int  # history pushState/replaceState/popstate + document navigations
-    requests: int
+    mutations: int  # records of non-ticker nodes (see vitals.js)
+    mutations_total: NotRequired[int]  # every record, self-updating (ticker) nodes included; evidence only
+    navigations: int  # history pushState/replaceState/popstate + document navigations + back-forward cache restores
+    requests: int  # requests of non-poller URLs (see vitals.js)
+    requests_total: NotRequired[int]  # every request, a page's own polling included; evidence only
     errors: int
     shifts_post_input: float
     event_timing_max_ms: float | None
@@ -268,6 +285,15 @@ class JourneyStep(TypedDict, total=False):
     flags: dict  # {dead_click, rage, backtrack, guard_blocked, stale, external_nav}
     status: str  # agent status after this step
     guard_notes: list[str]
+    role: NotRequired[str | None]  # observed role of the target (dead clicks count button and link clicks only)
+    page_type: NotRequired[str | None]  # classification of the page the action was taken on
+    execution_ms: NotRequired[float | None]  # input dispatch (site-attributable, with settle_ms)
+    settle_reason: NotRequired[str | None]  # "quiet" | "timeout"
+    # flags may also hold new_tab, new_document, unexpected_nav and uncertain (an input whose execution was not
+    # confirmed); steps with flags.stale or flags.guard_blocked executed nothing and are not counted as actions
+    # operation "NAVIGATION": the page navigated by itself between two steps (no input was sent); since is {}, it is
+    # not counted as an action, and its flags (new_document, external_nav, backtrack, unexpected_nav, follows_timeout)
+    # feed FAI.UNEXPECTED_NAV and the visit sequence (backtrack, Lostness)
 
 
 class JourneyRecord(TypedDict, total=False):
@@ -278,11 +304,15 @@ class JourneyRecord(TypedDict, total=False):
     policy: str
     max_steps: int
     status: str  # running | done | blocked | stopped_at_checkout_boundary | budget_exhausted | error
-    verification: dict | None  # {"passed": bool, "checks": {...}}
+    verification: dict | None  # {"passed": bool | None, "checks": {...}}; None only with checks["not_assessable"]
+    #                            ("bot_challenge", "journey_error", "cart_price_ambiguous", "cart_items_unreadable",
+    #                            "cart_price_unreadable") or checks["error"]
     steps_path: str  # "steps.jsonl"
     optimal_steps: int | None  # R for Lostness / actions ratio, when known
     started_at: str
     finished_at: str | None
+    optimal_pages: NotRequired[int | None]  # Lostness R: minimum distinct pages, start page included (optimal_steps
+    #                                         is then the minimum number of interactions, for FAI.ACTIONS_RATIO)
 
 
 # ---------------------------------------------------------------- scores

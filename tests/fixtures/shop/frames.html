@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Le vostre recensioni | Passo Svelto</title>
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <main>
+    <h1>Le vostre recensioni</h1>
+    <p>Il widget qui sotto arriva da un altro sito: localhost invece di 127.0.0.1, quindi un altro processo.</p>
+    <iframe id="widget" title="Widget recensioni" width="800" height="500"></iframe>
+  </main>
+  <script>
+    document.getElementById('widget').src =
+      location.href.replace('//127.0.0.1:', '//localhost:').replace('frames.html', 'category.html');
+  </script>
+</body>
+</html>

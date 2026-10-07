@@ -10,19 +10,28 @@ from .questions import MAX_STEPS
 
 
 class Agent:
-    def __init__(self, url, goals, *, record_dir=None, screenshots=False):
+    # A policy has the choose() contract and a text policy the field_text() contract. None uses TypeSafe and the
+    # text model. A given browser is already at its page (engagement journeys): when the constructor fails it is left
+    # to the caller; close() closes it like an own one, so a caller that keeps it passes one whose close() is a no-op.
+    policy = None
+    text_policy = None
+
+    def __init__(self, url, goals, *, browser=None, policy=None, text_policy=None, record_dir=None,
+                 screenshots=False):
         task = goals.strip() if isinstance(goals, str) else "\n".join(goals).strip()
         if not task:
             raise ValueError("Supply a task")
         plan = [task]
         self.pending_text = None
-        self.browser = Browser(url)
+        self.policy, self.text_policy = policy, text_policy
+        self.browser = browser if browser is not None else Browser(url)
         self.record_dir = Path(record_dir) if record_dir else None
         self.screenshots = screenshots or bool(record_dir)
         try:
             page = self.browser.observe(screenshot=self.screenshots)
         except Exception:
-            self.browser.close()
+            if browser is None:
+                self.browser.close()
             raise
         self.state = dict(
             browser=self.browser,
@@ -74,7 +83,8 @@ class Agent:
                 raise ValueError("This run has stopped. Start a fresh demo.")
             if len(state["decisions"]) >= MAX_STEPS * 2:
                 raise ValueError("Reached the demo's model-call budget")
-            state["decision"] = choose(state["page"], state["goal"], state["history"])
+            policy = self.policy if self.policy is not None else choose
+            state["decision"] = policy(state["page"], state["goal"], state["history"])
             state["decisions"].append(
                 {
                     **state["decision"],
@@ -110,7 +120,7 @@ class Agent:
                 if self.pending_text and self.pending_text[0] == context:
                     _, text, helper = self.pending_text
                 else:
-                    text, helper = field_text(context)
+                    text, helper = (self.text_policy if self.text_policy is not None else field_text)(context)
                     self.pending_text = (context, text, helper)
                     state["text_calls"].append({**helper, "field": action["label"], "value": text})
             # Browser.act checks freshness immediately before input, including after text generation.

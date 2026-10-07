@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Novità | Passo Svelto</title>
+  <link rel="icon" href="data:,">
+  <!-- Speculation rules, as WordPress 6.8+ and other platforms ship them: the next page is fetched before the click. -->
+  <script type="speculationrules">
+    {"prefetch": [{"source": "list", "urls": ["resi.html?speculation=1"], "eagerness": "immediate"}],
+     "prerender": [{"source": "list", "urls": ["resi.html?speculation=2"], "eagerness": "immediate"}]}
+  </script>
+</head>
+<body>
+  <main>
+    <a id="next" href="resi.html?speculation=1"
+       style="position:fixed;top:0;left:0;width:240px;height:60px;background:#fff;z-index:9">Resi e rimborsi</a>
+    <h1 style="margin-top:80px">Novità della settimana</h1>
+    <p>Le nuove scarpe da corsa arrivano ogni lunedì: leggi come funzionano i resi prima di ordinare.</p>
+  </main>
+</body>
+</html>

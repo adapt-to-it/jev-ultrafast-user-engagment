@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300" role="img" aria-label="Scarpa da corsa">
+  <rect width="400" height="300" fill="#f4f6f8"/>
+  <path d="M40 210 C60 150 120 120 170 125 C210 130 230 160 270 165 C320 170 360 180 365 205 L365 225 L40 225 Z" fill="#2b8a3e"/>
+  <path d="M40 225 L365 225 L365 240 C300 248 120 248 40 240 Z" fill="#0b4f1c"/>
+  <path d="M150 140 L175 175 M175 135 L200 172 M200 138 L222 168" stroke="#ffffff" stroke-width="6" stroke-linecap="round"/>
+</svg>
