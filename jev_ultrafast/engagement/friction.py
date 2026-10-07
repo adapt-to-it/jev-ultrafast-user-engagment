@@ -30,11 +30,11 @@ Definitions (docs/engagement-kpi.md, sections 4.1, 4.2 and 5.3):
   waiting) after which a new document loaded or another site showed, or a page that navigated by itself between
   steps (a NAVIGATION record: a redirect, a refresh or a script while the policy decided); a chosen click to another
   site is evidence only (it ends the journey, and the oracle accounts for it).
-- page visits: the URLs (fragment dropped, query sorted) before and after each executed step and each NAVIGATION
-  record, consecutive repeats collapsed; S = visits, N = distinct pages. Backtrack rate = (S - N) / S. Lostness
-  (Smith 1996) = sqrt((N/S - 1)^2 + (R/N - 1)^2) with R the minimum number of distinct pages, start page included;
-  only for a successful journey (a failed one is not a path to the goal), R capped at N (a shorter path than the
-  declared minimum is not lost) and the result capped at 1.
+- page visits: the web URLs (fragment dropped, query sorted; not Chrome's error page) before and after each executed
+  step and each NAVIGATION record, consecutive repeats collapsed; S = visits, N = distinct pages. Backtrack rate =
+  (S - N) / S. Lostness (Smith 1996) = sqrt((N/S - 1)^2 + (R/N - 1)^2) with R the minimum number of distinct pages,
+  start page included; only for a successful journey (a failed one is not a path to the goal), R capped at N (a
+  shorter path than the declared minimum is not lost) and the result capped at 1.
 - time on task (site): execution plus settle time of every executed step; decision latency (host or model), text
   generation and the harness's WAIT pause are excluded.
 - post-input shifts: the sum of hadRecentInput layout shifts after the agent's interactions; action response: the
@@ -42,8 +42,9 @@ Definitions (docs/engagement-kpi.md, sections 4.1, 4.2 and 5.3):
   a navigation; a new document's response is its FCP, measured on its own). Interactions without one are the
   dead-click KPIs' evidence, not a latency. vitals.js since() still counts request starts in first_response_ms
   (until it reports them apart as first_request_ms), so a step that requested and mutated reports the earlier of the
-  two (evidence "request_inclusive"). The clock starts right before the input is dispatched: a click's dispatch is a
-  few ms, a TYPE_TEXT's (field click, select-all, insertText) a few tens.
+  two (evidence "request_inclusive"). The clock starts after the harness's freshness check (a snapshot.js read, not
+  site time), right before the input is dispatched: a click's dispatch is a few ms, a TYPE_TEXT's (field click,
+  select-all, insertText) a few tens.
 - interaction latency (INP_SYNTH): the longest Event Timing duration of in-document clicks and typing, never below
   the 16 ms durationThreshold (shorter entries come only from vitals.js's first-input observer; an interaction
   without an entry lasted under 16 ms): 16 ms is then an upper bound.
@@ -75,6 +76,16 @@ def normalize_url(url: str | None) -> str | None:
         return url
     query = urlencode(sorted(parse_qsl(parts.query, keep_blank_values=True)))
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path or "/", query, ""))
+
+
+def page_url(url: str | None) -> str | None:
+    """normalize_url() of a web page (http, https); None for anything else: Chrome's error page (chrome-error://) or
+    about:blank is no page of the shop."""
+    try:
+        web = urlsplit(url or "").scheme.lower() in ("http", "https")
+    except ValueError:
+        return None
+    return normalize_url(url) if web else None
 
 
 def executed(step: dict) -> bool:
@@ -158,13 +169,13 @@ def rage_events(steps: list[dict]) -> int:
 
 def visits(steps: list[dict]) -> list[str]:
     """Page visits in order: the URL before and after every executed step and every navigation between steps,
-    consecutive repeats collapsed."""
+    consecutive repeats collapsed; only web pages (a page that failed to load is not one of the shop)."""
     sequence: list[str] = []
     for step in steps:
         if not executed(step) and not between_steps(step):
             continue
         for url in (step.get("url_before"), step.get("url_after")):
-            page = normalize_url(url)
+            page = page_url(url)
             if page and (not sequence or sequence[-1] != page):
                 sequence.append(page)
     return sequence

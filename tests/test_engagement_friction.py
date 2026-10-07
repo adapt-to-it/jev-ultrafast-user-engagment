@@ -209,6 +209,22 @@ def test_urls_differing_only_by_fragment_or_query_order_are_one_page():
     assert friction.normalize_url("HTTPS://Shop.Example/p?b=2&a=1#reviews") == "https://shop.example/p?a=1&b=2"
 
 
+def test_a_page_that_did_not_load_is_no_visit_and_no_dead_click():
+    """Chrome's error page is not a page of the shop: no visit, no backtrack; the click that led there had an effect,
+    and a navigation_error leaves the goal KPIs not assessed with that reason, the process KPIs assessed."""
+    broken = {**step(before="/a"), "url_after": "chrome-error://chromewebdata/",
+              "flags": {"navigation_error": True}, **{"since": {"mutations": 0, "navigations": 0, "requests": 1}}}
+    steps = [step(before="/", after="/a"), broken]
+    assert friction.visits(steps) == [f"{SHOP}/", f"{SHOP}/a"]
+    assert friction.page_url("chrome-error://chromewebdata/") is None and friction.page_url("about:blank") is None
+    assert friction.effect(broken) is True and not friction.is_dead_click(broken)
+    out = rows(steps, success=None, unverified="navigation_error")
+    assert out["FAI.BACKTRACK_RATE"]["evidence"] == {"visits": 2, "unique_pages": 2}
+    for kpi_id in ("FAI.JOURNEY_SUCCESS", "FAI.ACTIONS_TO_GOAL", "FAI.TIME_ON_TASK_SITE", "FAI.LOSTNESS"):
+        assert not out[kpi_id]["assessed"] and out[kpi_id]["reason"] == "navigation_error", kpi_id
+    assert out["FAI.DEAD_CLICK_RATE"]["value"] == 0.0 and out["FAI.UNEXPECTED_NAV"]["value"] == 0
+
+
 # ---------------------------------------------------------------- time, responses, interaction latency
 
 def test_time_on_task_counts_site_time_and_excludes_decision_latency():

@@ -13,7 +13,7 @@ from unittest.mock import Mock
 import pytest
 
 from jev_ultrafast import agent as loop
-from jev_ultrafast.browser import StalePage, fingerprint
+from jev_ultrafast.browser import Browser, StalePage, fingerprint
 from jev_ultrafast.engagement import friction, oracles
 from jev_ultrafast.engagement.collectors import AuditError, PageCollector
 from jev_ultrafast.engagement.friction import executed as step_executed
@@ -276,7 +276,7 @@ def cart_verdict(monkeypatch, line_items, subtotal, max_price=50, *, oracle="car
     record = {"page_id": "desktop-verify-cart", "classification": {"type": "cart"},
               "audit": {"cart": {"line_items": line_items, "subtotal_value": subtotal, "total_value": total,
                                  "empty": empty}}}
-    monkeypatch.setattr(oracles, "read_page", lambda browser, collector: ({}, {"type": "cart"}))
+    monkeypatch.setattr(oracles, "read_page", lambda browser, collector: ({"title": "Carrello"}, {"type": "cart"}))
     monkeypatch.setattr(oracles, "_load", Mock(side_effect=AssertionError("the final cart page is not loaded again")))
     run = {"site": {"start_url": "https://shop.test/"}, "settings": {"locale": "it"}}
     browser = Mock(evaluate=Mock(return_value="https://shop.test/carrello?add-to-cart=7"))
@@ -351,6 +351,47 @@ def test_a_cart_the_audit_cannot_read_is_not_the_shops_failure(monkeypatch):
     assert cart_verdict(monkeypatch, [unpriced, row("Brezza", 39.9, 1)], 84.8)[0] is True  # another row passes
     passed, checks = cart_verdict(monkeypatch, [row("Vento", 60.0, 1)], 60.0)  # read, and over the limit
     assert passed is False and "not_assessable" not in checks
+
+
+def test_a_page_the_oracle_cannot_read_is_a_harness_failure_not_the_shops(monkeypatch):
+    """audit.js fails on the cart page (PageCollector.collect keeps audit {} with the note), or on the final page with
+    no visited cart page to fall back on: not assessable, never a failed goal. A visited cart still leads to it."""
+    run = {"site": {"start_url": "https://shop.test/"}, "settings": {"locale": "it"}}
+    browser = Mock(evaluate=Mock(return_value="https://shop.test/carrello"))
+    unread = {"page_id": "desktop-verify-cart", "classification": {"type": "other"}, "audit": {},
+              "notes": ["audit failed: x"]}
+    collector = Mock(profile="desktop", collect=Mock(return_value=unread))
+    monkeypatch.setattr(oracles, "read_page", lambda browser, collector: ({"title": "Carrello"}, {"type": "cart"}))
+    cart_oracles = (("cart_not_empty", {}), ("cart_contains_item_under_price", {"max_price": 50}))
+    for name, params in cart_oracles:
+        result = oracles.verify(name, params, browser=browser, collector=collector, run=run, steps=[])
+        assert result["passed"] is None and result["checks"]["not_assessable"] == "cart_unreadable", name
+        assert result["page"] is unread and "unreadable" not in result["checks"]  # the page stays as evidence
+    monkeypatch.setattr(oracles, "read_page", Mock(side_effect=AuditError("audit.js timed out")))
+    for name, params in cart_oracles:
+        result = oracles.verify(name, params, browser=browser, collector=collector, run=run, steps=[])
+        assert result["passed"] is None and result["checks"]["not_assessable"] == "final_page_unreadable", name
+        assert result["checks"]["cart_found"] is False and result["page"] is None
+    cart = {"page_id": "desktop-verify-cart", "classification": {"type": "cart"},
+            "audit": {"cart": {"line_items": [row("Brezza", 39.9, 1)], "subtotal_value": 39.9}}}
+    monkeypatch.setattr(oracles, "_load", Mock(return_value=cart))
+    visited = [{"url_before": "https://shop.test/carrello", "page_type": "cart"}]
+    result = oracles.verify("cart_not_empty", {}, browser=browser, collector=collector, run=run, steps=visited)
+    assert result["passed"] is True and result["checks"]["cart_source"] == "visited_cart_page"
+    for name in ("pdp_reached", "search_results_shown"):  # the page oracles read the final page only
+        result = oracles.verify(name, {}, browser=browser, collector=collector, run=run)
+        assert result["passed"] is None and result["checks"]["not_assessable"] == "final_page_unreadable", name
+
+
+def test_a_page_the_browser_did_not_load_is_not_audited():
+    """Chrome's error page is no page of the shop: the oracle does not audit it (no spurious page type)."""
+    run = {"site": {"start_url": "https://shop.test/"}, "settings": {"locale": "it"}}
+    browser = Mock(evaluate=Mock(return_value="chrome-error://chromewebdata/"))
+    collector = Mock(profile="desktop", audit=Mock(side_effect=AssertionError("Chrome's error page is not audited")))
+    result = oracles.verify("pdp_reached", {}, browser=browser, collector=collector, run=run)
+    assert result["passed"] is False and "not_assessable" not in result["checks"]
+    assert result["checks"]["page_type"] == "other" and result["checks"]["same_site"] is False
+    assert oracles.read_page(browser, collector)[1]["signals"] == ["navigation_error"]
 
 
 def test_italian_cart_actions_are_never_loaded():
@@ -684,7 +725,7 @@ def test_a_choice_never_runs_on_a_checkout_page_that_loaded_meanwhile(journey, s
     moved, attempt = steps  # the redirect the page made by itself, then the host's choice that never ran
     assert moved["operation"] == "NAVIGATION" and moved["flags"]["new_document"] and moved["flags"]["unexpected_nav"]
     assert moved["url_before"].endswith("/resi.html") and moved["url_after"].endswith("/checkout.html")
-    assert moved["page_type"] == "checkout" and not step_executed(moved)
+    assert moved["page_type"] == "other" and not step_executed(moved)  # the type of the page it left (resi.html)
     assert attempt["flags"]["stale"] and not step_executed(attempt)
     assert attempt["guard_notes"] == ["checkout_boundary: the page changed since the observation; nothing ran"]
     finished = runner.finish()
@@ -794,14 +835,14 @@ def test_execution_is_logged_before_its_result_is_observed(journey, shop_server)
     make, store = journey
     runner, run_id, observation = counter_page(make, shop_server)
     events, tab = [], runner.tab
-    append, observe, tab_act = store.append_step, tab.observe, tab.act
+    append, observe, send = store.append_step, tab.observe, runner._send
     store.append_step = lambda rid, step: (events.append(("log", step["operation"])), append(rid, step))[1]
     tab.observe = lambda **kw: (events.append(("observe",)), observe(**kw))[1]
-    tab.act = lambda *a, **kw: (events.append(("act",)), tab_act(*a, **kw))[1]
+    runner._send = lambda *a, **kw: (events.append(("act",)), send(*a, **kw))[1]
     try:
         assert act(runner, "CLICK", index_of(observation, r"^Conta$"))["executed"]
     finally:
-        del store.append_step, tab.observe, tab.act
+        del store.append_step, tab.observe, runner._send
     assert events == [("act",), ("log", "CLICK"), ("observe",)]
 
 
@@ -809,15 +850,15 @@ def test_execution_is_logged_before_its_result_is_observed(journey, shop_server)
 def test_an_input_that_may_have_happened_is_logged_as_uncertain_and_never_sent_again(journey, shop_server, error):
     make, store = journey
     runner, run_id, observation = counter_page(make, shop_server)
-    tab_act = runner.tab.act
+    send = runner._send
 
     def act_then_fail(*args, **kwargs):
-        tab_act(*args, **kwargs)
+        send(*args, **kwargs)
         raise error
 
-    runner.tab.act = act_then_fail
+    runner._send = act_then_fail
     result = act(runner, "CLICK", index_of(observation, r"^Conta$"))
-    del runner.tab.act
+    del runner._send
     assert result["executed"] and not result["stale"] and result["status"] == "running" and clicks(runner) == 1
     steps = store.read_steps(run_id)
     assert [s["operation"] for s in steps] == ["WAIT", "CLICK"] and steps[1]["flags"]["uncertain"]
@@ -834,9 +875,9 @@ def test_an_input_that_may_have_happened_is_logged_as_uncertain_and_never_sent_a
 def test_a_stale_decision_executes_nothing_and_consumes_no_step(journey, shop_server):
     make, store = journey
     runner, run_id, observation = counter_page(make, shop_server)
-    runner.tab.act = Mock(side_effect=StalePage("moved"))
+    runner._send = Mock(side_effect=StalePage("moved"))  # the dispatch found the target changed: nothing was sent
     result = act(runner, "CLICK", index_of(observation, r"^Conta$"))
-    del runner.tab.act
+    del runner._send
     assert result["stale"] and not result["executed"] and result["observation"]["step"] == 1 and clicks(runner) == 0
     assert store.read_steps(run_id)[-1]["flags"]["stale"]
     with pytest.raises(ValueError, match="not chosen"):
@@ -870,7 +911,7 @@ def test_run_auto_gives_up_on_a_page_that_never_holds_still(journey, shop_server
     monkeypatch.setattr(loop, "choose", stand_in(r"^Conta$", calls))
     make, store = journey
     runner, run_id, _ = counter_page(make, shop_server, policy="typesafe")
-    runner.tab.act = Mock(side_effect=StalePage("moved"))
+    runner._send = Mock(side_effect=StalePage("moved"))
     result = runner.run_auto()
     assert result["status"] == "blocked" and result["steps"] == 0 and len(calls) == MAX_STALE
     assert all(s["flags"]["stale"] for s in store.read_steps(run_id)) and clicks(runner) == 0
@@ -1159,25 +1200,199 @@ def test_a_beacon_does_not_cut_the_dead_click_window_short(journey, shop_server)
     assert not step["flags"]["dead_click"] and step["since"]["mutations"] >= 1
 
 
+BROKEN = "http://127.0.0.1:1/shop/product.html?id=1"  # a port Chrome refuses (net::ERR_UNSAFE_PORT)
+BROKEN_LINK = ("document.body.prepend(Object.assign(document.createElement('a'), "
+               f"{{href: '{BROKEN}', textContent: 'Scheda rotta'}})), true")
+
+
 def test_a_page_that_failed_to_load_is_a_navigation_error_not_another_site(journey, shop_server):
+    """A page the browser did not load ends the journey (blocked) and leaves its outcome not assessable: the cause
+    (DNS, TLS, a proxy, a dead host) cannot be verified from the run. The net error is recorded, not interpreted."""
     make, store = journey
     runner = make()
     started = runner.start(shop_server.url("shop/resi.html"), "Apri la scheda", oracle="pdp_reached",
                            profile="desktop")
-    runner.tab.evaluate("document.body.prepend(Object.assign(document.createElement('a'), "
-                        "{href: 'http://127.0.0.1:1/shop/product.html?id=1', textContent: 'Scheda rotta'})), true")
+    runner.tab.evaluate(BROKEN_LINK)
     observation = act(runner, "WAIT")["observation"]
     result = act(runner, "CLICK", index_of(observation, r"^Scheda rotta$"))
     assert result["executed"] and result["status"] == "blocked" and result["observation"]["controls"] == []
     assert result["observation"]["url"].startswith("chrome-error://")
+    assert result["observation"]["page_type"] == "other"  # Chrome's error page is not audited
     assert result["observation"]["guard_notes"][0].startswith("the page did not load (chrome-error://")
     step = store.read_steps(started["run_id"])[-1]
     assert step["flags"]["navigation_error"] and not step["flags"]["external_nav"] and not step["flags"]["dead_click"]
+    assert step["guard_notes"][-1].startswith("navigation_error: net::ERR_") and BROKEN in step["guard_notes"][-1]
     finished = runner.finish()
-    assert finished["friction"]["FAI.UNEXPECTED_NAV"] == 0
-    warnings = store.load(started["run_id"])["warnings"]
-    assert any(w.startswith("navigation_error: the page did not load (chrome-error://") for w in warnings)
+    verification, friction_rows = finished["verification"], finished["friction"]
+    checks = verification["checks"]
+    assert finished["status"] == "blocked" and verification["passed"] is None
+    assert checks["not_assessable"] == "navigation_error" and checks["oracle_passed"] is False
+    assert checks["navigation_error"]["url"] == BROKEN and checks["navigation_error"]["error"].startswith("net::ERR_")
+    assert checks["page_type"] == "other" and checks["same_site"] is False
+    assert friction_rows["FAI.JOURNEY_SUCCESS"] is None and friction_rows["FAI.UNEXPECTED_NAV"] == 0
+    run = store.load(started["run_id"])
+    assert run["status"] == "partial"
+    assert run["not_assessable"][-1] == {"stage": None, "profile": "desktop", "kpi_id": None,
+                                         "reason": "navigation_error"}
+    rows = {o["kpi_id"]: o for o in run["observations"]}
+    assert rows["FAI.JOURNEY_SUCCESS"]["reason"] == "navigation_error"
+    assert rows["FAI.DEAD_CLICK_RATE"]["value"] == 0.0  # the process KPIs stay assessed
+    assert rows["FAI.BACKTRACK_RATE"]["evidence"] == {"visits": 1, "unique_pages": 1}  # the error page is no visit
+    warnings = run["warnings"]
+    assert any(w.startswith("navigation_error: the page did not load (chrome-error://") and BROKEN in w
+               and "net::ERR_" in w for w in warnings)
     assert not [w for w in warnings if w.startswith("left_shop")]
+
+
+def test_a_start_page_that_never_loaded_leaves_the_run_failed(journey, shop_server):
+    make, store = journey
+    runner = make()
+    started = runner.start("http://127.0.0.1:9/nothing", "Trova un prodotto", oracle="pdp_reached",
+                           profile="desktop")
+    observation = started["observation"]
+    assert started["status"] == "blocked" and observation["controls"] == []
+    assert observation["url"].startswith("chrome-error://") and observation["page_type"] == "other"
+    assert observation["guard_notes"][0].startswith("the page did not load (chrome-error://")
+    finished = runner.finish()
+    checks = finished["verification"]["checks"]
+    assert finished["status"] == "blocked" and finished["verification"]["passed"] is None and finished["steps"] == 0
+    assert checks["not_assessable"] == "navigation_error"
+    assert checks["navigation_error"]["url"] == "http://127.0.0.1:9/nothing"
+    assert checks["navigation_error"]["error"].startswith("net::ERR_")
+    assert finished["friction"]["FAI.JOURNEY_SUCCESS"] is None
+    run = store.load(started["run_id"])
+    assert run["status"] == "failed" and run["not_assessable"][-1]["reason"] == "navigation_error"
+    assert any(w.startswith("navigation_error: the page did not load") and "net::ERR_" in w for w in run["warnings"])
+    assert runner.transport is None
+
+
+def test_a_cart_filled_before_a_broken_link_still_counts(journey, shop_server):
+    """A passing oracle counts whatever stopped the journey: the item was added and the cart visited before a link
+    led to a page that did not load."""
+    make, store = journey
+    runner = make()
+    started = runner.start(shop_server.url("shop/product.html?id=3"), "Metti nel carrello la Brezza",
+                           oracle="cart_not_empty", profile="desktop")
+    observation = started["observation"]
+    for pattern in (r"^Rifiuta tutti$", r"^Aggiungi al carrello$", r"^Vai al carrello$"):
+        result = act(runner, "CLICK", index_of(observation, pattern))
+        observation = result["observation"]
+        assert result["executed"], pattern
+    assert observation["page_type"] == "cart"
+    runner.tab.evaluate(BROKEN_LINK)
+    observation = act(runner, "WAIT")["observation"]
+    assert act(runner, "CLICK", index_of(observation, r"^Scheda rotta$"))["status"] == "blocked"
+    finished = runner.finish()
+    checks = finished["verification"]["checks"]
+    assert finished["verification"]["passed"] is True and checks["cart_source"] == "visited_cart_page"
+    assert "not_assessable" not in checks and checks["navigation_error"]["error"].startswith("net::ERR_")
+    assert finished["friction"]["FAI.JOURNEY_SUCCESS"] is True
+    run = store.load(started["run_id"])
+    assert run["status"] == "complete" and not run.get("not_assessable")
+
+
+# a cart whose "Procedi" shows a loading view, then renders the address step in place at the same URL
+SPA_CHECKOUT = """(() => { const b = Object.assign(document.createElement('button'), {type: 'button',
+    textContent: 'Procedi'});
+  b.onclick = () => { const main = document.getElementById('main');
+    main.innerHTML = '<p aria-busy="true">Caricamento…</p>';
+    setTimeout(() => { main.innerHTML = `<h1>Dati di spedizione</h1><form action="/pay" method="post">
+      <label for="n">Nome</label><input id="n" name="firstname" autocomplete="given-name">
+      <label for="s">Cognome</label><input id="s" name="lastname" autocomplete="family-name">
+      <label for="e">Email</label><input id="e" name="email" type="email" autocomplete="email">
+      <label for="a">Indirizzo</label><input id="a" name="address" autocomplete="street-address">
+      <label for="c">CAP</label><input id="c" name="zip" autocomplete="postal-code">
+      <button type="submit">Continua</button></form>`; }, 2500); };
+  document.getElementById('main').prepend(b); return true; })()"""
+
+
+def test_a_checkout_step_rendered_in_place_is_read_again_and_stops_the_run(journey, shop_server):
+    """The checkout step renders at the same URL after the step's settle (while the host decides): its new form
+    fields make the runner read the page type again, so the run stops at the boundary and its submit is never
+    offered nor executed."""
+    make, store = journey
+    runner = make()
+    since = len(shop_server.requests)
+    started = runner.start(shop_server.url("shop/cart.html"), "Vai alla cassa", oracle="cart_not_empty",
+                           profile="desktop")
+    runner.tab.evaluate(SPA_CHECKOUT)
+    observation = act(runner, "WAIT")["observation"]
+    seen = [observation]
+    result = act(runner, "CLICK", index_of(observation, r"^Procedi$"))
+    observation = result["observation"]
+    seen.append(observation)
+    assert result["executed"] and result["status"] == "running" and "Caricamento" in observation["text_excerpt"]
+    assert observation["page_type"] == "cart"  # the loading view
+    time.sleep(3.0)  # the host decides; the address step renders meanwhile at the same URL
+    result = act(runner, "WAIT")
+    observation = result["observation"]
+    seen.append(observation)
+    assert not result["executed"] and result["status"] == "stopped_at_checkout_boundary"
+    assert observation["page_type"] == "checkout" and observation["url"] == started["observation"]["url"]
+    assert not [o for o in seen if index_of(o, r"^Continua$")
+                or index_of(o, r"^(Nome|Cognome|Email|Indirizzo|CAP)$", "TYPE_TEXT")]
+    raw = runner.tab.observe()  # the executor refuses the submit too, whatever a policy chose
+    with pytest.raises(GuardRefused, match="checkout_boundary"):
+        runner._act(next(a for a in raw["actions"] if a["label"] == "Continua"), raw, None)
+    runner.finish()
+    assert not [r for r in shop_server.requests[since:] if r["method"] != "GET" or r["path"].startswith("/pay")]
+
+
+def test_controls_withheld_on_an_unread_page_leave_a_failed_goal_not_assessable(journey, shop_server, monkeypatch):
+    """audit.js fails (a harness failure): the guard withholds the add-to-cart button, the host gives up, and the
+    empty cart is not charged to the shop."""
+    make, store = journey
+    runner = make()
+    started = runner.start(shop_server.url("shop/product.html?id=3"), "Metti nel carrello la Brezza",
+                           oracle="cart_not_empty", profile="desktop")
+    observation = act(runner, "CLICK", index_of(started["observation"], r"^Rifiuta tutti$"))["observation"]
+    real, failing = PageCollector.audit, {"on": True}
+
+    def audit(collector, browser):
+        if failing["on"]:
+            raise AuditError("audit.js: TypeError: Array.prototype.map is not a function")
+        return real(collector, browser)
+
+    monkeypatch.setattr(PageCollector, "audit", audit)
+    observation = act(runner, "CLICK", index_of(observation, r"^41$"))["observation"]
+    assert observation["page_type"] is None and observation["guard_notes"][0] == UNREAD
+    assert index_of(observation, r"^Aggiungi al carrello$") is None
+    assert act(runner, "BLOCKED")["status"] == "blocked"
+    failing["on"] = False  # the oracle reads the empty cart with a working audit.js
+    finished = runner.finish()
+    checks = finished["verification"]["checks"]
+    assert finished["verification"]["passed"] is None and checks["not_assessable"] == "page_unreadable"
+    assert checks["oracle_passed"] is False and finished["friction"]["FAI.JOURNEY_SUCCESS"] is None
+    run = store.load(started["run_id"])
+    assert run["status"] == "partial"
+    assert any(w.startswith("page_unreadable: audit.js failed on ") and w.endswith("controls were withheld")
+               for w in run["warnings"])
+
+
+ECHO = """(() => { const q = document.getElementById('q'), out = document.createElement('p');
+  out.id = 'echo'; document.body.prepend(out);
+  q.addEventListener('input', () => { out.textContent = 'Cerchi: ' + q.value; }); return true; })()"""
+
+
+def test_the_harness_freshness_check_is_not_site_time(journey, shop_server, monkeypatch):
+    """Browser.act's freshness check (a snapshot.js read, hundreds of ms on a large throttled page) runs before the
+    clock: execution_ms and the first response time hold the input and the site's answer only."""
+    make, store = journey
+    runner, run_id, _ = counter_page(make, shop_server)
+    runner.tab.evaluate(ECHO)
+    observation = act(runner, "WAIT")["observation"]
+    fresh = Browser.fresh
+
+    def slow(self, page, action=None):
+        time.sleep(0.3)
+        return fresh(self, page, action)
+
+    monkeypatch.setattr(Browser, "fresh", slow)
+    result = act(runner, "TYPE_TEXT", index_of(observation, r"Cerca", "TYPE_TEXT"), "scarpe")
+    metrics = result["step_metrics"]
+    assert result["executed"] and metrics["mutations"] >= 1, metrics
+    assert metrics["execution_ms"] < 300 and metrics["first_response_ms"] < 300, metrics
+    assert runner.tab.evaluate("document.getElementById('echo').textContent") == "Cerchi: scarpe"
 
 
 def test_a_navigation_after_the_last_observation_is_logged_at_finish(journey, shop_server):
@@ -1194,10 +1409,34 @@ def test_a_navigation_after_the_last_observation_is_logged_at_finish(journey, sh
     steps = store.read_steps(started["run_id"])
     assert [s["operation"] for s in steps] == ["WAIT", "NAVIGATION"]
     assert steps[1]["url_before"] == observation["url"] and steps[1]["url_after"].endswith("/shop/index.html")
+    assert steps[1]["page_type"] == observation["page_type"] == "other"  # the type of the page it left
     assert finished["friction"]["FAI.UNEXPECTED_NAV"] == 1 and finished["steps"] == 1
     rows = {o["kpi_id"]: o for o in store.load(started["run_id"])["observations"]}
     assert rows["FAI.UNEXPECTED_NAV"]["evidence"]["between_steps"] == 1
     assert rows["FAI.BACKTRACK_RATE"]["evidence"] == {"visits": 2, "unique_pages": 2}
+
+
+def test_a_page_that_failed_to_load_after_the_last_observation_is_found_at_finish(journey, shop_server):
+    make, store = journey
+    runner = make()
+    started = runner.start(shop_server.url("shop/resi.html"), "Apri la scheda", oracle="pdp_reached",
+                           profile="desktop")
+    act(runner, "WAIT")
+    runner.tab.evaluate(f"location.href = '{BROKEN}', true")  # the page moves by itself; the host then finishes
+    deadline = time.monotonic() + 10
+    while not str(runner.tab.evaluate("location.href")).startswith("chrome-error://"):
+        assert time.monotonic() < deadline
+        time.sleep(0.1)
+    finished = runner.finish(status="done")
+    checks = finished["verification"]["checks"]
+    assert finished["verification"]["passed"] is None and checks["not_assessable"] == "navigation_error"
+    assert checks["navigation_error"] == {"url": BROKEN, "error": checks["navigation_error"]["error"]}
+    assert str(checks["navigation_error"]["error"]).startswith("net::ERR_")
+    steps = store.read_steps(started["run_id"])
+    assert steps[-1]["operation"] == "NAVIGATION" and steps[-1]["flags"]["navigation_error"]
+    run = store.load(started["run_id"])
+    assert run["status"] == "partial" and run["not_assessable"][-1]["reason"] == "navigation_error"
+    assert any(w.startswith("navigation_error: the page did not load (chrome-error://") for w in run["warnings"])
 
 
 SECOND_COUNTER = """(() => { const box = document.createElement('article'), button = document.createElement('button');

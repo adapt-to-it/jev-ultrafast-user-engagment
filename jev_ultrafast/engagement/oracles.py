@@ -15,11 +15,14 @@ query after that comes after the shop's own cart link. The page oracles audit th
 
 Each oracle returns {"passed": bool | None, "checks": {...}} with small, JSON-serialisable checks; passed is None only
 together with checks["not_assessable"] (the outcome cannot be read without a guess). A cart oracle also returns
-"page", the PageRecord of the cart page it read (evidence for run["pages"]). A cart that shows a positive subtotal (or
-total) and is not marked empty, but whose rows audit.js could not read (rows without quantity or remove controls), is
-"cart_items_unreadable"; a product row whose price could not be read, when no other row passes, is
-"cart_price_unreadable". An empty cart (marked empty, a zero subtotal, or rows that are all add-ons) and prices read
-above the limit are failures.
+"page", the PageRecord of the cart page it read (evidence for run["pages"]). A harness read failure is never the
+shop's: a cart page audit.js could not read at all is "cart_unreadable", and a final page it could not read is
+"final_page_unreadable" (for a cart oracle, when no visited cart page leads to the cart either). A page the browser
+did not load (chrome-error://) is not audited: it is no page of the shop (type "other", signal navigation_error). A
+cart that shows a positive subtotal (or total) and is not marked empty, but whose rows audit.js could not read (rows
+without quantity or remove controls), is "cart_items_unreadable"; a product row whose price could not be read, when no
+other row passes, is "cart_price_unreadable". An empty cart (marked empty, a zero subtotal, or rows that are all
+add-ons) and prices read above the limit are failures.
 
 A cart row shows one price, either the unit price or the line total (unit price times quantity). The cart's own
 arithmetic decides which (checks["price_reading"]): the row prices add up to the subtotal (line totals) or their
@@ -104,6 +107,13 @@ def parse_price(text) -> float | None:
         return None
 
 
+def _web(url: str | None) -> bool:
+    try:
+        return urlsplit(url or "").scheme in ("http", "https")
+    except ValueError:
+        return False
+
+
 def _same_site(url: str | None, start_url: str) -> bool:
     try:
         here, start = urlsplit(url or ""), urlsplit(start_url or "")
@@ -119,9 +129,13 @@ def _base(run: dict) -> str:
 
 
 def read_page(browser, collector) -> tuple[dict, dict]:
-    """(AuditPayload, Classification) of the browser's current page, read now."""
+    """(AuditPayload, Classification) of the browser's current page, read now. A page the browser did not load
+    (chrome-error://) is not audited: ({"url": ...}, type "other" with the signal "navigation_error")."""
+    href = browser.evaluate("location.href") or ""
+    if not _web(href):
+        return {"url": href}, {"type": "other", "confidence": 0.0, "signals": ["navigation_error"]}
     audit = collector.audit(browser) or {}
-    url = audit.get("url") or browser.evaluate("location.href") or ""
+    url = audit.get("url") or href
     return audit, classify(audit, url, locale=audit.get("lexicon_lang") or collector.locale)
 
 
@@ -234,16 +248,19 @@ def _amounts_shown(cart: dict) -> bool:
 
 
 def _cart(ctx: dict) -> tuple[dict, list[dict], dict | None]:
-    """(checks, product line items, PageRecord) of the cart page found for this journey. checks["unreadable"] is set
-    (and popped by the oracles) when the page shows a non-empty cart whose product rows could not be read."""
+    """(checks, product line items, PageRecord) of the cart page found for this journey. checks["unreadable"] (popped
+    by the oracles) names what could not be read: "final_page_unreadable" (no cart found, and the final page, which
+    may be the cart or link to it, unread), "cart_unreadable" (the cart page's audit failed) or "cart_items_unreadable"
+    (a non-empty cart whose product rows could not be read)."""
     browser, collector = ctx["browser"], ctx["collector"]
     try:
-        current = (browser.evaluate("location.href"), *read_page(browser, collector))
+        audit, classification = read_page(browser, collector)
+        current = (browser.evaluate("location.href"), audit, classification) if audit else None
     except (RuntimeError, ValueError, OSError):
         current = None  # the final page is unreadable: the visited pages still lead to the cart
     url, source = find_cart(ctx["run"], ctx["steps"], current)
     if url is None:
-        return {"cart_found": False}, [], None
+        return {"cart_found": False, **({"unreadable": "final_page_unreadable"} if current is None else {})}, [], None
     checks = {"cart_found": True, "cart_source": source}
     page_id = f"{collector.profile}-verify-cart"
     if source == "final_page":  # read where it is: the request that led here is never sent again
@@ -253,6 +270,10 @@ def _cart(ctx: dict) -> tuple[dict, list[dict], dict | None]:
         if dropped:
             checks["dropped_query_keys"] = dropped
         record = _load(collector, url, page_id)
+    if not record.get("audit"):  # audit.js failed on the cart page (its notes say why): a harness failure
+        checks.update(cart_url=url[:200], page_type=(record.get("classification") or {}).get("type"),
+                      unreadable="cart_unreadable")
+        return checks, [], record
     cart = (record.get("audit") or {}).get("cart") or {}
     rows = []  # every line, add-ons included: they count in the subtotal
     for item in cart.get("line_items") or []:
@@ -279,32 +300,34 @@ def _cart(ctx: dict) -> tuple[dict, list[dict], dict | None]:
                   subtotal=cart.get("subtotal_value"), total=cart.get("total_value"),
                   cart_empty=bool(cart.get("empty")))
     if not items and (untitled or (not rows and not cart.get("empty") and _amounts_shown(cart))):
-        checks["unreadable"] = True
+        checks["unreadable"] = "cart_items_unreadable"
     return checks, items, record
 
 
 def cart_contains_item_under_price(params: dict, ctx: dict) -> dict:
     checks, items, record = _cart(ctx)
-    unreadable = checks.pop("unreadable", False)
+    unreadable = checks.pop("unreadable", None)
     limit = float(params["max_price"])
     matching = [i for i in items if i["price"] is not None and i["price"] <= limit]
     checks.update(max_price=limit, matching=len(matching), item_list=items[:MAX_ITEMS])
     passed = bool(matching)
-    if not passed and any(min(i.get("price_candidates") or [math.inf]) <= limit for i in items):
+    if not passed and unreadable in ("cart_unreadable", "final_page_unreadable"):
+        passed, checks["not_assessable"] = None, unreadable  # a harness read failure, never the shop's
+    elif not passed and any(min(i.get("price_candidates") or [math.inf]) <= limit for i in items):
         passed, checks["not_assessable"] = None, "cart_price_ambiguous"  # only the unit reading would pass: no guess
     elif not passed and any(i["price"] is None for i in items):
         passed, checks["not_assessable"] = None, "cart_price_unreadable"  # a product whose price was not read
     elif not passed and unreadable:
-        passed, checks["not_assessable"] = None, "cart_items_unreadable"
+        passed, checks["not_assessable"] = None, unreadable
     return {"passed": passed, "checks": checks, "page": record}
 
 
 def cart_not_empty(params: dict, ctx: dict) -> dict:
     checks, items, record = _cart(ctx)
-    unreadable = checks.pop("unreadable", False)
+    unreadable = checks.pop("unreadable", None)
     checks.update(item_list=items[:MAX_ITEMS])
-    if not items and unreadable:  # the cart shows an amount to pay, but no product row could be read: no guess
-        return {"passed": None, "checks": {**checks, "not_assessable": "cart_items_unreadable"}, "page": record}
+    if not items and unreadable:  # nothing read, or an amount to pay without a readable product row: no guess
+        return {"passed": None, "checks": {**checks, "not_assessable": unreadable}, "page": record}
     return {"passed": bool(items), "checks": checks, "page": record}
 
 
@@ -313,8 +336,15 @@ def _words(text: str) -> set[str]:
 
 
 def _final_page(ctx: dict) -> tuple[dict, dict, dict]:
-    """(audit, classification, checks) of the journey's final page; checks hold its URL and whether it is the shop's."""
-    audit, classification = read_page(ctx["browser"], ctx["collector"])
+    """(audit, classification, checks) of the journey's final page; checks hold its URL and whether it is the shop's,
+    or not_assessable "final_page_unreadable" when audit.js could not read it (a harness failure: no guess)."""
+    try:
+        audit, classification = read_page(ctx["browser"], ctx["collector"])
+        error = None if audit else "audit.js returned nothing"
+    except (RuntimeError, ValueError, OSError) as exc:
+        audit, classification, error = {}, {}, f"{type(exc).__name__}: {str(exc)[:200]}"
+    if error:
+        return {}, {}, {"not_assessable": "final_page_unreadable", "read_error": error}
     url = audit.get("url") or ctx["browser"].evaluate("location.href") or ""
     return audit, classification, {"url": url[:200], "page_type": classification.get("type"),
                                    "same_site": _same_site(url, _base(ctx["run"]))}
@@ -322,6 +352,8 @@ def _final_page(ctx: dict) -> tuple[dict, dict, dict]:
 
 def pdp_reached(params: dict, ctx: dict) -> dict:
     audit, classification, checks = _final_page(ctx)
+    if checks.get("not_assessable"):
+        return {"passed": None, "checks": checks}
     pdp = audit.get("pdp") or {}
     title = pdp.get("title") or " ".join((audit.get("doc") or {}).get("h1s") or []) or audit.get("title") or ""
     checks["title"] = title[:80]
@@ -339,6 +371,8 @@ def pdp_reached(params: dict, ctx: dict) -> dict:
 
 def search_results_shown(params: dict, ctx: dict) -> dict:
     audit, classification, checks = _final_page(ctx)
+    if checks.get("not_assessable"):
+        return {"passed": None, "checks": checks}
     products = audit.get("products") or {}
     cards = products.get("cards") or []
     checks["results"] = products.get("cards_count") or 0

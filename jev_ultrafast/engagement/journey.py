@@ -7,14 +7,17 @@ Agent a guarded view of one tab in an isolated browser context with the device p
   link away, actions on another site) and text fields the guard refuses (password, payment, personal data,
   newsletter: only search, quantity and coupon fields remain) are removed before any policy sees the page, and the
   executor checks the guard again right before input, and refuses any input once the latest observation is a
-  checkout page, an anti-bot page or another site. A page whose audit fails (its type unknown) is handled as a
-  checkout page until a later observation reads it: only links away, scrolling and waiting are offered and executed
-  there. No policy is asked on a page where the run stops: when the Agent observes again right before deciding and
-  lands on one, the run stops there without a decision (no model request carries it). The host only picks an
-  offered index and operation (HostPolicy): never a selector, never code, and only on the observation it was shown.
-  Every observation carries an observation_id and act() names the one its choice was made on: a choice on any other
-  (a repeated or parallel tool call) executes nothing, and an index must still name the same element of the same
-  document. Text that looks like personal or payment data is never typed.
+  checkout page, an anti-bot page or another site. The page type is read again (audit.js) whenever what can make a
+  page a checkout changes: a new URL, a new document, another set of form fields (a checkout step a script renders
+  in place, after a loading view), and after every click or select. A page whose audit fails (its type unknown) is
+  handled as a checkout page until a later observation reads it: only links away, scrolling and waiting are offered
+  and executed there; controls the guard would otherwise allow are withheld (warning page_unreadable). No policy is
+  asked on a page where the run stops: when the Agent observes again right before deciding and lands on one, the
+  run stops there without a decision (no model request carries it). The host only picks an offered index and
+  operation (HostPolicy): never a selector, never code, and only on the observation it was shown. Every observation
+  carries an observation_id and act() names the one its choice was made on: a choice on any other (a repeated or
+  parallel tool call) executes nothing, and an index must still name the same element of the same document. Text
+  that looks like personal or payment data is never typed.
 - A browser mutation is never retried. After each action the runner waits until the page settles (no main-frame
   load, no request in flight, 0.5 s without page-side activity; at least 1 s when nothing visible answered, the
   dead-click window: a request holds the settle but is no answer), reads what changed since the action (vitals.js
@@ -30,23 +33,29 @@ Agent a guarded view of one tab in an isolated browser context with the device p
 - The run stops at the first checkout page (stopped_at_checkout_boundary), on DONE or BLOCKED, on the step budget
   and on the shop's own anti-bot page (blocked; no evasion, the outcome is not assessable). A navigation to another
   site ends the journey (blocked, warning left_shop), unless the landing page is a checkout (boundary), whatever
-  that site shows; so does a page that failed to load (chrome-error://, warning navigation_error). The runner never
-  navigates by itself. A tab the page opens is flagged and closed. Unexpected navigation: a new tab, or a new
-  document or another site after a step that was not a chosen CLICK or SELECT, or a page that navigated by itself
-  between steps (while the policy decided): that one is logged as a NAVIGATION record, which executed nothing.
+  that site shows; so does a page that failed to load, the start page included (chrome-error://, warning
+  navigation_error with the browser's net error). The runner never navigates by itself. A tab the page opens is
+  flagged and closed. Unexpected navigation: a new tab, or a new document or another site after a step that was not a
+  chosen CLICK or SELECT, or a page that navigated by itself between steps (while the policy decided): that one is
+  logged as a NAVIGATION record, which executed nothing.
 - The Agent's no-progress stop (three actions in a row that changed nothing) ends a typesafe run (blocked: the only
   brake on a model looping on a dead control). The host owns DONE and BLOCKED: it is told in the next observation's
   guard notes and chooses again, within the step budget, so repeated dead clicks stay countable (FAI.RAGE_EVENTS).
 - finish() verifies the outcome with an independent oracle (oracles.py) on the actual page state, never on DONE,
   stores the friction observations (friction.py) in the run and always releases the context, the transport and a
   Chromium it launched. A host ends a running journey as "done" or "blocked" only; the other statuses are the
-  runner's. A journey that ended in an error (harness, credentials, model provider) without a passing oracle is not
-  assessable: its failure is not the site's; nor is an outcome the oracle cannot read without a guess.
+  runner's. Without a passing oracle a journey is not assessable (its failure is not the site's) when it ended in an
+  error (harness, credentials, model provider: journey_error), on a page the browser did not load (navigation_error:
+  DNS, TLS, a proxy or a dead host end on the same page and the run cannot tell which; the net error is recorded,
+  repeats are the remedy; a start page that never loaded leaves the run failed), or after the guard withheld
+  controls of a page audit.js could not read (page_unreadable); nor is an outcome the oracle cannot read without a
+  guess.
 
-Time attributed to the site is page-side (vitals.js clock): execution plus settle per step. Decision latency (host or
-model, from the first delivery of an observation to the choice) and text generation are recorded apart and never
-counted. Page records: the landing page and the cart page an oracle read are stored in run["pages"] (stage "extra")
-as evidence; journey steps are not page audits.
+Time attributed to the site is page-side (vitals.js clock): execution plus settle per step. The execution clock starts
+after the harness's freshness check (a snapshot.js read), right before the input is dispatched. Decision latency
+(host or model, from the first delivery of an observation to the choice) and text generation are recorded apart and
+never counted. Page records: the landing page and the cart page an oracle read are stored in run["pages"] (stage
+"extra") as evidence; journey steps are not page audits.
 """
 
 import os
@@ -57,7 +66,7 @@ from urllib.parse import urlsplit
 
 from .. import agent as agent_loop
 from ..agent import Agent
-from ..browser import StalePage, session_gone
+from ..browser import StalePage, browser_operation, session_gone
 from ..model import action_space
 from ..questions import MAX_STEPS
 from . import friction, oracles
@@ -103,6 +112,7 @@ UNREAD = ("page type unknown (the page audit failed): handled as a checkout page
           "waiting are offered")
 DRAINED = ("Page.", "Network.", "Runtime.", "Log.")  # Target.* events stay for the collector's frame watcher
 LONG_LIVED = ("EventSource", "WebSocket")
+FIELDS = ("fill", "select")  # what can make a page a checkout without a URL change: its form fields
 
 
 class GuardRefused(Exception):
@@ -129,6 +139,13 @@ def _document(page: dict):
     key = page.get("page_key")
     origin = key[0] if isinstance(key, list) and key else None
     return origin if isinstance(origin, (int, float)) and not isinstance(origin, bool) else None
+
+
+def _read_key(page: dict) -> tuple:
+    """What a page type read holds for: the URL, the document and the set of observed form fields."""
+    fields = frozenset((a.get("kind"), " ".join(str(a.get("label") or "").split()))
+                       for a in page.get("actions") or [] if a.get("kind") in FIELDS)
+    return page.get("url"), _document(page), fields
 
 
 def personal_text(text: str | None) -> str | None:
@@ -323,14 +340,19 @@ class JourneyRunner:
         self._raw: dict[str, dict] = {}
         self._page_type: str | None = None
         self._overlay = {"present": False, "coverage": 0.0}
-        self._audited: str | None = None
+        self._audited: tuple | None = None  # the _read_key() of the latest page type read
         self._unread = False  # the latest observation's audit failed: its page is handled as a checkout page
+        self._withheld = False  # controls the guard would otherwise allow were withheld on an unread page
         self._notes: list[str] = []
         self._boundary = False
         self._challenge = False  # an anti-bot page: no evasion, the journey is not assessable
         self._left: str | None = None  # the URL of another site the tab is on: the journey ends there
         self._broken: str | None = None  # a page that did not load (chrome-error://): the journey ends there
-        self._seen: dict | None = None  # {url, document} the journey last saw: a change with no step is the page's
+        self._start_failed = False  # the start page itself did not load
+        self._documents: dict[str, str] = {}  # main-frame document requests in flight: requestId -> URL
+        self._net_error: dict | None = None  # {url, error} of the latest main-frame document request that failed
+        self._seen: dict | None = None  # {url, document, type} the journey last saw: a change with no step is the
+        #                                 page's own
         self._no_progress = False
         self._executed = 0
         self._visited: set[str] = set()
@@ -389,6 +411,8 @@ class JourneyRunner:
                 self._close()
                 self._save(run_status="failed")
                 raise
+            if self._start_failed and self._broken is None:  # whatever the tab shows now, the start did not load
+                self._broken = self.agent.state["page"].get("url") or url
             self._stop_checks()
             self._save()
             self._observation_id = 1
@@ -413,12 +437,14 @@ class JourneyRunner:
         self.tab = self.collector.open(url)
         landing = self.collector.collect(self.tab, stage="extra", page_id=f"{profile}-journey-start",
                                          requested_url=url)
+        failed = next((n for n in landing.get("notes") or [] if n.startswith("navigation_error")), None)
         landing.setdefault("notes", []).append("journey start page")
-        arrived = landing.get("final_url") if str(landing.get("final_url") or "").startswith("http") else url
+        arrived = landing.get("final_url") if _web(landing.get("final_url")) else url
         self.guard = CheckoutGuard(arrived, lexicon_for(s.locale))  # the shop is where the start URL lands
-        if landing.get("audit"):  # the first observation reuses this read of the page
-            self._audited, self._page_type = landing.get("final_url"), (landing.get("classification") or {}).get("type")
-            self._overlay = self._overlays(landing["audit"])
+        if failed or not _web(landing.get("final_url")):  # the start page did not load: nothing of the shop to measure
+            self._start_failed = True
+            error = failed.partition(":")[2].strip() if failed else ""
+            self._net_error = {"url": url, "error": error if error.startswith("net::") else None}
         try:
             product = self.transport.call("Browser.getVersion").get("product")
         except (RuntimeError, OSError):
@@ -559,26 +585,41 @@ class JourneyRunner:
             finally:
                 self._close()
             checks = verification["checks"]
-            if self.status == "error" and verification["passed"] is not True and not self._challenge:
-                # a harness, credential or model failure stopped the journey: not the site's failure (the oracle's
-                # reading stays as evidence); a passing oracle still counts as success
+            broken = self._broken is not None or self._start_failed
+            if broken:  # evidence: the document the browser could not load and its net error (not interpreted)
+                checks["navigation_error"] = dict(self._net_error or {"url": None, "error": None})
+            reason = None
+            if verification["passed"] is not True and not self._challenge:
+                # not the site's failure (the oracle's reading stays as evidence); a passing oracle still counts
+                if self.status == "error":  # a harness, credential or model failure stopped the journey
+                    reason = "journey_error"
+                elif broken:  # a page the browser did not load: the cause cannot be verified from the run
+                    reason = "navigation_error"
+                elif self._withheld and verification["passed"] is False:  # the guard withheld controls (unread page)
+                    reason = "page_unreadable"
+            if reason:
                 if verification["passed"] is False:
                     checks["oracle_passed"] = False
                 elif checks.get("not_assessable"):
                     checks["oracle_not_assessable"] = checks["not_assessable"]
-                verification["passed"], checks["not_assessable"] = None, "journey_error"
+                verification["passed"], checks["not_assessable"] = None, reason
             passed = verification["passed"]
             unverified = checks.get("not_assessable") or "no_verification"
             observations = friction.metrics(steps, optimal_steps=self.journey.get("optimal_steps"),
                                             optimal_pages=self.journey.get("optimal_pages"), success=passed,
                                             profile=self.journey["profile"], unverified=unverified)
             self.journey.update(verification=verification, finished_at=iso_now())
-            run_status = "complete" if passed is not None and self.status != "error" else "partial"
+            if self._start_failed and self._executed == 0 and passed is not True:
+                run_status = "failed"  # the start page never loaded: nothing of the shop was measured
+            else:
+                run_status = "complete" if passed is not None and self.status != "error" else "partial"
             if page:
                 page.setdefault("notes", []).append(f"journey verification: {self.journey['oracle']}")
+            unassessed = ("bot_challenge" if self._challenge
+                          else "navigation_error" if reason == "navigation_error" else None)
             self._save(run_status=run_status, observations=observations, page=page, finished=True,
                        not_assessable={"stage": None, "profile": self.journey["profile"], "kpi_id": None,
-                                       "reason": "bot_challenge"} if self._challenge else None)
+                                       "reason": unassessed} if unassessed else None)
             self._result = {
                 "run_id": self.run_id, "status": self.status, "verification": verification,
                 "friction": {o["kpi_id"]: o["value"] if o["assessed"] else None for o in observations},
@@ -699,7 +740,7 @@ class JourneyRunner:
             self._warn(f"left_shop: {self._left[:200]}")
         if self.status == "running" and self._broken is not None:
             self.status = "blocked"
-            self._warn(f"navigation_error: the page did not load ({self._broken[:200]})")
+            self._warn(f"navigation_error: the page did not load ({self._failure()})")
         if self.status == "running" and self._executed >= self.journey["max_steps"]:
             self.status = "budget_exhausted"
 
@@ -772,15 +813,19 @@ class JourneyRunner:
         if not ok:
             raise GuardRefused(reason)
         self._drain()  # what happened during the decision is not this action's
+        # Browser.act's freshness check (a snapshot.js read for typing and scrolling), run before the clock starts:
+        # the harness's own read is not site time
+        if not self.tab.fresh(page, action):
+            raise StalePage("Page changed since this decision. Observe again.")
         pending = {"action": action, "page": page, "text": text, "text_len": len(text) if text is not None else None,
                    "page_type": self._page_type, "overlay": dict(self._overlay), "mark": self.collector.mark(self.tab)}
         started = time.perf_counter()
 
-        def elapsed() -> float:  # a WAIT is the harness's own pause (Browser.act sleeps), not site time
+        def elapsed() -> float:  # a WAIT is the harness's own pause (_send sleeps), not site time
             return 0.0 if action.get("kind") == "wait" else round((time.perf_counter() - started) * 1000, 1)
 
         try:
-            result = self.tab.act(action, page, text=text)
+            result = self._send(action, text)
         except StalePage:
             raise  # rejected before any input
         except (RuntimeError, OSError) as exc:  # the input may have happened: never retried, logged as uncertain
@@ -790,6 +835,15 @@ class JourneyRunner:
             raise
         pending.update(execution_ms=elapsed(), finished=time.monotonic())
         self._pending = pending
+        return result
+
+    def _send(self, action: dict, text: str | None):
+        """Browser.act after its freshness check (_act runs it before the clock): the input itself, sent once."""
+        if action.get("kind") == "wait":
+            time.sleep(0.1)
+        result = browser_operation({"operation": "act", "session": self.tab.session, "action": action, "text": text},
+                                   self.transport)
+        self.tab.after_input = action if action.get("kind") != "wait" else None  # Browser.observe waits on it
         return result
 
     def _guarded_type(self) -> str | None:
@@ -814,12 +868,20 @@ class JourneyRunner:
             kept.append(action)
         url = raw.get("url") or ""
         web = _web(url)
+        if self._unread and web:
+            # what the guard withholds only because the page is unread: a failed goal is then not the site's
+            ids = {a.get("id") for a in kept}
+            if any(a.get("id") not in ids for a in self.guard.filter_actions(raw, None)[0]):
+                self._withheld = True
+                self._warn(f"page_unreadable: audit.js failed on {url[:200]}; controls were withheld")
         self._left = url if web and not self.guard.same_site(url) else None
         self._broken = None if web else url  # chrome-error:// and the like: the page did not load, nothing to leave
+        if self._broken is not None:
+            self._watch(self.transport.events(self.tab.session, "Network."))  # the failed request, if not seen yet
         if self._left is not None:
             notes.insert(0, f"left the shop for {url[:120]}: the journey stopped here")
         elif self._broken is not None:
-            notes.insert(0, f"the page did not load ({url[:120]}): the journey stopped here")
+            notes.insert(0, f"the page did not load ({self._failure()}): the journey stopped here")
         elif self._unread:
             notes.insert(0, UNREAD)
         self._notes = notes
@@ -832,10 +894,17 @@ class JourneyRunner:
         return {**raw, "actions": kept}
 
     def _read_page(self, raw: dict) -> None:
-        """Page type and overlays of the observed page: audit.js once per URL, again after a click or select, and at
-        every observation while it fails (the page is unread meanwhile: the guard handles it as a checkout page)."""
+        """Page type and overlays of the observed page: audit.js again whenever the URL, the document or the set of
+        form fields changed (a checkout step rendered in place), after a click or select, and at every observation
+        while it fails (the page is unread meanwhile: the guard handles it as a checkout page). A page the browser
+        did not load (chrome-error://) is not audited: Chrome's error page is not the shop's ("other")."""
+        key = _read_key(raw)
+        if key == self._audited:
+            return
         url = raw.get("url")
-        if url == self._audited:
+        if not _web(url):
+            self._audited, self._unread, self._page_type = key, False, "other"
+            self._overlay = {"present": False, "coverage": 0.0}
             return
         try:
             audit = self.collector.audit(self.tab) or {}
@@ -847,7 +916,7 @@ class JourneyRunner:
             self._audited, self._unread, self._page_type = None, True, None
             self._overlay = {"present": False, "coverage": 0.0}
             return
-        self._audited, self._unread = url, False
+        self._audited, self._unread = key, False
         self._page_type = classify(audit, url or "", locale=audit.get("lexicon_lang") or self.settings.locale)["type"]
         self._overlay = self._overlays(audit)
 
@@ -860,7 +929,33 @@ class JourneyRunner:
     # ---------------------------------------------------------------- measuring one step
     def _drain(self) -> None:
         for prefix in DRAINED:
-            self.transport.events(self.tab.session, prefix)
+            events = self.transport.events(self.tab.session, prefix)
+            if prefix == "Network.":
+                self._watch(events)
+
+    def _watch(self, events: list[dict]) -> None:
+        """Follow the main frame's document requests: the URL and net error (errorText) of the latest one that
+        failed, not merely canceled (a navigation_error's evidence; recorded, never interpreted)."""
+        for event in events:
+            p, method, rid = event["params"], event["method"], event["params"].get("requestId")
+            if method == "Network.requestWillBeSent":
+                url = (p.get("request") or {}).get("url")
+                if p.get("type") == "Document" and p.get("frameId") == self.tab.target and _web(url):
+                    if rid not in self._documents:
+                        self._net_error = None  # a new document request: an earlier failure is not this page's
+                    self._documents[rid] = url  # a redirect hop keeps the request id
+            elif method == "Network.loadingFinished":
+                self._documents.pop(rid, None)
+            elif method == "Network.loadingFailed" and rid in self._documents:
+                url = self._documents.pop(rid)
+                if not p.get("canceled"):
+                    self._net_error = {"url": url, "error": p.get("errorText") or None}
+
+    def _failure(self) -> str:
+        """The page that did not load, for notes and warnings: the error page, the requested URL and the net error."""
+        error = self._net_error or {}
+        detail = f"; {error.get('url') or 'unknown URL'}: {error.get('error') or 'no net error recorded'}"
+        return f"{str(self._broken or '')[:120]}{detail[:200]}"
 
     def _read(self, expression: str, timeout: float = 5.0):
         try:
@@ -893,7 +988,9 @@ class JourneyRunner:
                     loading, responded = now, True
                 elif event["method"] == "Page.frameStoppedLoading":
                     loading = None
-            for event in self.transport.events(session, "Network."):
+            network = self.transport.events(session, "Network.")
+            self._watch(network)
+            for event in network:
                 p, method = event["params"], event["method"]
                 rid = p.get("requestId")
                 if method == "Network.requestWillBeSent":
@@ -973,7 +1070,9 @@ class JourneyRunner:
             step["settle_ms"] = round(min(max(0.0, end - done), settle["waited_ms"]), 1) if end is not None else 0.0
             origin = (settle.get("activity") or {}).get("time_origin")
             flags["new_document"] = isinstance(origin, (int, float)) and origin > p["mark"] - 1
-            self._seen = {"url": url_after, "document": origin if isinstance(origin, (int, float)) else None}
+            same = url_after == url_before and not flags["new_document"]  # still the page the action was taken on
+            self._seen = {"url": url_after, "document": origin if isinstance(origin, (int, float)) else None,
+                          "type": p["page_type"] if same else None}
             # what the action can change (document, URL, scroll, viewport, field values), unlike visible text that a
             # countdown or a carousel changes by itself: the dead-click and rage evidence
             key = self._read(PAGE_KEY_JS)
@@ -989,6 +1088,9 @@ class JourneyRunner:
             flags["external_nav"] = _web(url_after) and not self.guard.same_site(url_after)
             if not _web(url_after):
                 flags["navigation_error"] = True  # the page did not load (chrome-error://): not another site
+                error = self._net_error or {}
+                step["guard_notes"].append(f"navigation_error: {error.get('error') or 'no net error recorded'} "
+                                           f"({str(error.get('url') or 'unknown URL')[:200]})")
         except (RuntimeError, OSError, ValueError) as exc:
             if isinstance(exc, RuntimeError) and session_gone(exc):
                 flags["session_gone"] = True
@@ -997,7 +1099,7 @@ class JourneyRunner:
         flags["unexpected_nav"] = friction.unexpected_nav({**step, "flags": flags})
         flags["dead_click"] = friction.is_dead_click({**step, "flags": flags})
         flags["rage"] = friction.rage_flags([*self.steps, {**step, "flags": flags}])[-1]
-        before, after = friction.normalize_url(url_before), friction.normalize_url(step["url_after"])
+        before, after = friction.page_url(url_before), friction.page_url(step["url_after"])
         flags["backtrack"] = bool(after and after != before and after in self._visited)
         self._visited.update(u for u in (before, after) if u)
         step["flags"] = flags
@@ -1013,8 +1115,9 @@ class JourneyRunner:
         """Log a navigation the journey did not make: a new document (or another site) since what the journey last
         saw, with no step of its own in between (a redirect, a refresh or a script while the policy decided). It
         executed nothing (operation NAVIGATION); right after a step whose settle timed out it may be that step's late
-        navigation (flags.follows_timeout: a visit, not an unexpected navigation)."""
-        seen, self._seen = self._seen, {"url": url, "document": document}
+        navigation (flags.follows_timeout: a visit, not an unexpected navigation). page_type is the current page's;
+        the record carries the type of the page it left (url_before), None when that page was never read."""
+        seen, self._seen = self._seen, {"url": url, "document": document, "type": page_type}
         if not seen or not url:
             return
         known = isinstance(document, (int, float)) and isinstance(seen["document"], (int, float))
@@ -1022,7 +1125,7 @@ class JourneyRunner:
         external = _web(url) and not self.guard.same_site(url)
         if not new_document and not (external and self.guard.same_site(seen["url"] or "")):
             return
-        before, after = friction.normalize_url(seen["url"]), friction.normalize_url(url)
+        before, after = friction.page_url(seen["url"]), friction.page_url(url)
         flags = {"new_document": new_document, "external_nav": external,
                  "backtrack": bool(after and after != before and after in self._visited)}
         if not _web(url):
@@ -1036,7 +1139,7 @@ class JourneyRunner:
         self._log({"step": len(self.steps) + 1, "t_wall": iso_now(), "operation": friction.NAVIGATION,
                    "target": None, "label": None, "kind": None, "role": None, "node": None, "text_len": None,
                    "decision_latency_ms": None, "policy": self.policy, "url_before": seen["url"], "url_after": url,
-                   "page_changed": True, "page_type": page_type, "since": {}, "execution_ms": None,
+                   "page_changed": True, "page_type": seen.get("type"), "since": {}, "execution_ms": None,
                    "settle_ms": None, "settle_reason": None, "overlay": dict(self._overlay), "flags": flags,
                    "status": self.status, "guard_notes": [note]})
 
@@ -1047,6 +1150,10 @@ class JourneyRunner:
         try:
             value = self._read(FINISH_JS)
             if isinstance(value, list) and len(value) == 2 and isinstance(value[1], str):
+                if not _web(value[1]) and self._broken is None:  # the page failed to load since the observation
+                    self._broken = value[1]
+                    self._watch(self.transport.events(self.tab.session, "Network."))
+                    self._warn(f"navigation_error: the page did not load ({self._failure()})")
                 self._moved(value[1], value[0] if isinstance(value[0], (int, float)) else None, None)
         except Exception:  # best effort: the oracle reads the page as it is either way
             pass
