@@ -21,7 +21,9 @@ allowed-tools:
 # Shop readiness audit
 
 Arguments: `$ARGUMENTS`. The first argument is the shop URL (its home page). Everything after it, if anything, is the
-shopping goal of an optional journey, in natural language. Without a URL, ask the user for one and stop.
+shopping goal of an optional journey, in natural language. Without a URL, do not start anything: tell the user to run
+`/jev-engagement:shop-readiness <url> [goal]` again with the shop's URL (this skill's tool permissions end with this
+turn, so an audit started from a later reply would ask for permission at every step).
 
 The tools belong to the `engagement` MCP server of this plugin. Run the steps in order; never skip the polling.
 
@@ -39,6 +41,11 @@ The tools belong to the `engagement` MCP server of this plugin. Run the steps in
 
 ## 1. Audit
 
+First tell the user in one line that the three judges of step 3 run as background subagents and may ask permission
+for `get_judgment_tasks` (the tool that reads their tasks): they can approve it for the session, or allow
+`mcp__plugin_jev-engagement_engagement__get_judgment_tasks` in their Claude Code permission settings. Never change the
+user's settings yourself.
+
 Call `audit_shop` with the URL (defaults: both profiles, every stage, consent `auto`). Tell the user it takes about
 2-4 minutes. Then call `wait_run(run_id)` again and again while `timed_out` is true (a run whose server process died
 comes back `failed`, so this loop ends). When `status` is:
@@ -51,47 +58,65 @@ comes back `failed`, so this loop ends). When `status` is:
 
 Pick the oracle that verifies the goal independently of the agent's DONE:
 
-| Goal | oracle | oracle_params |
-|---|---|---|
-| add an item under a price to the cart | `cart_contains_item_under_price` | `{"max_price": N}` |
-| add something to the cart | `cart_not_empty` | none |
-| open a product page (optionally matching words or under a price) | `pdp_reached` | `{"query"?, "max_price"?}` |
-| search and see results | `search_results_shown` | `{"query"?}` |
+| Goal | oracle | oracle_params | What the oracle checks |
+|---|---|---|---|
+| add an item under a price to the cart | `cart_contains_item_under_price` | `{"max_price": N}` | a cart line ≤ N |
+| add something to the cart | `cart_not_empty` | none | a product in the cart |
+| open a product page (optionally matching words or under a price) | `pdp_reached` | `{"query"?, "max_price"?}` | (1) |
+| search and see results | `search_results_shown` | `{"query"?}` | (2) |
+
+(1) The final page is a product page of the shop; with `query`, a query word is in its title; with `max_price`, its
+price is at most that. (2) The final page is a result listing of the shop with at least one result; with `query`, a
+query word is in the search, the page title or the result titles. One query word is enough, so pass only the
+distinctive product words (`scarpe corsa`, not `un paio di scarpe`).
+
+An oracle checks only what its params state: the cart oracles check a price or a non-empty cart, never product words
+(a gift card under 50 € passes "scarpe da corsa sotto i 50 euro"); `pdp_reached` checks the page type plus the query
+words and the price. For a cart goal that names a product, keep the product words: step 4 compares them with the cart.
+If no oracle covers the goal (for example "trova la politica di resi" or "iscriviti alla newsletter"), tell the user
+which goals can be verified (the table above), do not start the journey, and go on with step 3.
 
 Call `run_journey(url, goal, oracle, oracle_params, profile="mobile")`, then drive it step by step with
 `journey_act` following the `journey-driver` skill of this plugin (load it now if it is not loaded): only offered
 indices and operations, always the `observation_id` of the latest observation, one call at a time. When `status` is no
 longer `running`, call `journey_finish(run_id)` (with `status` `done` or `blocked` only if you end a journey that is
-still running). Keep the journey `run_id` for step 4.
+still running). Keep the journey `run_id` for step 4; the steps below take the **audit** `run_id`.
 
 ## 3. Judgments with three Sonnet judges
 
-1. List the pages: call `get_judgment_tasks(run_id, brief=true)` (the first call creates the tasks), then again with
-   `cursor` set to each `next_cursor` until it is null. Note each page's `cursor` and `next_cursor`. A page holds at
-   most 15 tasks, fewer when its snippets are long; brief and full reads page identically, so these are exactly the
-   pages the judges will read. With `total` 0 go straight to step 3.5.
+1. List the pages: call `get_judgment_tasks(<audit run_id>, brief=true)` (the first call creates the tasks), then
+   again with `cursor` set to each `next_cursor` until it is null. Note each page's `cursor` and `next_cursor`. A page
+   holds at most 15 tasks, fewer when its snippets are long; brief and full reads page identically, so these are
+   exactly the pages the judges will read. With `total` 0 go straight to step 3.5.
 2. For each page, launch **three** `jev-engagement:engagement-judge` subagents in parallel with `model: sonnet`, one
-   per judge id `j1`, `j2`, `j3`. Each prompt contains only: the `run_id`, the page's `cursor`, `limit: 15` and its
-   `judge_id`. Never show a judge another judge's answer. Each judge returns
+   per judge id `j1`, `j2`, `j3`. Each prompt contains only: the audit `run_id`, the page's `cursor`, `limit: 15`
+   and its `judge_id`. Never show a judge another judge's answer. Each judge returns
    `{"judge_id", "model", "cursor", "next_cursor", "verdicts": [...]}`. Its `cursor` and `next_cursor` must equal the
    page's; if they differ, the pages moved: list them again from cursor 0 and launch judges for the pages that differ.
-3. For each judge call `submit_judgments(run_id, judge_id, model, verdicts)` with the model id the judge reported
-   (if it reported none, use the Sonnet model id you launched it with). If some verdicts are rejected (quote not
-   verbatim, unknown label, missing evidence), ask the same judge once to fix only those tasks and submit again. If
-   a judge cannot read the tasks with its tool, give it the page from `get_judgment_tasks(run_id, cursor)` verbatim
-   in its prompt instead.
-4. Check that every task got its verdicts: list the brief pages again. If `open_tasks` is above 0, then for every page
-   whose `missing_samples` is above 0 launch that many more judges on that page's cursor with new judge ids (`j4`,
-   `j5`, ...) and submit their verdicts. Verdicts for tasks that already have enough come back rejected as
-   `samples_complete`: that is expected.
-5. Call `finalize_judgments(run_id)`. `uncertain` tasks (the judges disagreed) are expected: they stay not assessed.
-   `pending_total` above 0 is not expected: those tasks still lack verdicts, so run step 3.4 once more and finalize
-   again; if some stay pending, tell the user how many judged checks remained unjudged.
+   The judges may run in the background and report one by one: wait until every judge you launched has reported
+   before going on.
+3. For each judge call `submit_judgments(<audit run_id>, judge_id, model, verdicts)` with the model id the judge
+   reported; if it reported none, or a placeholder in angle brackets, pass `sonnet` (the alias you launched it with):
+   never invent a model id. If some verdicts are rejected (quote not verbatim, unknown label, missing evidence), ask
+   the same judge once to fix only those tasks and submit again. A judge that returns without verdicts because it
+   could not read its tasks (its reply carries `error`: the permission for `get_judgment_tasks` was denied, or the
+   tool was missing) submits nothing; launch it again with the same judge id and the page from
+   `get_judgment_tasks(<audit run_id>, cursor, limit=15)` pasted verbatim in its prompt: it then judges that JSON
+   without calling the tool.
+4. Wait until every judge launched so far has reported and its verdicts were submitted, then check that every task
+   got its verdicts: list the brief pages again. If `open_tasks` is above 0, then for every page whose
+   `missing_samples` is above 0 launch that many more judges on that page's cursor with new judge ids (`j4`, `j5`,
+   ...), wait for all of them and submit their verdicts. Verdicts for tasks that already have enough come back
+   rejected as `samples_complete`: that is expected.
+5. When no judge is still running, call `finalize_judgments(<audit run_id>)`. `uncertain` tasks (the judges
+   disagreed) are expected: they stay not assessed. `pending_total` above 0 is not expected: those tasks still lack
+   verdicts, so run step 3.4 once more and finalize again; if some stay pending, tell the user how many judged checks
+   remained unjudged.
 
 ## 4. Scores and report
 
-Call `score_run(run_id, journey_run_ids=[the journey run_id])` (an empty list without a journey). Present the result
-in Italian:
+Call `score_run(<audit run_id>, journey_run_ids=[the journey run_id])` (an empty list without a journey), then
+`get_report(<audit run_id>)` for the Italian not-assessable reasons. Present the result in Italian:
 
 ```
 Engagement readiness di <host> (stima da sessioni sintetiche, non engagement misurato)
@@ -100,11 +125,19 @@ ERS <score> · Confidenza <grade> (copertura <coverage %>) · quota LLM <llm_sha
 Sotto-indici: Prestazioni …, Attrito previsto …, Segnali di fiducia …, Trasparenza di prezzi e costi …,
 Chiarezza e carico cognitivo …, Leve di persuasione genuine …
 Segnali di rischio dark pattern: <dpr.text>; principali segnali di rischio: <kpi_id: description, confidence>
-Fattore limitante: <limiting_factor> (KPI più bassi: …)
-Journey: <goal> → verifica indipendente <superata / non superata / non valutabile>, <steps> passi
-Non valutabile: <stage or KPI: reason>
+Fattore limitante: <sub_indices[limiting_factor].name> (KPI più bassi: <its limiting_kpis>)
+Journey: <goal> → verifica indipendente (<oracle> <oracle_params>): <esito>, <steps> passi
+Non valutabile: <each label of get_report's not_assessable_reasons, with its count>
 Rapporto: <report.report_html>
 ```
+
+The journey line names the check the oracle made, never just the goal; `<esito>` is "superata", "non superata" or
+"non valutabile (<verification.checks.not_assessable>)" from `journey_finish`'s `verification`. When the goal names a
+product and the oracle is a cart oracle, compare the titles in `verification.checks.item_list` with the goal's product
+words and add "articoli nel carrello: <titles>; corrispondono a '<product words>': sì / no"; when the oracle left part
+of the goal unchecked (a size, a colour, a brand), add "non verificato: <that part>". Never report an unchecked part as
+verified. A goal that no oracle covers gets "Journey: non avviato (nessuna verifica indipendente
+disponibile per questo obiettivo)".
 
 When the ERS is not published (`published` false), say so and give `ers.reason` instead of a number. Add at most
 three concrete suggestions taken from the limiting KPIs and the risk signals, phrased as readiness improvements, not

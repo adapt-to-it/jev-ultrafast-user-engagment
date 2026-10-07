@@ -37,6 +37,7 @@ import re
 from collections.abc import Callable
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
+from . import lexicon
 from .lexicon import compile_lexicon, lexicon_for, registrable_domain
 from .pagetypes import classify
 
@@ -58,12 +59,8 @@ CURRENCY_AFTER = re.compile(r"^\s?" + CURRENCY + r"(?!\s?\d)", re.I)
 MAX_ITEMS = 5
 # query keys and path segments that make a GET change the cart (WooCommerce ?add-to-cart=7, ?remove_item=...,
 # PrestaShop ?add=1, Shopify /cart/add): a cart URL is never loaded with them
-CART_ACTION_KEYS = re.compile(r"^(?:add|add[-_]to[-_]cart|add[-_]item|remove|remove[-_]item|removed[-_]item"
-                              r"|undo[-_]item|delete|update|update[-_]cart|empty[-_]cart|clear[-_]cart|action|op"
-                              r"|quantity|qty|_?wpnonce"
-                              r"|aggiungi|rimuovi|elimina|svuota|aggiorna|quantit[aà]|qt[aà]|azione)$", re.I)
-CART_ACTION_SEGMENTS = {"add", "change", "update", "clear", "remove", "delete", "empty",
-                        "aggiungi", "rimuovi", "elimina", "svuota", "aggiorna", "modifica"}
+CART_ACTION_KEYS = re.compile(rf"^(?:{lexicon.CART_ACTION_KEYS})$", re.I)
+CART_ACTION_SEGMENTS = set(lexicon.CART_ACTION_SEGMENTS)
 
 
 def check_params(name: str, params: dict | None) -> dict:

@@ -3,10 +3,14 @@
 Audits run in a background thread (start_audit returns the run_id at once; wait_run and get_run poll it) or in the
 caller's thread (audit_shop(wait=True), the CLI). Host-driven journeys stay in memory between journey_act calls; one
 that nobody drives for idle_timeout_s is closed without verification (journey status "abandoned"), and shutdown()
-closes everything (abort() only marks the runs, for a process about to be killed). Every run started here records its
-process in owner.json until it ends, so a run whose process died (SIGKILL, crash) is marked failed instead of waited
-for. Judgment tasks are paged for the host's judges, verdicts are validated by judgments.py, and score_run merges
-journeys, stores the scores and writes report.json + report.html.
+closes everything (seal() then abort() only mark the runs, for a process about to be killed). Every run started here
+records its process in owner.json until it ends, so a run whose process died (SIGKILL, crash) is closed instead of
+waited for. Whatever ended a run before it finished (a signal, a shutdown, a dead process), an audit ends "failed" with
+an "interrupted: ..." error and a journey "abandoned", its run "partial", or "failed" when it holds no page; the cause
+is in the run's warnings or errors. An interrupted audit keeps whatever its thread still wrote (pages, and observations
+computed from pages a dying browser served), so judgments and scores refuse it: run the audit again. Judgment tasks
+are paged for the host's judges, verdicts are validated by judgments.py, and score_run merges journeys, stores the
+scores and writes report.json + report.html.
 
 Every result is a compact summary (well below the 25k-token tool output limit); large payloads stay on disk in the run
 directory. The scores are engagement-readiness estimates from synthetic sessions: predicted friction and risk signals,
@@ -16,11 +20,13 @@ never measured engagement.
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import judgments, report
@@ -35,12 +41,14 @@ log = logging.getLogger("jev_ultrafast.engagement.service")
 MAX_WAIT_S = 110  # a tool call stays below the host's 2-minute tool timeout
 TASK_PAGE = 15
 TASK_PAGE_CHARS = 36_000  # one page of judgment tasks stays far below the 25k-token tool output limit
+WIDE = re.compile(r"[^\x00-\u024f]")  # beyond Latin: Cyrillic, Greek, CJK, ... take more tokens per character
 IDLE_TIMEOUT_S = 600
 MAX_AUDITS = 1  # two audits in one process share CPU and network: their PERF timings would be skewed
 MAX_JOURNEYS = 3
 FINISHED = ("complete", "partial", "failed")
 UNFINISHED = ("created", "running")
 OWNER = "owner.json"
+NEVER_STARTED_S = 120  # a run stays "created" for milliseconds: one still created after this lost its process
 BACKENDS = ("cli", "api", "openai")
 VOCABULARY = ("Engagement readiness (stima da sessioni sintetiche, non engagement misurato): parlare di 'attrito "
               "previsto' (predicted friction) e 'segnali di rischio' (risk signals), mai di violazioni.")
@@ -54,9 +62,10 @@ JUDGE_RULES = (
 class _JobStore:
     """The RunStore as the code of one run (audit.audit_shop, a JourneyRunner) sees it. new_run() hands back the run
     created up front when there is one (the caller knows an audit's run_id before audit_shop starts), else creates the
-    run and records this process as its owner. After seal(mark), every later update of the run applies mark(run,
-    sealed=True) after the code's own change: an interrupted run stays interrupted whatever its thread still writes
-    (audit.py's final status, a journey step). Everything else is the wrapped store's."""
+    run and records this process as its owner. After seal(mark), every later write of run.json (update and save, its
+    only two writers) applies mark(run, sealed=True) after the code's own change: an interrupted run stays interrupted
+    whatever its thread still writes (audit.py's final status, a journey step). Everything else is the wrapped
+    store's; the raw store stays free to write finished runs (judgments, scores)."""
 
     def __init__(self, store: RunStore, run_id: str | None = None):
         self._store, self._prepared, self.run_id, self.mark = store, run_id, run_id, None
@@ -79,6 +88,12 @@ class _JobStore:
         if mark is None or run_id != self.run_id:
             return self._store.update(run_id, fn)
         return self._store.update(run_id, lambda run: (fn(run), mark(run, sealed=True)))
+
+    def save(self, run_id: str, run) -> None:
+        mark = self.mark
+        if mark is not None and run_id == self.run_id:
+            mark(run, sealed=True)
+        self._store.save(run_id, run)
 
     def __getattr__(self, name):
         return getattr(self._store, name)
@@ -143,7 +158,8 @@ def _owner_alive(owner: dict) -> bool:
 
 
 def _failed(message: str):
-    """Mark: an unfinished run (any run, once sealed: its job still writing means it never finished) becomes failed."""
+    """Mark for an audit: an unfinished run (any run, once sealed: its job still writing means it never finished)
+    becomes failed. Also for a run with no journey record yet (a journey whose start never got that far)."""
     def mark(run, sealed=False):
         if sealed or run.get("status") in UNFINISHED:
             run["status"] = "failed"
@@ -154,33 +170,74 @@ def _failed(message: str):
 
 
 def _abandoned(why: str):
-    """Mark: an unverified journey becomes "abandoned" (its run partial, like JourneyRunner.close() leaves it)."""
+    """Mark for a journey: an unverified journey becomes "abandoned"; its unfinished run (any, once sealed) becomes
+    partial, or failed when it holds no page (nothing of the shop was measured), as JourneyRunner.close() and finish()
+    leave them. The same state whatever the cause (idle reap, shutdown, signal, dead process): the cause is the
+    "abandoned: ..." warning (and, for a dead process, an error). A verified journey is left as it is, unless the
+    verdict came in a write after the seal: then the oracle read a browser being killed (or racing the process exit),
+    so the verdict and the friction KPIs computed with it are dropped, as a dead process would never have written
+    them."""
     def mark(run, sealed=False):
         journey = run.get("journey")
-        if not journey or journey.get("verification") is not None:
+        if not journey or (journey.get("verification") is not None and not sealed):
             return
+        if journey.get("verification") is not None:
+            journey["verification"], run["observations"] = None, []
+            dropped = "verification discarded: the oracle ran after the journey was interrupted"
+            if dropped not in run["warnings"]:
+                run["warnings"].append(dropped)
         journey["status"] = "abandoned"
         journey["finished_at"] = journey.get("finished_at") or iso_now()
         warning = f"abandoned: {why}; closed without verification"
         if warning not in run["warnings"]:
             run["warnings"].append(warning)
         if sealed or run.get("status") in UNFINISHED:
-            run["status"] = "partial"
+            run["status"] = "partial" if run.get("pages") else "failed"
         run["finished_at"] = run.get("finished_at") or iso_now()
     return mark
 
 
+def _interrupted(kind: str, reason: str):
+    """The mark for a run of this kind that `reason` stopped while it ran: an audit fails, a journey is abandoned."""
+    return _abandoned(reason) if kind == "journey" else _failed(f"interrupted: {reason} while the run was in progress")
+
+
 def _orphaned(pid):
-    """Mark: a run whose owning process died while it ran becomes failed (an unverified journey also abandoned)."""
+    """Mark: a run whose owning process died while it ran: an audit (or a journey without its journey record) fails,
+    a journey is abandoned (_abandoned), and the dead process is named in the run's errors."""
+    message = f"interrupted: owning process {pid} is gone"
+
     def mark(run, sealed=False):
         if run.get("status") not in UNFINISHED:
             return
-        _failed(f"interrupted: owning process {pid} is gone")(run)
         journey = run.get("journey")
-        if journey and journey.get("verification") is None:
-            journey["status"] = "abandoned"
-            journey["finished_at"] = journey.get("finished_at") or run["finished_at"]
+        if run.get("kind") != "journey" or not journey or journey.get("verification") is not None:
+            _failed(message)(run)
+            return
+        _abandoned(f"owning process {pid} is gone")(run)
+        if message not in run["errors"]:
+            run["errors"].append(message)
     return mark
+
+
+def _finish_failed(message: str):
+    """Mark for a journey whose finish() raised: the error is recorded whatever the run's status (runner.close() has
+    already left it partial), with a warning when no verdict was written; an unfinished run (any, once sealed) becomes
+    partial, or failed when it holds no page. The journey keeps the status the runner gave it."""
+    def mark(run, sealed=False):
+        if message not in run["errors"]:
+            run["errors"].append(message)
+        warning = "closed without verification: journey finish failed"
+        if (run.get("journey") or {}).get("verification") is None and warning not in run["warnings"]:
+            run["warnings"].append(warning)
+        if sealed or run.get("status") in UNFINISHED:
+            run["status"] = "partial" if run.get("pages") else "failed"
+        run["finished_at"] = run.get("finished_at") or iso_now()
+    return mark
+
+
+def _finish_error(exc: BaseException) -> str:
+    return f"journey finish: {type(exc).__name__}: {str(exc)[:300]}"
 
 
 def _warning(message: str):
@@ -188,6 +245,21 @@ def _warning(message: str):
         if message not in run["warnings"]:
             run["warnings"].append(message)
     return mark
+
+
+def _interruption(run: dict) -> str | None:
+    """The error that ended an audit before it finished (a signal, a shutdown, a dead process), else None."""
+    if run.get("kind") != "audit":
+        return None
+    return next((e for e in run.get("errors") or [] if str(e).startswith("interrupted:")), None)
+
+
+def _refuse_interrupted(run_id: str, run: dict) -> None:
+    """An interrupted audit is incomplete and may hold observations read from a browser being killed: no judgments,
+    no scores (an ERS of such a run could be published while the run says failed)."""
+    if error := _interruption(run):
+        raise ValueError(f"audit {run_id} was interrupted ({_clip(error, 160)}): its pages are incomplete and some may "
+                         "have been read from a browser being stopped; run the audit again")
 
 
 def _duration(seconds: float) -> str:
@@ -227,6 +299,18 @@ def _clear_seed(run: dict) -> None:
         (run.get("judgments") or {}).pop("tasks", None)
 
 
+def _verification(verification):
+    """An oracle verdict for a summary: every check is kept (the oracles keep them small; navigation_error is {url,
+    error}), each compacted on its own, so a cart's item_list still shows its items."""
+    if not isinstance(verification, dict):
+        return verification
+    checks = verification.get("checks")
+    brief = {k: _compact(v) for k, v in verification.items() if k != "checks"}
+    if "checks" in verification:
+        brief["checks"] = {k: _compact(v) for k, v in checks.items()} if isinstance(checks, dict) else _compact(checks)
+    return brief
+
+
 def _number(value):
     if isinstance(value, str):
         try:
@@ -255,6 +339,7 @@ class EngagementService:
         self._starting = 0
         self._stop = threading.Event()
         self._reaper: threading.Thread | None = None
+        self._scoring: dict[str, threading.Lock] = {}  # one score_run per run at a time (report.html is rewritten)
 
     # ---------------------------------------------------------------- audits
     def audit_shop(self, url: str, profiles=None, stages=None, browser: str = "auto", locale: str = "it",
@@ -295,12 +380,15 @@ class EngagementService:
                 from . import audit
                 audit.audit_shop(settings, store=store, transport_factory=self.transport_factory, progress=say)
             except BaseException as exc:  # audit_shop records its own failures; this is a last resort
-                self._fail(run_id, f"audit: {type(exc).__name__}: {str(exc)[:300]}")
+                if isinstance(exc, KeyboardInterrupt):  # Ctrl-C, or SIGTERM/SIGHUP in the CLI (cli.Interrupted)
+                    self._fail(run_id, f"interrupted: {str(exc) or 'Ctrl-C'} while the run was in progress")
+                else:
+                    self._fail(run_id, f"audit: {type(exc).__name__}: {str(exc)[:300]}")
                 if not isinstance(exc, Exception):
                     raise
-            finally:
-                job.done.set()
+            finally:  # owner.json goes first: whoever wakes on done sees the run fully released
                 self._disown(run_id)
+                job.done.set()
 
         if wait:
             work()
@@ -360,7 +448,8 @@ class EngagementService:
 
     def _current(self, run_id: str) -> dict:
         """run.json. A created or running run that this process does not run and whose owning process is gone (killed,
-        crashed) is first marked failed, so nobody waits for it forever."""
+        crashed) is first closed (_orphaned), so nobody waits for it forever; so is a run still "created" long after
+        its creation without an owner (its process died before recording itself)."""
         run = self.store.load(run_id)  # unknown run -> FileNotFoundError
         if run.get("status") in UNFINISHED and run_id not in self._jobs and run_id not in self._journeys:
             pid = self._dead_owner(run_id)
@@ -368,10 +457,24 @@ class EngagementService:
                 run = self.store.update(run_id, _orphaned(pid))
                 self._disown(run_id)
                 log.warning("%s: its process %s is gone; marked %s", run_id, pid, run.get("status"))
+            elif self._never_started(run_id, run):
+                run = self.store.update(run_id, _failed("interrupted: the run never started (its process ended "
+                                                        "before recording itself as the run's owner)"))
+                log.warning("%s: still created after %s s without an owner; marked failed", run_id, NEVER_STARTED_S)
         return run
 
+    def _never_started(self, run_id: str, run: dict) -> bool:
+        if run.get("status") != "created" or (self.store.path(run_id) / OWNER).exists():
+            return False
+        try:
+            created = datetime.fromisoformat(str(run.get("created_at")).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return (datetime.now(UTC) - created).total_seconds() > NEVER_STARTED_S
+
     def recover_orphans(self) -> list[str]:
-        """Mark failed every run whose owning process died while it ran; at server and CLI start. Returns their ids."""
+        """Close every run whose owning process died while it ran (_orphaned: an audit failed, a journey abandoned);
+        at server and CLI start. Returns their ids."""
         recovered = []
         for owner in sorted(self.store.root.glob(f"*/*/{OWNER}")) if self.store.root.is_dir() else []:
             run_id = owner.parent.name
@@ -386,7 +489,8 @@ class EngagementService:
 
     def wait_run(self, run_id: str, timeout_s: float = 100, *, cancel: threading.Event | None = None) -> dict:
         """Block until the run finished or timeout_s (at most 110 s) passed, then get_run() plus timed_out. Returns
-        early when the service stops or `cancel` is set (the host cancelled the call or closed the session)."""
+        early when the service stops or `cancel` is set (the host cancelled the call or closed the session). A run
+        whose process died ends at once: an audit failed, a journey abandoned (its run partial)."""
         timeout = min(max(float(timeout_s or 0), 0.0), MAX_WAIT_S)
         deadline = time.monotonic() + timeout
         self._current(run_id)  # unknown run -> FileNotFoundError
@@ -441,12 +545,15 @@ class EngagementService:
 
     @staticmethod
     def _page_row(page: dict) -> dict:
+        """report._pages' rule: kb is None when no request was recorded (a page read in place, e.g. the cart an
+        oracle read where the journey ended: its weight was never measured)."""
         vitals, network = page.get("vitals") or {}, page.get("network") or {}
+        measured = network.get("bytes_transfer") is not None and network.get("requests") != 0
         row = {"page_id": page.get("page_id"), "stage": page.get("stage"), "profile": page.get("profile"),
                "type": (page.get("classification") or {}).get("type"),
                "url": _clip(page.get("final_url") or page.get("url") or "", 160),
                "lcp_ms": vitals.get("lcp"), "cls": vitals.get("cls"),
-               "kb": round(network["bytes_transfer"] / 1000) if network.get("bytes_transfer") is not None else None}
+               "kb": round(network["bytes_transfer"] / 1000) if measured else None}
         if (page.get("consent") or {}).get("choice"):
             row["consent"] = page["consent"]["choice"]
         return row
@@ -535,21 +642,31 @@ class EngagementService:
 
         def work():
             try:
-                runner.run_auto()
-            except Exception as exc:  # finish() still verifies and releases the browser
-                log.exception("typesafe journey %s", run_id)
-                job.progress.append(f"run_auto: {type(exc).__name__}: {str(exc)[:200]}")
-            try:
-                return runner.finish()
-            except Exception as exc:
+                try:
+                    runner.run_auto()
+                except Exception as exc:  # finish() still verifies and releases the browser
+                    log.exception("typesafe journey %s", run_id)
+                    job.progress.append(f"run_auto: {type(exc).__name__}: {str(exc)[:200]}")
+                try:
+                    return runner.finish()
+                except Exception as exc:
+                    log.exception("finishing journey %s", run_id)
+                    job.progress.append(_finish_error(exc))
+                    try:
+                        runner.close()
+                    except Exception:
+                        log.exception("closing journey %s", run_id)
+                    self._mark(run_id, _finish_failed(_finish_error(exc)))  # close() left the run partial
+            except BaseException as exc:  # Ctrl-C, or SIGTERM/SIGHUP in the CLI: release the browser, abandon
                 try:
                     runner.close()
                 except Exception:
                     log.exception("closing journey %s", run_id)
-                self._fail(run_id, f"journey finish: {type(exc).__name__}: {str(exc)[:300]}")
-            finally:
-                job.done.set()
+                self._mark(run_id, _abandoned(str(exc) or "Ctrl-C"))
+                raise
+            finally:  # owner.json goes first: whoever wakes on done sees the run fully released
                 self._disown(run_id)
+                job.done.set()
 
         if wait:
             result = work()
@@ -597,9 +714,12 @@ class EngagementService:
                         result = live.runner.finish(status)
                     except ValueError:
                         raise  # an invalid status: nothing changed, the journey stays open
-                    except BaseException:
+                    except BaseException as exc:
                         try:
                             live.runner.close()  # the browser is released whatever happened
+                            if isinstance(exc, Exception):
+                                log.exception("finishing journey %s", run_id)
+                                self._mark(run_id, _finish_failed(_finish_error(exc)))
                         finally:
                             self._forget(run_id, live)
                         raise
@@ -625,7 +745,7 @@ class EngagementService:
         not_assessed = Counter(o.get("reason") for o in run.get("observations") or [] if not o.get("assessed"))
         return {
             "run_id": result["run_id"], "status": result.get("status"), "run_status": run.get("status"),
-            "verification": _compact(result.get("verification")), "friction": friction,
+            "verification": _verification(result.get("verification")), "friction": friction,
             "friction_not_assessed": dict(not_assessed), "steps": result.get("steps"),
             "steps_path": result.get("steps_path") or str(self.store.path(result["run_id"]) / "steps.jsonl"),
             "warnings": [_clip(w) for w in (run.get("warnings") or [])[-10:]],
@@ -674,22 +794,27 @@ class EngagementService:
         return closed
 
     def _close_journey(self, run_id: str, runner, why: str) -> None:
+        """A journey the runner had stopped is finished (a finish() that raises records its error, not an idle
+        abandon: the journey stopped by itself); one still running is closed and abandoned."""
+        failure = None
         if runner.status not in ("running", "created"):
             try:
                 runner.finish()
                 self._mark(run_id, _warning(f"finished by the server: {why}"))
                 return
-            except Exception:
+            except Exception as exc:
                 log.exception("finishing journey %s", run_id)
+                failure = _finish_error(exc)
         try:
             runner.close()
         except Exception:
             log.exception("closing journey %s", run_id)
-        self._mark(run_id, _abandoned(why))
+        self._mark(run_id, _finish_failed(failure) if failure else _abandoned(why))
 
     def shutdown(self, join_s: float = 5.0, lock_s: float = 30.0) -> None:
         """Orderly end (stdin closed, the CLI): close every open journey (stopped ones verified, waiting at most
-        lock_s for a step in progress), give running jobs join_s to end, mark the rest failed (interrupted)."""
+        lock_s for a step in progress), give running jobs join_s to end, mark the rest interrupted (an audit failed,
+        a typesafe journey abandoned)."""
         self._stop.set()
         self.reap(force=True, reason="the server shut down", lock_s=lock_s)
         deadline = time.monotonic() + join_s
@@ -697,19 +822,30 @@ class EngagementService:
             if job.thread is not None and job.thread.is_alive():
                 job.thread.join(max(0.0, deadline - time.monotonic()))
             if not job.done.is_set():
-                self._interrupt(run_id, job.store,
-                                _failed("interrupted: the server shut down while the run was in progress"))
+                self._interrupt(run_id, job.store, _interrupted(job.kind, "the server shut down"))
+
+    def seal(self, reason: str = "the server was stopped") -> None:
+        """Signal path, step 1, before the browsers are killed: no lock, no I/O. Refuse new runs and seal the store of
+        every run in progress (jobs failed or abandoned by kind, open journeys abandoned), so that whatever their
+        threads write once their browser is gone (a lost-connection error, audit.py's final status) keeps the mark."""
+        self._stop.set()
+        for job in list(self._jobs.values()):
+            if not job.done.is_set():
+                job.store.seal(_interrupted(job.kind, reason))
+        for live in list(self._journeys.values()):
+            live.store.seal(_abandoned(reason))
 
     def abort(self, reason: str = "the server was stopped") -> None:
-        """Signal path: the host kills this process within half a second and the browsers are already gone. Without
-        waiting for a lock, a thread or a browser, mark every open journey abandoned and every running job failed;
-        the marks survive whatever those threads still write before the process ends."""
-        self._stop.set()
-        for run_id, live in list(self._journeys.items()):
-            self._interrupt(run_id, live.store, _abandoned(reason))
+        """Signal path, step 2, after the browsers were killed (the host kills this process within half a second):
+        write the marks of seal() into run.json, jobs first, then open journeys, without waiting for a thread or a
+        browser. A run a thread finished meanwhile already carries its mark (its writes went through the sealed store);
+        writing the mark again changes nothing there, and a run that finished before seal() is left as it is."""
+        self.seal(reason)
         for run_id, job in list(self._jobs.items()):
-            if not job.done.is_set():
-                self._interrupt(run_id, job.store, _failed(f"interrupted: {reason} while the run was in progress"))
+            if job.store.mark is not None:
+                self._mark(run_id, job.store.mark)
+        for run_id, live in list(self._journeys.items()):
+            self._mark(run_id, live.store.mark)
 
     # ---------------------------------------------------------------- judgments
     def _finished_audit(self, run_id: str) -> dict:
@@ -718,13 +854,15 @@ class EngagementService:
             raise ValueError(f"{run_id} is not an audit run; judgments and scores start from an audit")
         if run.get("status") in ("created", "running"):
             raise ValueError(f"audit {run_id} is still running: wait_run('{run_id}') first")
+        _refuse_interrupted(run_id, run)
         return run
 
     def get_judgment_tasks(self, run_id: str, cursor=None, limit: int = TASK_PAGE, rubric_id: str | None = None,
                            *, brief: bool = False) -> dict:
         """One page of closed-label judgment tasks (created on the first call). brief=True lists ids and progress only,
         over the same pages: a page ends after `limit` tasks or once TASK_PAGE_CHARS of task text (measured on what
-        never changes: ids, snippets, context) is used, so next_cursor is the same for brief and full reads."""
+        never changes: ids, snippets, context; a character beyond Latin counts three, as it takes more tokens) is
+        used, so next_cursor is the same for brief and full reads."""
         run = self._finished_audit(run_id)
         if _unrequested(run):
             run = self.store.update(run_id, lambda r: (_clear_seed(r), judgments.ensure_tasks(r)))
@@ -751,7 +889,8 @@ class EngagementService:
                                      "text": s["text"][:judgments.MAX_SNIPPET_CHARS]} for s in task["snippets"]],
                        "context": {k: context.get(k) for k in ("page_type", "stage", "locale")},
                        "samples_required": task.get("samples_required", 3)}
-            used += len(json.dumps(content, ensure_ascii=False))
+            text = json.dumps(content, ensure_ascii=False)
+            used += len(text) + 2 * len(WIDE.findall(text))  # a non-Latin character counts three
             if page and used > TASK_PAGE_CHARS:
                 break
             submitted, done = counts[task["task_id"]], task["task_id"] in final
@@ -799,8 +938,9 @@ class EngagementService:
         outcome["rejected_reasons"] = dict(Counter(r.get("reason") for r in rejected))
         return outcome
 
-    def finalize_judgments(self, run_id: str, samples_required: int | None = 3) -> dict:
-        """Majority label per task; ties or agreement below 2/3 stay uncertain (not assessed)."""
+    def finalize_judgments(self, run_id: str, samples_required: int | None = None) -> dict:
+        """Majority label per task; ties or agreement below 2/3 stay uncertain (not assessed). samples_required: each
+        task's own when None; a number may only lower it."""
         run = self._finished_audit(run_id)
         if _unrequested(run):
             raise ValueError("No judgment tasks yet: call get_judgment_tasks first")
@@ -823,29 +963,60 @@ class EngagementService:
             raise ValueError(f"backend must be one of {BACKENDS}")
         if isinstance(samples, bool) or not isinstance(samples, int) or not 1 <= samples <= 5:
             raise ValueError("samples must be an integer from 1 to 5")
-        run = self._finished_audit(run_id)
-        _clear_seed(run)
+        self._finished_audit(run_id)
         judges = [classes[backend](judge_id=f"j{i}", model=model) for i in range(1, samples + 1)]
+
+        def prepare(r):  # tasks stored before any judge runs; a requirement above a task's own fails here
+            _clear_seed(r)
+            for task in judgments.ensure_tasks(r, samples_required=samples):
+                judgments.required_samples(task, samples)
+        run = self.store.update(run_id, prepare)
+        before = {(v["task_id"], v["judge_id"]) for v in run["judgments"]["verdicts"]}
+        # the judges run on this snapshot, outside the run's lock (minutes); what they add is merged into the run as
+        # stored then, so verdicts and finals another writer stored meanwhile (a host's submit_judgments) stay
         summary = run_judges(run, judges, samples_required=samples, batch_size=batch_size)
-        self.store.update(run_id, lambda r: r.update(judgments=run["judgments"]))
+        added = {}
+        for verdict in run["judgments"]["verdicts"]:
+            if (verdict["task_id"], verdict["judge_id"]) not in before:
+                added.setdefault((verdict["judge_id"], verdict["model"]), []).append(verdict)
+        merged = {"accepted": 0}
+
+        def merge(r):
+            for (judge_id, judge_model), verdicts in added.items():
+                result = judgments.submit(r, judge_id, judge_model, verdicts, cache=False)
+                merged["accepted"] += result["accepted"]
+                summary["rejected"] += [{"judge_id": judge_id, **x} for x in result["rejected"]]
+            summary["finalize"] = judgments.finalize(r, samples_required=samples)
+        self.store.update(run_id, merge)
         rejected = summary.get("rejected") or []
+        accepted = max(0, merged["accepted"] - summary.get("reused", 0))  # cached samples are counted as reused
         return {"run_id": run_id, "backend": backend, "model": judges[0].model, "samples": samples,
-                "accepted": summary.get("accepted", 0), "reused": summary.get("reused", 0),
+                "accepted": accepted, "reused": summary.get("reused", 0),
                 "rejected_total": len(rejected), "rejected_reasons": dict(Counter(r.get("reason") for r in rejected)),
                 "errors": [_compact(e) for e in (summary.get("errors") or [])[:10]],
                 "finalize": {k: len(v) if isinstance(v, list) else v for k, v in summary["finalize"].items()}}
 
     # ---------------------------------------------------------------- scores and reports
     def score_run(self, run_id: str, journey_run_ids=()) -> dict:
-        """Score the run (merging the journey runs), store run["scores"], write report.json and report.html."""
+        """Score the run (merging the journey runs), store run["scores"], write report.json and report.html. A
+        merged journey that ended abandoned (its server went away, or nobody drove it) adds a warning."""
+        with self._lock:
+            lock = self._scoring.setdefault(run_id, threading.Lock())
+        with lock:  # concurrent score_run calls on one run would rewrite report.html at once
+            return self._score_run(run_id, journey_run_ids)
+
+    def _score_run(self, run_id: str, journey_run_ids) -> dict:
         from .scoring import score_run
 
         run = self._current(run_id)
         if run.get("status") in UNFINISHED:
             raise ValueError(f"run {run_id} is still running: wait_run('{run_id}') first")
+        _refuse_interrupted(run_id, run)
         if isinstance(journey_run_ids, str):
             journey_run_ids = [journey_run_ids]
-        ids = [j for j in dict.fromkeys(journey_run_ids or ()) if j != run_id]
+        ids = list(dict.fromkeys(journey_run_ids or ()))
+        if run_id in ids:
+            raise ValueError(f"journey_run_ids lists {run_id}, the run being scored: pass the journey runs only")
         journeys, warnings = [], []
         for journey_id in ids:
             journey = self._current(journey_id)
@@ -860,8 +1031,7 @@ class EngagementService:
         _clear_seed(run)
         scores = score_run(run, journeys=journeys)
         self.store.update(run_id, lambda r: (_clear_seed(r), r.update(scores=scores)))
-        written = report.write_report(self.store, run_id, journey_run_ids=ids)
-        paths = {k: str(self.store.path(run_id) / v) for k, v in written.items()}  # report_json comes back relative
+        paths = report.write_report(self.store, run_id, journey_run_ids=ids)  # absolute paths
         hosts = {(j.get("site") or {}).get("host") for j in journeys} - {(run.get("site") or {}).get("host")}
         summary = self._score_summary(run, scores, paths)
         if hosts:

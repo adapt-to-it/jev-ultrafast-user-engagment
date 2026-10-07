@@ -51,6 +51,7 @@ def send(transport, method, session_id=None, **params):
 
 class Browser:
     transport = None
+    navigation = None  # the Page.navigate result of the constructor's load (errorText when it did not commit)
 
     def __init__(self, url, *, transport=None, metrics=None, browser_context_id=None, background=True,
                  prepare=None, load_timeout=15):
@@ -70,7 +71,7 @@ class Browser:
             self.call("Emulation.setFocusEmulationEnabled", enabled=True)
             if prepare:
                 prepare(self)
-            self.navigate(url, load_timeout=load_timeout)
+            self.navigation = self.navigate(url, load_timeout=load_timeout)
         except BaseException:
             try:
                 self.close()  # The caller never gets this tab, so do not leak it.

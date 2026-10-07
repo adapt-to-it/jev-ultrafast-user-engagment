@@ -291,6 +291,21 @@ def test_any_false_resting_on_an_unobserved_stage_is_not_conclusive():
     assert (row["assessed"], row["normalized"], row["reason"]) == (False, None, "add_to_cart_failed")
 
 
+def test_any_rule_on_a_negative_bool_follows_the_evidence_not_the_polarity():
+    """FAI.FORCED_ACCOUNT is "any" with True bad: a conclusive cart False (rule d) in one profile is assessed even when
+    the other profile's checkout timed out; beside an unassessed checkout row of its own profile it is withheld."""
+    cart = ob("FAI.FORCED_ACCOUNT", False, profile="mobile", stage="cart")
+    checkout = ob("FAI.FORCED_ACCOUNT", None, profile="desktop", stage="checkout_entry", assessed=False,
+                  reason="timeout")
+    for rows in ([cart, checkout], [checkout, cart]):
+        assert scoring.aggregate(rows, "FAI.FORCED_ACCOUNT") == (False, True, None)
+    same = [cart, {**checkout, "profile": "mobile"}]
+    assert scoring.aggregate(same, "FAI.FORCED_ACCOUNT") == (None, False, "timeout")
+    assert kpi(scoring.score([cart, checkout], ANCHORS), "FAI.FORCED_ACCOUNT")["normalized"] == 100
+    assert scoring.aggregate([ob("FAI.FORCED_ACCOUNT", True, profile="mobile", stage="cart"), {
+        **checkout, "profile": "mobile"}], "FAI.FORCED_ACCOUNT") == (True, True, None)  # True is always conclusive
+
+
 def test_bools_are_numbers_only_for_risk_confidences():
     lcp = kpi(scoring.score([ob("PERF.LCP", True)], ANCHORS), "PERF.LCP")
     assert (lcp["value"], lcp["assessed"], lcp["reason"]) == (None, False, "invalid_value")
@@ -391,7 +406,8 @@ def test_grades_and_publish_rules():
 
     no_pti = scoring.score(drop(full, "PTI"), ANCHORS)  # coverage 0.85 overall, but a major sub-index is empty
     assert no_pti["ers"]["coverage"] == 0.85
-    assert no_pti["ers"]["score"] is None and not no_pti["ers"]["published"] and "PTI" in no_pti["ers"]["reason"]
+    assert no_pti["ers"]["score"] is None and not no_pti["ers"]["published"]
+    assert no_pti["ers"]["reason"] == "copertura sotto il minimo del 50 % per Trasparenza di prezzi e costi (0 %)"
 
     partial = scoring.score(drop(drop(full, "MPI"), ids=("PERF.LCP", "PERF.CLS", "PERF.TBT_APPROX")), ANCHORS)
     assert partial["sub_indices"]["PERF"]["coverage"] == pytest.approx(8 / 15, abs=1e-3)
@@ -404,7 +420,10 @@ def test_grades_and_publish_rules():
     thin = [o for o in full if KPIS[o["kpi_id"]].owner in {"PERF", "TRI"}]
     thin_output = scoring.score(thin, ANCHORS)
     assert thin_output["ers"]["coverage"] == pytest.approx(0.38, abs=0.01)
-    assert "copertura complessiva" in thin_output["ers"]["reason"] and thin_output["ers"]["score"] is None
+    assert thin_output["ers"]["reason"] == (  # Italian names and percentages, as the report writes them
+        "copertura complessiva 38 % sotto il minimo del 60 %; copertura sotto il minimo del 50 % per Attrito previsto "
+        "(0 %), Trasparenza di prezzi e costi (0 %), Chiarezza e carico cognitivo (0 %)")
+    assert thin_output["ers"]["score"] is None
     assert thin_output["ers"]["limiting_factor"] in {"PERF", "TRI"}
 
 
@@ -442,7 +461,7 @@ def test_publish_gates_use_unrounded_coverage():
     subs = {n: {"score": 80, "coverage": 1.0, "llm_share": 0.0} for n in ANCHORS["weights"]}
     subs["PTI"] = {"score": 80, "coverage": round(0.4996, 3), "_coverage": 0.4996, "llm_share": 0.0}
     result = scoring.ers(subs, 0, ANCHORS)
-    assert result["published"] is False and "PTI" in result["reason"]
+    assert result["published"] is False and "Trasparenza di prezzi e costi (49,9 %)" in result["reason"]  # not "50 %"
     subs["PTI"]["_coverage"] = 0.5
     assert scoring.ers(subs, 0, ANCHORS)["published"] is True
 

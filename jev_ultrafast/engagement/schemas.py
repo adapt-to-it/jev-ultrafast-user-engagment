@@ -124,7 +124,9 @@ class AuditPayload(TypedDict, total=False):
     meta: dict  # {og_type, canonical, og_price_amount, og_price_currency, jsonld_types, microdata_products,
     #             microdata_main (schema.org Product itemscopes outside product cards), speculation_rules (bool)}
     prices: list[dict]  # [{text, value, currency, strikethrough, kind, label, rect, above_fold, near_text, itemprop,
-    #                       overlay, in_card (inside a product card)}]
+    #                       overlay, in_card (inside a product card)}], the first 80 in document order
+    price_counts: dict  # {total, strikethrough_in_card, strikethrough_outside_cards}: over every price read, before the
+    #                     80-item cut of `prices` (overlays included, the same in_card test)
     ctas: list[dict]  # [{label, lexicon_hit, rect, above_fold, fg, bg, contrast, area, primary_like}]
     search: dict  # {present, above_fold, width, has_autocomplete_attr, rect}
     nav: dict  # {links, categories:[{label, href}], breadcrumbs, generic_label_share, cart_link}
@@ -151,8 +153,9 @@ class AuditPayload(TypedDict, total=False):
     targets: dict  # {interactive, lt24, lt44, lt48}
     a11y: dict  # {img_missing_alt, inputs_missing_label, lang_missing, iframes, shadow_roots_open, shadow_roots_closed}
     snippets: list[Snippet]
-    lexicon_lang: NotRequired[str]  # the page's effective language (lexicon.effective_language): the lexicon audit.js
-    #                                 and the classifier used, and the language of its text
+    lexicon_lang: NotRequired[str]  # the page's effective language (lexicon.effective_language: the declared lang
+    #                                 unless the text reads as the run's language): the lexicon audit.js and the
+    #                                 classifier used, and the language of its text
 
 
 class PageRecord(TypedDict, total=False):
@@ -393,7 +396,7 @@ class RunRecord(TypedDict, total=False):
     run_id: str
     schema_version: str
     kind: str  # "audit" | "journey"
-    site: dict  # {host, start_url}
+    site: dict  # {host, start_url[, final_url: where the start URL landed, when on another registrable domain]}
     created_at: str  # ISO-8601 UTC
     finished_at: str | None
     settings: dict  # {profiles, stages, browser:{mode, product, headless}, locale, consent, anchors_version,

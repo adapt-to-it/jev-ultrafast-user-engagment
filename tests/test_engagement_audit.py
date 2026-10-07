@@ -6,6 +6,7 @@ import functools
 import re
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -22,7 +23,9 @@ from jev_ultrafast.engagement.crawler import (
     discover_funnel,
     is_listing,
     is_product,
+    landed_guard,
     listing_candidates,
+    own_controls,
     product_candidates,
     unavailable,
 )
@@ -308,8 +311,10 @@ def test_page_kinds_accept_listings_and_products_by_their_evidence():
     assert is_listing(record({}, kind="plp"))
     assert is_listing(record({"products": {"main_group": 8}}, kind="other"))
     assert not is_listing(record({"products": {"main_group": 8}}, kind="pdp"))
+    assert not is_listing(record({"products": {"main_group": 8, "itemlist_jsonld": 8}}, kind="home"))
     buyable = {"pdp": {"add_to_cart": {"present": True}, "price": {"value": 10}}}
     assert is_product(record(buyable, kind="other")) and not is_product(record(buyable, kind="cart"))
+    assert not is_product(record(buyable, kind="home"))
     assert not is_product(record({"pdp": {"add_to_cart": {"present": True}}}, kind="other"))
 
 
@@ -397,20 +402,28 @@ NEWSLETTER = {"kind": "newsletter", "interrupting": True, "modal": True, "covera
 
 class ScriptedShop:
     """One page of a fake shop: the overlays it shows, other observed controls, and what a click does (a consent or
-    close button removes its overlay; layers maps a label to the overlay that replaces it, e.g. "manage")."""
+    close button removes its overlay; layers maps a label to the overlay that replaces it, e.g. "manage"). Each label
+    keeps one place on the page (no scroll): audit.js's button rect and the observed action's rect."""
 
     def __init__(self, overlays=(), controls=(), lang="it", layers=None, pdp=None):
         self.overlays, self.controls, self.lang = [copy.deepcopy(o) for o in overlays], list(controls), lang
         self.layers, self.pdp = layers or {}, pdp or {}
+        self.places: dict[str, dict] = {}
+
+    def place(self, label):
+        return dict(self.places.setdefault(label, {"x": 10, "y": 40 * len(self.places), "w": 100, "h": 30}))
 
     def audit(self):
-        return {"lexicon_lang": self.lang, "doc": {"word_count": 10}, "overlays": copy.deepcopy(self.overlays),
+        overlays = copy.deepcopy(self.overlays)
+        for b in (b for o in overlays for b in o["buttons"]):
+            b.setdefault("rect", self.place(b["label"]))
+        return {"lexicon_lang": self.lang, "doc": {"word_count": 10}, "overlays": overlays,
                 "pdp": copy.deepcopy(self.pdp)}
 
     def actions(self):
         labels = [b["label"] for o in self.overlays for b in o["buttons"]] + self.controls
-        return [{"id": f"e{i}", "kind": "click", "label": label, "role": "button", "node": i}
-                for i, label in enumerate(labels)]
+        return [{"id": f"e{i}", "kind": "click", "label": label, "role": "button", "node": i,
+                 "rect": self.place(label)} for i, label in enumerate(labels)]
 
     def react(self, label):
         for overlay in self.overlays:
@@ -612,6 +625,33 @@ def test_repeats_reload_only_accepted_pages():
     run = {"settings": {"profiles": ["mobile"]}, "pages": pages, "not_assessable": missing, "deception": {}}
     filters = [o for o in checks.observations(run) if o["kpi_id"] == "FAI.PLP_FILTERS"]
     assert [(o["page_id"], o["value"], o["evidence"]["repeats"]) for o in filters] == [("mobile-plp-2", 4, 2)]
+
+
+class LandingMapCollector(MapCollector):
+    """MapCollector whose URLs may land elsewhere: {url: final_url}."""
+
+    def __init__(self, pages, lands):
+        super().__init__(pages)
+        self.lands = lands
+
+    def load_page(self, browser, url, *, stage, page_id):
+        loaded = super().load_page(browser, self.lands.get(url, url), stage=stage, page_id=page_id)
+        return {**loaded, "url": url}
+
+
+@pytest.mark.parametrize("kind", ["home", "plp"])
+def test_a_category_link_that_lands_on_the_home_page_is_no_listing(kind):
+    """An empty or seasonal category sent back to "/": the home page (whatever its type, even with a product grid)
+    is not the listing; the next candidate is."""
+    grid = {"main_group": 8, "cards": [{"href": "/prodotto/aurora"}]}
+    site = {**SITE, f"{SHOP}?utm_source=nav": (kind, {"doc": {"word_count": 50}, "products": grid})}
+    collector = LandingMapCollector(site, {f"{SHOP}categoria/novita": f"{SHOP}?utm_source=nav"})
+    settings = EngagementSettings(url=SHOP, stages=["home", "plp"], profiles=["mobile"])
+    pages, missing = discover_funnel(collector, settings, profile="mobile", guard=GUARD)
+    assert [(p["url"], p["stage"]) for p in pages] == [
+        (SHOP, "home"), (f"{SHOP}categoria/novita", "extra"), (f"{SHOP}categoria/scarpe", "plp")]
+    assert pages[1]["notes"] == ["plp candidate rejected: it landed on the home page"]
+    assert not [m for m in missing if m["stage"] in ("home", "plp")]
 
 
 def test_repeats_leave_one_page_per_later_stage_in_the_budget():
@@ -1155,7 +1195,8 @@ def test_a_click_that_ends_on_an_error_page_never_counts_as_its_stage(monkeypatc
         crawl.checkout(cart)
     crawl.stop(stop.value)
     error = crawl.pages[-1]
-    assert error["stage"] == "extra" and error["notes"] == ["checkout_entry: the click led to Chrome's error page"]
+    assert error["stage"] == "extra"
+    assert error["notes"] == ["checkout_entry: the click did not load a page (navigation error)"]
     assert [(m["stage"], m["reason"]) for m in crawl.missing] == [("checkout_entry", "navigation_error")]
     run = {"pages": funnel + crawl.pages, "not_assessable": crawl.missing, "errors": []}
     assert audit_module._status(run, EngagementSettings(url=SHOP, profiles=["mobile"])) == "partial"
@@ -1174,7 +1215,7 @@ def test_an_add_to_cart_that_ends_on_an_error_page_is_no_empty_cart(monkeypatch)
     with pytest.raises(Stop) as stop:
         crawl.cart(product)
     crawl.stop(stop.value)
-    error = "cart: the click led to Chrome's error page"
+    error = "cart: the click did not load a page (navigation error)"
     assert [(p["stage"], p["notes"]) for p in crawl.pages] == [("extra", [error])]
     assert {m["stage"]: m["reason"] for m in crawl.missing} == {"cart": "navigation_error",
                                                                 "checkout_entry": "navigation_error"}
@@ -1432,3 +1473,331 @@ def test_card_scope_rules_hold_on_what_audit_js_really_sends(transport, scope_si
     result = deception.low_stock_result(visits[0], visits[1], visits[2:], page_id="desktop-pdp-1")
     assert result["same_number_products"] == 0 and not result["contradictions"]
     assert checks._low_stock(result)[0] == 0.0
+
+
+# ---------------------------------------------------------------- review round 0: cart actions, landing site, guest
+# control identity, transport errors, site-copy scarcity
+
+
+def test_cart_actions_are_never_loaded_as_pages(chromium, shop_server, tmp_path, quick, no_waits):
+    """WooCommerce loop cards whose "?add-to-cart=N" link carries the card's longest name (its aria-label), and a
+    mini-cart remove link before the header's cart link: no GET of either reaches the shop, and the funnel goes on."""
+    result = audited(chromium, shop_server, tmp_path, "woo/index.html", profiles=["desktop"],
+                     stages=["home", "plp", "pdp", "cart"])
+    run = result["run"]
+    assert [r["path"] for r in result["requests"] if re.search(r"add-to-cart|remove_item", r["path"])] == []
+    stages = {p["stage"]: p["url"] for p in run["pages"]}
+    assert stages["pdp"].endswith("/woo/prodotto.html?id=11") and stages["cart"].endswith("/woo/carrello.html")
+    plp = next(p for p in run["pages"] if p["stage"] == "plp")
+    assert [c["href"].rsplit("/", 1)[1] for c in plp["audit"]["products"]["cards"]] == [
+        f"prodotto.html?id={n}" for n in range(11, 17)]
+    pdp = next(p for p in run["pages"] if p["stage"] == "pdp")
+    assert pdp["audit"]["nav"]["cart_link"]["href"].endswith("/woo/carrello.html")
+    # WooCommerce's <button name="add-to-cart" value="11">: observed by its text, not by its value
+    assert (pdp["probes"]["add_to_cart"]["executed"], pdp["probes"]["add_to_cart"]["label"]) == (
+        True, "Aggiungi al carrello")
+
+
+def test_product_candidates_never_include_a_cart_action():
+    listing = record({"products": {"cards": [{"href": "?add-to-cart=11"}, {"href": "/prodotto/felpa/"},
+                                             {"href": "/cart/add?id=5"}, {"href": "/p/2?quantity=1"}]}},
+                     url=f"{SHOP}negozio/", kind="plp")
+    assert product_candidates(listing, GUARD) == [f"{SHOP}prodotto/felpa/"]
+
+
+@pytest.mark.parametrize("cart_link, links", [
+    (f"{SHOP}carrello/?remove_item=3f2a&_wpnonce=9c1", {}),  # audit.js read before the fix: the query is dropped
+    (None, {"Rimuovi dal carrello": "/cart/change?line=1&quantity=0", "Svuota carrello": "/carrello/svuota",
+            "Aggiungi al carrello: “Felpa”": "?add-to-cart=12", "Vai al carrello": "/carrello/"}),
+])
+def test_the_cart_url_is_never_a_cart_action(cart_link, links):
+    shop = CartLinkShop(cart_link) if cart_link else ScriptedShop(controls=list(links))
+    collector = ScriptedCollector(shop)
+    collector.browser = LinkBrowser(shop, links)
+    collector.browser.observe = lambda screenshot=True, observe=collector.browser.observe: {
+        **observe(screenshot), "actions": [{**a, "role": "link"} for a in observe(screenshot)["actions"]]}
+    crawl = Crawl(collector, EngagementSettings(url=SHOP), profile="mobile", guard=GUARD)
+    crawl.tab.browser = collector.browser
+    product = {"page_id": "mobile-pdp-1", "url": f"{SHOP}prodotto/felpa/", "final_url": f"{SHOP}prodotto/felpa/",
+               "classification": {"type": "pdp"}, "audit": shop.audit()}
+    assert crawl.cart_url(product) == f"{SHOP}carrello/"
+
+
+class LandingSiteCollector(ScriptedCollector):
+    """The start URL redirects to another registrable domain (SHOP), where the shop's pages and controls are."""
+
+    def load_page(self, browser, url, *, stage, page_id):
+        return {**super().load_page(browser, url, stage=stage, page_id=page_id), "final_url": SHOP}
+
+
+def test_the_guard_is_anchored_where_the_start_url_lands(scripted):
+    shop = ScriptedShop([banner(button("Accetta tutti", "accept"), button("Rifiuta tutti", "reject"))])
+    collector = LandingSiteCollector(shop)
+    crawl = Crawl(collector, EngagementSettings(url="https://brand.example/"), profile="mobile",
+                  guard=CheckoutGuard("https://brand.example/", lexicon_for("it")))
+    crawl.tab.browser = collector.browser
+    home = crawl.home()
+    assert home["consent"]["choice"] == "reject" and collector.browser.acted == ["Rifiuta tutti"]
+    assert crawl.guard is crawl.tab.guard and crawl.guard.same_site(f"{SHOP}p/1")
+    assert landed_guard(GUARD, home, "it") is GUARD  # already the landing site
+    assert landed_guard(GUARD, {"final_url": "chrome-error://chromewebdata/"}, "it") is GUARD
+
+
+def test_an_audit_whose_start_url_redirects_to_another_site_measures_that_site(chromium, shop_server, tmp_path, quick,
+                                                                               no_waits):
+    target = shop_server.url("shop/index.html")
+
+    class Redirect(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        store = RunStore(tmp_path)
+        run_id = audit_shop(EngagementSettings(url=f"http://localhost:{server.server_port}/go", profiles=["desktop"],
+                                               stages=["home", "plp", "pdp"]),
+                            store=store, transport_factory=lambda: DirectTransport(chromium.ws_url))
+    finally:
+        server.shutdown()
+        server.server_close()
+    run = store.load(run_id)
+    assert run["status"] == "complete" and run["site"]["final_url"] == target and not run["warnings"]
+    home = next(p for p in run["pages"] if p["stage"] == "home")
+    assert (home["consent"]["choice"], home["consent"]["via"]) == ("reject", "first_layer")
+    assert run["deception"]["desktop"]["consent"]["applied"]["choice"] == "reject"
+
+
+GUEST = "Continua come ospite"
+
+
+@pytest.mark.parametrize("first_href", ["https://partner.example/guest-orders", "/account/guest-order-lookup"])
+def test_the_guest_path_clicks_the_control_it_verified(monkeypatch, first_href):
+    """Two controls share the guest label: an earlier link off site or to a content page is never the one clicked."""
+    monkeypatch.setattr(Tab, "await_effect", lambda self, origin, **kw: "navigated")
+    shop = CartShop(controls=[GUEST, GUEST, "Procedi al checkout"])
+    collector = CheckoutCollector(shop)
+    collector.browser = LinkBrowser(shop, {})
+    observe = collector.browser.observe
+
+    def links(screenshot=True):
+        page = observe(screenshot)
+        page["actions"][0]["role"] = "link"
+        page["guards"][str(page["actions"][0]["node"])][GUARD_HREF] = first_href
+        return page
+    collector.browser.observe = links
+    clicked = []
+    collector.browser.act = lambda action, page, text=None: clicked.append(action["id"])
+    crawl = Crawl(collector, EngagementSettings(url=SHOP), profile="mobile", guard=GUARD)
+    crawl.tab.browser = collector.browser
+    cart = {"page_id": "mobile-cart-1", "url": f"{SHOP}cart", "final_url": f"{SHOP}cart",
+            "classification": {"type": "cart"}, "audit": shop.audit()}
+    crawl.checkout(cart)
+    probe = cart["probes"]["checkout_entry"]
+    assert clicked == ["e1"] and probe["via"] == "guest" and probe["guest"]["href"] is None
+
+
+class ClosingBrowser(ScriptedBrowser):
+    """The input reaches the page, then the transport closes without a reply."""
+
+    def act(self, action, page, text=None):
+        self.acted.append(action["label"])
+        raise ConnectionError("Browser Harness daemon 'jev-engagement' closed the connection without a reply")
+
+
+def test_a_click_whose_transport_closed_is_logged_uncertain_and_stops_the_funnel(tmp_path):
+    store = RunStore(tmp_path)
+    run_id = store.new_run("audit", SHOP, {})
+    collector = ScriptedCollector(ScriptedShop(controls=["Aggiungi al carrello"]))
+    collector.store, collector.run_id = store, run_id
+    tab = Tab(collector, GUARD, profile="mobile")
+    tab.browser = ClosingBrowser(collector.shop)
+    page = {"url": f"{SHOP}p/1", "actions": collector.shop.actions(), "guards": {}}
+    with pytest.raises(ConnectionError):
+        tab.act(page["actions"][0], page, "pdp", purpose="add_to_cart", stage="pdp", origin=1.0)
+    steps = store.read_steps(run_id)
+    assert [(s["purpose"], s["status"]) for s in steps] == [("add_to_cart", "error")]
+    assert steps[0]["note"].startswith("ConnectionError: ")
+    assert (f"{SHOP}p/1", "aggiungi al carrello") in tab.uncertain and tab.was_sent(f"{SHOP}p/1", 1.0,
+                                                                                    "aggiungi al carrello")
+    assert tab.act(page["actions"][0], page, "pdp", purpose="add_to_cart", stage="pdp") == (False, "uncertain_earlier")
+    assert tab.browser.acted == ["Aggiungi al carrello"]
+
+
+def stocked(page_id, url, title, text="Solo 3 rimasti"):
+    record = pdp_record(page_id, title=title)
+    record["audit"]["persuasion"]["scarcity"] = [{"text": text, "number": 3, "in_card": False, "overlay": False}]
+    return {**record, "url": url, "final_url": url}
+
+
+@pytest.mark.parametrize("banner_text, fired", [("Solo 3 rimasti", False), (None, True)])
+def test_a_scarcity_line_shown_on_every_page_is_site_copy(monkeypatch, no_waits, banner_text, fired):
+    """The same statement on the home page (an announcement bar) is no product's stock claim; without it on the home
+    page, the same number on every product is the low-stock signal."""
+    others = [f"{SHOP}p/{n}" for n in (2, 3, 4)]
+    scarcity = [{"text": banner_text, "number": 3, "in_card": False, "overlay": False}] if banner_text else []
+    home = {"page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "url": SHOP, "final_url": SHOP,
+            "classification": {"type": "home"},
+            "audit": {"doc": {"word_count": 30}, "persuasion": {"scarcity": scarcity},
+                      "products": {"cards": [{"href": url} for url in others]}}}
+    product = {**stocked("mobile-pdp-1", f"{SHOP}p/1", "Felpa Bosco"), "profile": "mobile", "stage": "pdp"}
+    loads = [stocked("v1", f"{SHOP}p/1", "Felpa Bosco"), stocked("v2", f"{SHOP}p/1", "Felpa Bosco"),
+             *(stocked(f"o{n}", url, f"Maglia {n}") for n, url in enumerate(others))]
+    monkeypatch.setattr(deception, "_Live", ScriptedVisits(loads).live())
+    result = deception.run_deception_tests(None, EngagementSettings(url=SHOP), [home, product], profile="mobile",
+                                           guard=GUARD)
+    low = result["low_stock"]
+    assert low["assessed"] and (low["same_number_products"] == 3) is fired  # the product and OTHER_PRODUCTS
+    assert low.get("site_copy") == ([banner_text] if banner_text else None)
+    assert (checks._low_stock(low)[0] >= 0.5) is fired
+
+
+# ---------------------------------------------------------------- review round 1: landing home, aborted loads
+
+
+class DetourHandler(SimpleHTTPRequestHandler):
+    """The fixture shop with two category links before the real one: one redirected to the home page (an empty or
+    seasonal category), one answered 204 (Chrome aborts the load and keeps the previous document)."""
+
+    root = Path(__file__).with_name("fixtures") / "shop"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(self.root), **kwargs)
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        if self.path.startswith("/category.html?c=nuovi"):
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif self.path.startswith("/category.html?c=vuota") or self.path == "/vuoto":
+            self.send_response(204)
+            self.end_headers()
+        elif self.path in ("/", "/index.html"):
+            data = (self.root / "index.html").read_text(encoding="utf-8").replace(
+                '<li><a href="category.html">Scarpe da corsa</a></li>',
+                '<li><a href="category.html?c=nuovi">Novità</a></li><li><a href="category.html?c=vuota">Saldi</a></li>'
+                '<li><a href="category.html">Scarpe da corsa</a></li>').encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        else:
+            super().do_GET()
+
+
+@pytest.fixture
+def detour_site():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), DetourHandler)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}/"
+    server.shutdown()
+    server.server_close()
+
+
+def test_category_links_that_land_home_or_abort_are_skipped_for_the_real_listing(transport, detour_site, quick):
+    url = detour_site + "index.html"
+    settings = EngagementSettings(url=url, profiles=["desktop"], stages=["home", "plp"], consent="none",
+                                  settle_timeout_s=8)
+    collector = PageCollector(transport, None, None, profile="desktop", screenshots=False, settle_timeout_s=8,
+                              context_id=new_context(transport))
+    pages, missing = discover_funnel(collector, settings, profile="desktop",
+                                     guard=CheckoutGuard(url, lexicon_for("it")))
+    shown = [(p["url"].removeprefix(detour_site), p["stage"], p["classification"]["type"]) for p in pages]
+    assert shown == [("index.html", "home", "home"), ("category.html?c=nuovi", "extra", "home"),
+                     ("category.html?c=vuota", "extra", "other"), ("category.html", "plp", "plp")]
+    aborted = pages[2]
+    assert "navigation_error" in aborted["classification"]["signals"] and not aborted["audit"]
+    assert "navigation_error: net::ERR_ABORTED" in aborted["notes"]
+    assert not [m for m in missing if m["stage"] in ("home", "plp")]
+
+
+def test_a_start_url_chrome_aborts_is_a_failed_home_load(transport, detour_site, quick):
+    """A fresh tab whose start URL answers 204 stays on about:blank: a navigation error, not an empty home page."""
+    settings = EngagementSettings(url=detour_site + "vuoto", profiles=["desktop"], stages=["home", "plp"],
+                                  settle_timeout_s=8)
+    collector = PageCollector(transport, None, None, profile="desktop", screenshots=False, settle_timeout_s=8,
+                              context_id=new_context(transport))
+    pages, missing = discover_funnel(collector, settings, profile="desktop",
+                                     guard=CheckoutGuard(settings.url, lexicon_for("it")))
+    assert [(p["stage"], p["final_url"]) for p in pages] == [("extra", "about:blank")]
+    assert "navigation_error: net::ERR_ABORTED" in pages[0]["notes"]
+    assert {m["stage"]: m["reason"] for m in missing if m["stage"] in ("home", "plp")} == {
+        "home": "navigation_error", "plp": "navigation_error"}
+
+
+CART_WITH_SLIDE_IN = """<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Carrello - Negozio</title>
+<style>body{font-family:sans-serif;margin:20px} td{padding:8px}</style></head><body>
+<h1>Il tuo carrello</h1>
+<table class="cart"><tr class="cart-item"><td class="name">Scarpa Aurora</td><td class="price">49,90 €</td>
+<td><input type="number" value="1" aria-label="Quantità" min="1"></td>
+<td><button class="remove" onclick="fetch('/cart/remove',{method:'POST'});this.closest('tr').remove()">×</button></td>
+</tr></table>
+<p>Subtotale: 49,90 €</p><p>Totale: 49,90 €</p><p><a class="checkout" href="checkout.html">Procedi al checkout</a></p>
+<div role="dialog" aria-label="Newsletter" style="position:fixed;right:10px;bottom:10px;width:300px;height:170px;
+background:#fff;border:1px solid #000;padding:8px">
+<p>Iscriviti alla newsletter e ricevi il 10% di sconto sul primo ordine</p>
+<button class="close" onclick="this.closest('[role=dialog]').remove()">×</button></div>
+</body></html>"""
+
+
+class PostLog(QuietHandler):
+    posts: list = []
+
+    def do_POST(self):
+        self.posts.append(self.path)
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+def test_an_overlay_close_never_clicks_another_control_with_its_label(transport, tmp_path, quick):
+    """A cart line's "×" comes before a newsletter slide-in's own "×" in the document: the close goes to the slide-in
+    (it goes away) and the cart is left untouched (no remove request reaches the shop)."""
+    (tmp_path / "cart.html").write_text(CART_WITH_SLIDE_IN, encoding="utf-8")
+    PostLog.posts = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(PostLog, directory=str(tmp_path)))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}/cart.html"
+    store = RunStore(tmp_path / "runs")
+    run_id = store.new_run("audit", url, {})
+    collector = PageCollector(transport, store, run_id, profile="desktop", screenshots=False, settle_timeout_s=8,
+                              context_id=new_context(transport))
+    tab = Tab(collector, CheckoutGuard(url, lexicon_for("it")), profile="desktop")
+    try:
+        record = tab.load(url, stage="cart", page_id="desktop-cart-1")
+        page = tab.observe()
+        assert [a["label"] for a in page["actions"]].count("×") == 2  # the same label twice on the page
+        closed = tab.dismiss(record["audit"], record, stage="cart")
+        assert [(c["kind"], c["executed"], c["gone"]) for c in closed] == [("newsletter", True, True)]
+        assert tab.value("document.querySelectorAll('tr.cart-item').length") == 1
+        steps = store.read_steps(run_id)
+        assert [(s["purpose"], s["label"]) for s in steps] == [("dismiss_overlay", "×")]
+    finally:
+        tab.close()
+        server.shutdown()
+        server.server_close()
+    assert PostLog.posts == []
+
+
+def test_own_controls_match_an_overlay_button_at_either_scroll():
+    audit = {"viewport": {"scroll_y": 300},
+             "overlays": [{"buttons": [{"label": "×", "kind": "close", "rect": {"x": 900, "y": 1000, "w": 20,
+                                                                                 "h": 20}}]}]}
+    accept = own_controls(audit["overlays"][0]["buttons"], audit)
+    fixed = {"label": "×", "rect": {"x": 900, "y": 700, "w": 20, "h": 20}}  # viewport y = 1000 - 300
+    elsewhere = {"label": "×", "rect": {"x": 300, "y": 700, "w": 20, "h": 20}}
+    assert accept(fixed, {"scroll": {"y": 0}}) and accept(fixed, {"scroll": {"y": 300}})
+    assert accept({"label": "×", "rect": {"x": 900, "y": 500, "w": 20, "h": 20}}, {"scroll": {"y": 500}})  # in flow
+    assert not accept(elsewhere, {"scroll": {"y": 300}}) and not accept({"label": "×"}, {"scroll": {"y": 0}})
+    assert not own_controls([{"label": "×"}], audit)(fixed, {"scroll": {"y": 0}})  # no rect: nothing matches

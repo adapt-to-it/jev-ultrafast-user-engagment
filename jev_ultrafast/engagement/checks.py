@@ -591,9 +591,18 @@ def _structured(key):
 
 
 def _shipping_shown(page) -> bool:
-    audit = _dom(page)
+    """A shipping cost stated on the page: the product page's shipping line, the cart's shipping row or value. A line
+    that leaves the cost to the checkout ("Spedizione calcolata al checkout") states none."""
+    audit, lx = _dom(page), _lx(page)
     cart = audit.get("cart") or {}
-    return bool((audit.get("pdp") or {}).get("shipping_text") or cart.get("shipping_text")
+
+    def stated(text) -> bool:
+        text = " ".join(str(text or "").split())
+        deferred = "shipping_deferred" in lx and lx["shipping_deferred"].search(text) and not (
+            "free_shipping" in lx and lx["free_shipping"].search(text))
+        return bool(text) and not deferred
+
+    return bool(stated((audit.get("pdp") or {}).get("shipping_text")) or stated(cart.get("shipping_text"))
                 or cart.get("shipping_value") is not None)
 
 
@@ -814,7 +823,7 @@ def _low_stock(test):
     value = 0.9 if len(strong) >= 2 else max(changed, shared, contradicted)
     evidence = {k: test.get(k) for k in ("visits", "products", "same_number_products", "changed_between_visits")}
     for key in ("contradictions", "single_unit_excluded", "single_unit_products", "corroborated", "revisit_failure",
-                "card_scope_unknown", "change_scope_unknown"):
+                "card_scope_unknown", "change_scope_unknown", "site_copy"):
         if test.get(key):
             evidence[key] = test[key]
     return value, evidence

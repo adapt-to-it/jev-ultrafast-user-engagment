@@ -63,7 +63,10 @@
     return !srOnly(e);
   });
   const box = e => { const r = rectOf(e); return {x: Math.round(r.left + SX), y: Math.round(r.top + SY), w: Math.round(r.width), h: Math.round(r.height)}; };
-  const fold = e => rectOf(e).top + SY < VH;
+  // Parked beside the viewport (a closed off-canvas menu or cart drawer, translateX(±100%)): the page never scrolls
+  // there, so the shopper cannot see it without opening it. Above the fold means on the first screen, in both axes.
+  const offCanvas = e => { const r = rectOf(e); return r.right <= 0 || r.left >= VW; };
+  const fold = e => rectOf(e).top + SY < VH && !offCanvas(e);
   const area = e => { const r = rectOf(e); return Math.round(r.width * r.height); };
   const text = e => clean(e.innerText !== undefined ? e.innerText : e.textContent);
   // A <label> that wraps its control: the label's own words, not the options of the select inside it.
@@ -338,8 +341,10 @@
       review_count: num(rating.reviewCount ?? rating.ratingCount) ?? (product.review ? [].concat(product.review).length : null),
       has_return_policy: !!(product.hasMerchantReturnPolicy || offers.some(o => o && o.hasMerchantReturnPolicy)),
       has_shipping: !!(offers.some(o => o && o.shippingDetails) || product.shippingDetails), offers: offers.length,
-      // Offer.inventoryLevel (a QuantitativeValue or a number) of a single offer: with variants it is not the page's
-      inventory_level: offers.length === 1 && stock !== undefined ? num(stock && typeof stock === 'object' ? stock.value : stock) : null,
+      // Offer.inventoryLevel (a QuantitativeValue or a number) of a single offer: with variants (several offers, or an
+      // AggregateOffer summing them) it is not the page's
+      inventory_level: offers.length === 1 && stock !== undefined && !typesOf(offer).includes('AggregateOffer') &&
+        !(num(offer.offerCount) > 1) ? num(stock && typeof stock === 'object' ? stock.value : stock) : null,
     };
   }
   const itemList = ofType('ItemList')[0];
@@ -468,8 +473,10 @@
     const m = t && t.match(PRICE);
     if (!m) return null;
     const cur = m[0].match(new RegExp(CUR, 'i'));
+    // A bare "$" is many currencies: an ISO code right after the amount names it ("$485.00 CAD", Shopify).
+    const iso = cur && cur[0] === '$' && t.slice(m.index + m[0].length).match(/^\s?(USD|CAD|AUD|NZD|MXN|SGD|HKD)(?![A-Za-z])/);
     return {match: m[0], value: parseNum(m[0].match(new RegExp(NUM))[0]),
-      currency: cur ? CURRENCY[cur[0].toLowerCase()] || cur[0].toUpperCase() : null};
+      currency: iso ? iso[1] : cur ? CURRENCY[cur[0].toLowerCase()] || cur[0].toUpperCase() : null};
   };
   const struck = e => {
     for (let n = e, i = 0; n && i < 4; n = parentOf(n), i++) {
@@ -524,9 +531,13 @@
   // A label-value list (<dl><dt>Subtotale</dt><dd>44,90 €</dd>..., a grid of label and value boxes, a totals row
   // under a header row) is one box that holds every amount: when the row found above holds other prices, this
   // price's label is the box just before its own (not an amount, short, no link), or in a table row of amounts only
-  // its column's header cell; an amount that opens a value cell holding a note with another amount ("Totale | 94,70 €
-  // (include 17,08 € IVA)", a <dd> with "(IVA inclusa: 8,98 €)") takes the cell just before. Table rows that list a
-  // product keep the whole row. The pair is quoted as the page shows it (no space where it has none: "Spedizione:4,90 €").
+  // its column's header cell, or in a row headed by its own <th> (or a first <td> with words) that header (an amount
+  // in a cell with words of its own, "(IVA 8,98 €)", keeps that cell); an amount that opens a value cell holding a
+  // note with another amount ("Totale | 94,70 € (include 17,08 € IVA)", a <dd> with "(IVA inclusa: 8,98 €)") takes the
+  // cell just before, and so does an amount alone in a value cell beside a tax note ("49,80 € IVA inclusa", "IVA e
+  // spedizione incluse") when that cell is a summary label ("Spedizione | Gratuita sopra 49,00 €" keeps its own
+  // words). Table rows that list a product keep the whole row. The pair is quoted as the page shows it (no space
+  // where it has none: "Spedizione:4,90 €").
   const others = (e, row) => [...row.querySelectorAll('*')].some(o => o !== e && priceText.has(o) && !o.contains(e) && !e.contains(o));
   const linked = x => x.matches('a[href]') || !!x.querySelector('a[href]') || !!closest(x, 'a[href]');
   const labelOk = (n, t) => t && t.length <= 60 && !PRICE.test(t) && !linked(n);
@@ -540,11 +551,38 @@
     const cell = head && head !== row ? head.cells[item.cellIndex] : null;
     return cell && text(cell) && !PRICE.test(text(cell)) ? cell : null;
   };
+  // words that change what an amount is (a threshold, an instalment, a unit or a 30-day low), unlike a note that names
+  // what the amount includes or leaves out ("IVA e spedizione incluse", "Tasse incluse")
+  const AMOUNT_KINDS = ['free_shipping', 'installments', 'unit_price', 'lowest_price_30d'];
+  const summaryLabel = t => ['subtotal', 'total', 'shipping', 'fee'].some(k => hit(k, t));
+  // label and value boxes side by side: <dt> and <dd>, two table cells, or a grid whose children alternate label, amount
+  const altGrid = memo(g => {
+    const c = g ? [...g.children] : [];
+    return c.length >= 4 && c.length % 2 === 0 && c.every((x, i) => (i % 2 === 1) === PRICE.test(text(x)));
+  });
+  const sideBySide = (n, row) => (n.tagName === 'DT' && row.tagName === 'DD') ||
+    (/^(TD|TH)$/.test(n.tagName) && row.tagName === 'TD') || altGrid(parentOf(row));
   const labelBox = (e, row) => {
-    if (row === e || !others(e, row)) return null;
+    if (row === e) return null;
     let item = e;
     while (parentOf(item) && parentOf(item) !== row) item = parentOf(item);
-    if (row.tagName === 'TR') { const cell = headerCell(item, row); return cell && {el: cell, item, row_text: text(row)}; }
+    if (!others(e, row)) {
+      const n = row.previousElementSibling, own = text(row).replace(priceText.get(e), ' ');
+      const taxNote = (hit('vat', own) || hit('tax_line', own)) && !AMOUNT_KINDS.some(k => hit(k, own));
+      return n && taxNote && sideBySide(n, row) && labelOk(n, text(n)) && summaryLabel(text(n)) && !linked(row)
+        ? pairOf(n, row, parentOf(row)) : null;
+    }
+    if (row.tagName === 'TR') {
+      const cell = headerCell(item, row);
+      // quoted with its header row when that row is right above (as the page reads), else the row of amounts alone
+      const both = cell && text(parentOf(cell)) + ' ' + text(row), table = cell && closest(row, 'table');
+      if (cell) return {el: cell, item, row_text: table && text(table).includes(both) ? both : text(row)};
+      const cells = [...(row.cells || [])];
+      const th = cells.find(c => c.tagName === 'TH' && c !== item) ||
+        (cells[0] && cells[0] !== item && cells[0].tagName === 'TD' && /\p{L}/u.test(text(cells[0])) ? cells[0] : null);
+      if (!th || !labelOk(th, text(th))) return null;
+      return /\p{L}/u.test(text(item).replace(PRICE, ' ')) ? {row: item} : pairOf(th, item, row);
+    }
     for (let n = item.previousElementSibling; n; n = n.previousElementSibling) {
       const t = text(n);
       if (t) return labelOk(n, t) && !linked(item) ? pairOf(n, item, row) : null;
@@ -552,16 +590,35 @@
     const n = /^(TD|DD)$/.test(row.tagName) && item === row.firstElementChild ? row.previousElementSibling : null;
     return n && parentOf(row) && labelOk(n, text(n)) && !linked(row) ? pairOf(n, row, parentOf(row)) : null;
   };
+  // A shipping method's price in a value cell headed by shipping wording (WooCommerce: <th>Spedizione</th><td><ul><li>
+  // <input type="hidden|radio"><label>Tariffa unica: 4,90 €</label>) is the shipping cost when it is the cell's only
+  // method or the checked one; any other method, and a checkbox add-on ("Spedizione assicurata"), stays an option.
+  const shipMethod = e => {
+    const lab = closest(e, 'label'), cell = lab && closest(lab, 'td,dd'), control = lab && lab.control;
+    if (!cell || (control && control.type !== 'radio')) return null;
+    const head = cell.tagName === 'DD' ? cell.previousElementSibling
+      : [...((parentOf(cell) && parentOf(cell).cells) || [])].find(c => c !== cell && c.tagName === 'TH');
+    const words = head && /^(DT|TH)$/.test(head.tagName) ? text(head) : '';
+    if (!labelOk(head, words) || !hit('shipping', words)) return null;
+    const methods = [...cell.querySelectorAll('label')].filter(visible);
+    return methods.length === 1 || (control && control.checked) ? pairOf(head, lab, parentOf(cell)) : null;
+  };
+  // a link that leaves the row (a product page), not a toggle such as WooCommerce's "Cambia indirizzo" (href="#")
+  const leaves = x => [...(x.matches('a[href]') ? [x] : []), ...x.querySelectorAll('a[href]')]
+    .some(a => !/^\s*(#|javascript:)/i.test(a.getAttribute('href') || ''));
   const prices = [];
   for (const e of leafPrices.slice(0, 600)) {
     const t = priceText.get(e), p = parsePrice(t);
     if (!p || p.value === null) continue;
-    const row = rowOf(e), pair = labelBox(e, row);
+    let row = rowOf(e), pair = labelBox(e, row);
+    if (pair && pair.row) { row = pair.row; pair = null; }
+    const method = !pair && !struck(e) ? shipMethod(e) : null;
+    if (method) pair = method;
     const rowText = pair ? text(pair.el) + ' ' + t : row === e ? t : text(row);
     const label = cut(pair ? text(pair.el) : rowText.replace(p.match, ' '), 100), scope = pair ? [pair.el, pair.item] : [row];
-    const summaryRow = rowText.length <= 100 && !scope.some(x => x.querySelector && x.querySelector('a[href]'));
-    const strike = struck(e), option = !!(closest(e, 'label') || scope.some(x => x.querySelector && x.querySelector('input[type="checkbox"],input[type="radio"]')));
-    const kind = strike ? 'strike' : option ? 'option' : hit('free_shipping', label) ? 'threshold' : hit('installments', label + ' ' + t) ? 'installment'
+    const summaryRow = rowText.length <= 100 && !scope.some(x => x.querySelector && leaves(x));
+    const strike = struck(e), option = !method && !!(closest(e, 'label') || scope.some(x => x.querySelector && x.querySelector('input[type="checkbox"],input[type="radio"]')));
+    const kind = strike ? 'strike' : method ? 'shipping' : option ? 'option' : hit('free_shipping', label) ? 'threshold' : hit('installments', label + ' ' + t) ? 'installment'
       : hit('unit_price', t + ' ' + label) ? 'unit' : hit('lowest_price_30d', label) ? 'lowest30'
       : summaryRow && hit('subtotal', label) ? 'subtotal' : summaryRow && hit('total', label) ? 'total'
       : summaryRow && hit('shipping', label) ? 'shipping' : summaryRow && hit('fee', label) ? 'fee' : 'price';
@@ -579,12 +636,17 @@
   // "Concludi ordine" on a same-site link into a checkout URL is the cart's way into the checkout (legacy WooCommerce
   // Italian), not a control that places an order: lexicon_hit "checkout". Buttons and href-less controls stay place_order.
   // Same site: the registrable domain, as CheckoutGuard compares it (www.shop.it and checkout.shop.it are one site).
+  // lexicon.PUBLIC_SUFFIXES' hosting platforms and GENERIC_SECOND_LEVEL ("com.vn", "gob.mx": an unlisted ccTLD level)
+  const HOSTED = new RegExp('\\.(myshopify\\.com|github\\.io|netlify\\.app|vercel\\.app|herokuapp\\.com|wixsite\\.com|' +
+    'pages\\.dev|web\\.app|altervista\\.org|webnode\\.(it|com|page)|jimdosite\\.com|jimdofree\\.com|weebly\\.com|' +
+    'webflow\\.io|(square|business|company)\\.site|bigcartel\\.com|mystrikingly\\.com|tilda\\.ws|onrender\\.com)$');
+  const SECOND_LEVEL = /^(ac|co|com|edu|gob|go|gov|gv|ltd|me|mil|ne|net|nom|or|org|plc|sch)$/;
   const siteOf = host => {
     host = String(host || '').toLowerCase().replace(/\.$/, '');
     if (!host.includes('.') || /^[\d.]+$|:/.test(host)) return host;
     const l = host.split('.');
-    const n = /\.(myshopify\.com|github\.io|netlify\.app|vercel\.app|herokuapp\.com|wixsite\.com|pages\.dev|web\.app)$/.test(host)
-      || (l.length > 2 && l[l.length - 1].length === 2 && /^(co|com|org|net|ac|gov|ne|or|ltd|plc|me|gv)$/.test(l[l.length - 2])) ? 3 : 2;
+    const n = HOSTED.test(host) || (l.length > 2 && l[l.length - 1].length === 2 && SECOND_LEVEL.test(l[l.length - 2]))
+      ? 3 : 2;
     return l.slice(-n).join('.');
   };
   const checkoutLink = e => {
@@ -608,7 +670,8 @@
       primary_like: p.filled && a >= 900 && label.length >= 2 && label.length <= 40,
       disabled: e.matches(':disabled,[aria-disabled="true"]'), overlay: inOverlay(e)};
   };
-  const ctaPool = [...allButtons.filter(e => ctaKey(e) && !inOverlay(e)), ...allButtons.filter(e => !ctaKey(e) && fold(e) && !inOverlay(e))]
+  const ctaPool = [...allButtons.filter(e => ctaKey(e) && !inOverlay(e) && !offCanvas(e)),
+    ...allButtons.filter(e => !ctaKey(e) && fold(e) && !inOverlay(e))]
     .slice(0, 150).map(ctaOf);
   const order = c => (c.lexicon_hit && PRIMARY_KEYS.has(c.lexicon_hit) ? 0 : c.lexicon_hit ? 1 : c.primary_like ? 2 : 3);
   const ctas = [...ctaPool].sort((a, b) => order(a) - order(b) || (b.above_fold - a.above_fold) || a.rect.y - b.rect.y).slice(0, 40);
@@ -619,6 +682,11 @@
   // ------------------------------------------------------------------ product cards
   const sameDoc = href => href.split('#')[0] === location.href.split('#')[0];
   const linkOk = a => { const h = (a.getAttribute('href') || '').trim(); return !!h && !/^(#|javascript:|mailto:|tel:)/i.test(h); };
+  // URL lexicon patterns read the path and query only: a host such as "smartcart.example" says nothing.
+  const urlPart = href => { try { const u = new URL(href, location.href); return u.pathname + u.search; } catch (e) { return ''; } };
+  // A link whose GET changes the cart ("?add-to-cart=7", "/cart/change?line=1&quantity=0", "?remove_item=..."): never
+  // a product or cart link, whatever it is called.
+  const cartAction = a => { let p = urlPart(a.href); try { p = decodeURIComponent(p); } catch (e) { /* as is */ } return hit('cart_action_url', p); };
   const cardPrices = prices.filter(p => p.kind === 'price' && p.value > 0 && !p.overlay && p.area !== 'footer');
   const count = new Map();
   for (const p of cardPrices) for (let a = parentOf(p.el), d = 0; a && d < 14; a = parentOf(a), d++) count.set(a, (count.get(a) || 0) + 1);
@@ -633,12 +701,21 @@
       }
     }
   }
-  const cardLink = memo(c => [...c.querySelectorAll('a[href]')].filter(a => linkOk(a) && !sameDoc(a.href))
-    .sort((x, y) => name(y).length - name(x).length)[0] || (c.tagName === 'A' && linkOk(c) ? c : null));
+  // A card's links (the card itself when it is one); its product link is none that adds to the cart (WooCommerce's
+  // "?add-to-cart=7" link, whose aria-label "Aggiungi al carrello: “Felpa”" is often the card's longest name): the
+  // link that holds the card's heading or image first, then one that is no "buy now" shortcut, then the longest name.
+  const cardAnchors = memo(c => {
+    const inner = [...c.querySelectorAll('a[href]')].filter(a => linkOk(a) && !sameDoc(a.href));
+    return inner.length ? inner : c.tagName === 'A' && linkOk(c) ? [c] : [];
+  });
+  const holds = a => !!(a.querySelector('img,picture,h1,h2,h3,h4,h5,h6,[itemprop="name"]') || closest(a, 'h1,h2,h3,h4,h5,h6'));
+  const cardLink = memo(c => cardAnchors(c).filter(a => !cartAction(a) && !hit('add_to_cart', name(a)))
+    .sort((x, y) => (holds(y) - holds(x)) || (hit('buy_now', name(x)) - hit('buy_now', name(y))) || name(y).length - name(x).length)[0] || null);
+  const hasLink = c => cardAnchors(c).length > 0;
   let cardGroups = [...groups.values()].map(set => [...set]).filter(list => {
     const tags = {};
     list.forEach(c => { tags[c.tagName] = (tags[c.tagName] || 0) + 1; });
-    return list.length >= 3 && Math.max(...Object.values(tags)) >= list.length * 0.6 && list.filter(cardLink).length >= list.length * 0.6;
+    return list.length >= 3 && Math.max(...Object.values(tags)) >= list.length * 0.6 && list.filter(hasLink).length >= list.length * 0.6;
   });
   if (!cardGroups.length) {
     const parents = new Map();
@@ -648,8 +725,14 @@
         if (n.childElementCount >= 4) { if (!parents.has(n)) parents.set(n, new Set()); parents.get(n).add(item); break; }
       }
     }
-    cardGroups = [...parents.values()].map(s => [...s]).filter(l => l.length >= 4 && l.filter(cardLink).length >= l.length * 0.75);
+    cardGroups = [...parents.values()].map(s => [...s]).filter(l => l.length >= 4 && l.filter(hasLink).length >= l.length * 0.75);
   }
+  // The page's own product (the one box of a group that holds the h1) is no card, even beside the related cards in
+  // one parent; the group keeps the others (own block plus two related cards: two cards).
+  cardGroups = cardGroups.map(l => {
+    const own = l.filter(c => h1.some(h => within(h, c)));
+    return own.length === 1 ? l.filter(c => c !== own[0]) : l;
+  }).filter(l => l.length >= 2);
   cardGroups.sort((a, b) => b.length - a.length);
   const cardsFlat = cardGroups.flat(), cardSet = new Set(cardsFlat);
   const inCard = memo(e => { for (let n = e; n; n = parentOf(n)) if (cardSet.has(n)) return true; return false; });
@@ -715,31 +798,70 @@
   const passwords = visibleFields.filter(e => e.type === 'password' && !['header', 'nav', 'footer'].includes(areaOf(e)) &&
     (!inOverlay(e) || overlays.some(o => (o.modal || o.blocking) && within(e, o.el))));
   const ccFields = allFields.filter(e => tokens(e).some(t => t.startsWith('cc-')) || hit('payment_field', fieldLabel(e) + ' ' + (e.name || '') + ' ' + (e.id || '')));
-  const payFrames = ALL.filter(e => e.tagName === 'IFRAME' && /stripe|adyen|braintree|checkout\.com|paypal|nexi|worldpay|klarna|satispay|mollie|squareup|cardinal/i
+  // Only a rendered frame is a payment field: payment SDKs also load hidden frames on every page (Klarna's
+  // display:none backend_bridge_iframe beside its on-site messaging), which would make any page look like a checkout.
+  const payFrames = ALL.filter(e => e.tagName === 'IFRAME' && visible(e) && /stripe|adyen|braintree|checkout\.com|paypal|nexi|worldpay|klarna|satispay|mollie|squareup|cardinal/i
     .test((e.getAttribute('src') || '') + ' ' + (e.getAttribute('title') || '') + ' ' + (e.name || '')));
   const shortTexts = blocks.filter(b => b.text.length <= 200 && !b.overlay);
   // A guest exit counts on the page, or inside the login dialog that asks for the password ("Accedi / Registrati /
-  // Continua come ospite"); guest wording in another overlay (consent, newsletter) does not.
+  // Continua come ospite"); guest wording in another overlay (consent, newsletter) does not, nor does a sentence that
+  // denies it ("Non è possibile acquistare senza creare un account").
   const loginOverlays = overlays.filter(o => o.kind === 'login'), inLogin = e => loginOverlays.some(o => within(e, o.el));
-  const guestOption = allButtons.some(b => (!inOverlay(b) || inLogin(b)) && hit('guest', name(b))) ||
-    visibleFields.some(f => ['radio', 'checkbox'].includes(f.type) && hit('guest', fieldLabel(f))) || shortTexts.some(b => hit('guest', b.text)) ||
-    blocks.some(b => b.overlay && b.text.length <= 200 && inLogin(b.el) && hit('guest', b.text));
+  const guestHit = t => !!t && t.split(/[.;!?]+/).some(s => hit('guest', s) && !hit('guest_negated', s));
+  const guestOption = allButtons.some(b => (!inOverlay(b) || inLogin(b)) && guestHit(name(b))) ||
+    visibleFields.some(f => ['radio', 'checkbox'].includes(f.type) && guestHit(fieldLabel(f))) || shortTexts.some(b => guestHit(b.text)) ||
+    blocks.some(b => b.overlay && b.text.length <= 200 && inLogin(b.el) && guestHit(b.text));
   const gatePasswords = passwords.filter(e => !e.disabled && (e.required || e.getAttribute('aria-required') === 'true' ||
     !hit('optional', fieldLabel(e) + ' ' + clean(e.getAttribute('placeholder')))));
   // The account gate (login_required, when no guest exit is offered): A, a gate password in a blocking dialog; B, a
   // registration password outside overlays, beside an address form or not (autocomplete new-password, a second
-  // password in its form, or registration wording without login wording in its label or in its form's headings,
-  // legend or submit; current-password never); C, a gate password or gate wording on a page that offers no other way
-  // to enter one's details: a personal-data field outside every password form and every registration form (one headed
-  // or submitted with registration wording, and no login wording, that holds no address field). A login box beside a
-  // delivery form is no gate, and a login-or-register box ("Accedi o registrati") is a login box. Invitations to log
-  // in for speed ("Accedi per completare l'acquisto più velocemente", "Log in to check out faster"), link texts and
-  // "Hai già un account?" prompts are not gate wording.
-  const formOf = e => e.form || closest(e, 'form');
-  const passwordForm = e => { const f = formOf(e); return !!(f && f.querySelector('input[type="password"]')); };
+  // password in its form, or registration wording without login wording in its form's headings, legend or submit, or
+  // in its own label when its form is no login box; current-password never); C, a gate password or gate wording on a
+  // page that offers no other way to enter one's details: a personal-data field outside every password form (one that
+  // shows a password, or hides one that is no registration password and holds no address field: WooCommerce's hidden
+  // "Creare un account?" password leaves the billing form a way in) and every registration form (one headed or
+  // submitted with registration wording, and no login wording, that holds no address field). A field in the same form
+  // or box as the login password belongs to the login (an email above it is no way in, whatever its "Continua" does);
+  // a login box beside a delivery form is no gate, and a login-or-register box ("Accedi o registrati") is a login box.
+  // Invitations to log in for speed ("Accedi per completare l'acquisto più velocemente", "Log in to check out
+  // faster"), link texts and "Hai già un account?" prompts are not gate wording.
+  const ADDRESS = /^(street-address|address-line[123]|postal-code|address-level[1-4])$/;
+  const addressField = e => tokens(e).some(t => ADDRESS.test(t)) || hit('address_field', fieldLabel(e)) ||
+    hit('address_field', clean(e.name)) || hit('address_field', clean(e.id));
+  // A field outside every <form> (a single-page app's account box) belongs to the box of the shown password beside it:
+  // the nearest ancestor of that password (at most 4 levels up, short of main) that holds another field and a button,
+  // and no form or address field (a delivery section is no account box). Such a box counts as a form.
+  const boxes = new Set();
+  for (const p of passwords.filter(p => !p.form && !closest(p, 'form'))) {
+    for (let a = parentOf(p), i = 0; a && i < 4 && !a.matches('body,main,[role="main"]'); a = parentOf(a), i++) {
+      if (inside(a, 'form').length || inside(a, FIELD).some(x => visible(x) && addressField(x))) break;
+      if (inside(a, FIELD).some(x => x.type !== 'password' && visible(x) && !isSearch(x)) && inside(a, BTN).some(visible)) {
+        boxes.add(a);
+        break;
+      }
+    }
+  }
+  const formOf = memo(e => {
+    const f = e.form || closest(e, 'form');
+    if (f) return f;
+    for (let n = parentOf(e); n; n = parentOf(n)) if (boxes.has(n)) return n;
+    return null;
+  });
+  const addressForm = memo(f => (f.elements ? [...f.elements] : inside(f, FIELD))
+    .some(e => e.matches && e.matches(FIELD) && visible(e) && addressField(e)));
+  // A hidden registration password (new-password, or password_new wording in its label) is an optional account
+  // creation and leaves its form a way in; another hidden password (a two-step login that shows it after the email)
+  // keeps its form a password form.
+  const registrationPassword = p => tokens(p).includes('new-password') ||
+    hit('password_new', fieldLabel(p) + ' ' + clean(p.getAttribute('placeholder')));
+  const passwordForm = e => {
+    const f = formOf(e);
+    return !!f && (passwords.some(p => formOf(p) === f) ||
+      ([...f.querySelectorAll('input[type="password"]')].some(p => !registrationPassword(p)) && !addressForm(f)));
+  };
   // A form's own wording: its headings, legend and submit controls, else the heading right above it ("Nuovo cliente"
   // as a sibling, or alone in a title box: <div class="box-title"><h3>Crea un account</h3></div>), else the nearest
-  // heading before it inside an ancestor (at most 3 levels up) that holds no other form.
+  // heading before it inside an ancestor (at most 3 levels up) that holds no other form or box.
   const HEADING = 'h1,h2,h3,h4,h5,h6,[role="heading"]';
   const headingAbove = n => {
     if (n.matches(HEADING)) return visible(n) ? n : null;
@@ -747,33 +869,39 @@
     const inside = [...n.querySelectorAll(HEADING)].filter(visible);
     return inside.length === 1 ? inside[0] : null;
   };
+  const scopes = a => a.querySelectorAll('form').length + [...boxes].filter(b => within(b, a)).length;
   const formWords = memo(f => {
     const heads = [...f.querySelectorAll(HEADING + ',legend')].filter(visible);
     for (let n = f.previousElementSibling, i = 0; !heads.length && n && i < 3; n = n.previousElementSibling, i++) {
       const h = headingAbove(n);
       if (h) heads.push(h);
     }
-    for (let a = parentOf(f), i = 0; !heads.length && a && a !== document.body && i < 3 && a.querySelectorAll('form').length === 1; a = parentOf(a), i++) {
+    for (let a = parentOf(f), i = 0; !heads.length && a && a !== document.body && i < 3 && scopes(a) === 1; a = parentOf(a), i++) {
       const before = [...a.querySelectorAll(HEADING)].filter(h => visible(h) && (h.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING));
       if (before.length) heads.push(before[before.length - 1]);
     }
-    const submits = [...f.querySelectorAll('button,input[type="submit"],input[type="image"]')]
-      .filter(b => visible(b) && !(b.tagName === 'BUTTON' && ['button', 'reset'].includes(b.type)));
+    // a box has no submit semantics: every button in it
+    const submits = f.tagName === 'FORM' ? [...f.querySelectorAll('button,input[type="submit"],input[type="image"]')]
+      .filter(b => visible(b) && !(b.tagName === 'BUTTON' && ['button', 'reset'].includes(b.type)))
+      : [...f.querySelectorAll('button,input[type="submit"],input[type="image"],[role="button"]')].filter(visible);
     const words = [...heads, ...submits].map(name).filter(Boolean);
-    return {register: words.some(t => hit('register', t)), login: words.some(t => hit('login', t))};
+    // register_only: a word that names a registration and not a login ("Registrati", "Crea account"; "Accedi o
+    // registrati" names a login box)
+    return {register: words.some(t => hit('register', t)), login: words.some(t => hit('login', t)),
+      register_only: words.some(t => hit('register', t) && !hit('login', t))};
   });
   const registerForm = f => !!f && formWords(f).register && !formWords(f).login;
-  const ADDRESS = /^(street-address|address-line[123]|postal-code|address-level[1-4])$/;
-  const addressField = e => tokens(e).some(t => ADDRESS.test(t)) || hit('address_field', fieldLabel(e)) ||
-    hit('address_field', clean(e.name)) || hit('address_field', clean(e.id));
-  const registrationForm = memo(f => registerForm(f) &&
-    ![...(f.elements || [])].some(e => e.matches && e.matches(FIELD) && visible(e) && addressField(e)));
+  const registrationForm = memo(f => registerForm(f) && !addressForm(f));
   const newPassword = e => {
     const t = tokens(e), f = formOf(e);
     if (t.includes('current-password')) return false;
     if (t.includes('new-password') || (f && passwords.filter(p => formOf(p) === f).length >= 2)) return true;
+    // registration wording in the field's own label counts only outside a login box, one whose words name a login and
+    // no registration ("Password scelta in fase di registrazione" under "Hai già un account?" / "Accedi" is a current
+    // password; under "Registrati" beside an "Accedi con Google" button it is a new one)
     const label = fieldLabel(e) + ' ' + clean(e.getAttribute('placeholder'));
-    return hit('password_new', label) || (hit('register', label) && !hit('login', label)) || registerForm(f);
+    const loginBox = !!f && formWords(f).login && !formWords(f).register_only;
+    return hit('password_new', label) || (!loginBox && hit('register', label) && !hit('login', label)) || registerForm(f);
   };
   const entryPath = pageFields.some(e => !passwordForm(e) && !(formOf(e) && registrationForm(formOf(e))) &&
     (e.type === 'email' || tokens(e).some(t => PERSONAL.test(t)) || hit('personal_field', fieldLabel(e))));
@@ -799,7 +927,7 @@
 
   // ------------------------------------------------------------------ search and navigation
   const searchInputs = allFields.filter(isSearch).sort((a, b) => searchScore(b) - searchScore(a) || visible(b) - visible(a));
-  const shown = searchInputs.find(visible);
+  const shown = searchInputs.find(e => visible(e) && !offCanvas(e));  // a search field in a closed drawer is not shown
   const search = shown ? {present: true, above_fold: fold(shown), width: Math.round(rectOf(shown).width),
     has_autocomplete_attr: !!(shown.getAttribute('aria-autocomplete') || shown.getAttribute('role') === 'combobox' ||
       shown.getAttribute('list') || shown.getAttribute('aria-controls') || shown.getAttribute('aria-owns')),
@@ -807,8 +935,6 @@
     : {present: false, above_fold: false, width: 0, has_autocomplete_attr: false, rect: null, hidden_inputs: searchInputs.length,
       toggle: allButtons.some(b => fold(b) && hit('search', name(b)))};
   const sameSite = href => { try { return new URL(href, location.href).host === location.host; } catch (e) { return false; } };
-  // URL lexicon patterns read the path and query only: a host such as "smartcart.example" says nothing.
-  const urlPart = href => { try { const u = new URL(href, location.href); return u.pathname + u.search; } catch (e) { return ''; } };
   // Links come from the whole document even when the element inventory was truncated (policy and contact links sit
   // at the end of the page, in the footer).
   const anchors = truncated ? [...new Set([...ALL.filter(e => e.tagName === 'A'), ...document.querySelectorAll('a[href]')])]
@@ -833,7 +959,9 @@
   const crumbNodes = crumbsEl ? [...crumbsEl.querySelectorAll('li')] : [];
   const crumbItems = (crumbNodes.length ? crumbNodes : crumbsEl ? [...crumbsEl.querySelectorAll('a,span[itemprop="name"]')] : []).map(text).filter(Boolean);
   const generic = visibleLinks.filter(a => hit('generic_link', name(a)));
-  const cartLink = links.find(a => !hit('add_to_cart', name(a)) && (hit('cart', name(a)) || hit('cart_url', urlPart(a.href))));
+  // the cart link: never a link that changes the cart (a mini-cart's "Rimuovi" link before the header's cart link)
+  const cartLink = links.find(a => !hit('add_to_cart', name(a)) && !hit('remove', name(a)) && !cartAction(a) &&
+    (hit('cart', name(a)) || hit('cart_url', urlPart(a.href))));
   const nav = {
     links: visibleLinks.length, nav_links: navLinks.length, categories,
     breadcrumbs: {present: !!(crumbsEl || crumbList), source: crumbsEl ? 'dom' : crumbList ? 'jsonld' : null,
@@ -923,8 +1051,8 @@
       x.getAttribute('aria-checked') === 'true' || x.getAttribute('aria-selected') === 'true');
     const marked = items.some(e => states(e) || states(control(e)));
     const strike = x => /^(DEL|S|STRIKE)$/.test(x.tagName) || /line-through/.test(style(x).textDecorationLine || '');
-    const gone = e => [e, control(e)].some(x => x && (x.disabled || x.getAttribute('aria-disabled') === 'true')) ||
-      hit('out_of_stock', name(e) + ' ' + clean(e.getAttribute('title'))) || GONE.test(classOf(e)) || strike(e) ||
+    const gone = e => [e, control(e)].some(x => x && (x.disabled || x.getAttribute('aria-disabled') === 'true' || GONE.test(classOf(x)))) ||
+      hit('out_of_stock', name(e) + ' ' + clean(e.getAttribute('title'))) || strike(e) ||
       [...e.querySelectorAll('*')].some(x => strike(x) && text(x) && text(x) === text(e));  // <button><s>S</s></button>
     const free = items.find(e => !gone(e));
     const chosen = items.filter(e => marked ? on(e) || on(control(e)) : CHOSEN.test(classOf(e)));
@@ -959,7 +1087,9 @@
       rect: mainPrice.rect, itemprop: mainPrice.itemprop} : null,
     strike_price: strikeNear ? {text: strikeNear.text, value: strikeNear.value} : null,
     stock_text: firstText('stock'), delivery_text: firstText('delivery'),
-    shipping_text: firstText('shipping', b => /\d/.test(b.text) || hit('free_shipping', b.text)) || firstText('shipping'),
+    // a shipping cost: an amount or free-shipping wording, never a cost left to the checkout ("Spedizione calcolata al
+    // checkout") nor a shipping word alone ("Shipping country: United States")
+    shipping_text: firstText('shipping', b => hit('free_shipping', b.text) || (!!parsePrice(b.text) && !hit('shipping_deferred', b.text))),
     returns_text: firstText('returns'), images: gallery.length,
     zoom: gallery.some(e => /zoom/.test(style(e).cursor + ' ' + style(parentOf(e) || e).cursor)) || allButtons.some(b => hit('zoom', name(b))),
     variant_selector: variantGroups.some(g => g.kind === 'buttons') ? 'buttons' : variantGroups.length ? 'select' : 'none',
@@ -984,15 +1114,29 @@
   }
   const atcEls = atcList.map(c => c.el);
   const lineRows = rows.filter(r => !rows.some(o => o !== r && within(o, r)) && !atcEls.some(a => within(a, r)));
-  const qtyText = t => { const m = found('quantity', t); const after = m ? t.slice(m.index + m[0].length).match(/^\W{0,3}(\d+)/) : t.match(/[x×]\s*(\d+)\b/); return after ? parseInt(after[1], 10) : null; };
+  // A quantity in the row's text outside its title: after a quantity word ("Quantità: 2"), a multiplication sign that is
+  // its own token before the number and not after another number ("49,90 € × 2", "x2"), or a number times a price
+  // ("2 × 49,90 €", a mini-cart line); never a title's "Air Max 90" or "Xbox 360", nor a size such as "120 x 80 cm".
+  const qtyText = (t, title) => {
+    const rest = title ? t.split(title).join(' ') : t, m = found('quantity', rest);
+    if (m) { const after = rest.slice(m.index + m[0].length).match(/^\W{0,3}(\d+)/); return after ? parseInt(after[1], 10) : null; }
+    const sign = rest.match(/(?:^|(?<![\d.,])\s)[xX×]\s?(\d{1,3})(?=\s|$)/);
+    if (sign) return parseInt(sign[1], 10);
+    for (const lead of rest.matchAll(/(?:^|\s)(\d{1,3})\s?[xX×]\s?(?=\S)/g)) {
+      const price = PRICE.exec(rest.slice(lead.index + lead[0].length, lead.index + lead[0].length + 24));
+      if (price && price.index === 0) return parseInt(lead[1], 10);
+    }
+    return null;
+  };
   const lineItems = lineRows.slice(0, 20).map(r => {
     // the product link: not the remove link, which comes first in a WooCommerce row ("×", aria-label "Rimuovi ...")
     const link = [...r.querySelectorAll('a[href]')].find(a => !removeControls.includes(a) && !hit('remove', name(a)) && wordy(name(a)));
     const heading = r.querySelector('h2,h3,h4,h5,[itemprop="name"]');
     const rowPrices = prices.filter(p => p.kind !== 'strike' && within(p.el, r)), qty = qtyControls.find(q => within(q, r));
     const fallback = blocks.filter(b => within(b.el, r) && !PRICE.test(b.text) && b.words >= 1).sort((a, b) => b.text.length - a.text.length)[0];
-    const title = cut(heading ? text(heading) : link && name(link) ? name(link) : fallback ? fallback.text : '', 120);
-    const q = qty ? parseInt(qty.value, 10) : qtyText(text(r));
+    const named = heading ? text(heading) : link && name(link) ? name(link) : fallback ? fallback.text : '';
+    const title = cut(named, 120);
+    const q = qty ? parseInt(qty.value, 10) : qtyText(text(r), named);
     const last = rowPrices[rowPrices.length - 1];
     return {title, qty: Number.isFinite(q) ? q : null, price: last ? last.text : null, price_value: last ? last.value : null,
       removable: removeControls.some(b => within(b, r)), qty_editable: !!qty, addon: hit('addon', title), row_text: cut(text(r), 200)};
@@ -1132,7 +1276,7 @@
     lazy_share: share(imgs.filter(i => i.loading === 'lazy').length, imgs.length), missing_alt: missingAlt};
   const TARGET = 'a[href],button,input:not([type="hidden"]),select,textarea,summary,[role="button"],[role="link"],[role="checkbox"],[role="radio"],[role="switch"],[role="tab"],[role="menuitem"],[role="option"]';
   const inlineLink = e => e.tagName === 'A' && style(e).display === 'inline' && text(blockOf(e)).length > text(e).length + 10;
-  const targets = ALL.filter(e => e.matches(TARGET) && visible(e) && !inlineLink(e)).slice(0, 1500).map(e => {
+  const targets = ALL.filter(e => e.matches(TARGET) && visible(e) && !offCanvas(e) && !inlineLink(e)).slice(0, 1500).map(e => {
     const r = rectOf(e);
     return {w: r.width, h: r.height, cx: r.left + r.width / 2 + SX, cy: r.top + r.height / 2 + SY, x0: r.left + SX, y0: r.top + SY};
   });
@@ -1245,7 +1389,7 @@
   reviewBoxes.filter((e, i) => reviewBoxes.indexOf(e) === i && !reviewBoxes.some(o => o !== e && within(e, o)) && words(quotes.get(e)).length >= 4)
     .slice(0, 4).forEach(e => snip('testimonial', quotes.get(e), 'review'));
   if (lineItems.length || cart.total_text) {
-    fees.slice(0, 5).forEach(f => snip('fee_line', f.row_text, 'cost line'));
+    fees.slice(0, 5).forEach(f => snip('fee_line', f.row_text, cut('cost line: ' + f.label, 120)));
     lineItems.filter(i => i.addon).slice(0, 3).forEach(i => snip('fee_line', i.row_text, 'line item'));
   }
 
@@ -1253,6 +1397,9 @@
   return {
     ...base, doc, jsonld, meta,
     prices: prices.slice(0, 80).map(({el, row, row_text, line, area: a, ...rest}) => ({...rest, in_card: inCard(el)})),
+    // `prices` keeps 80 items in document order (a sale listing's last cards drop out): the counts cover every price read
+    price_counts: {total: prices.length, strikethrough_in_card: prices.filter(p => p.strikethrough && inCard(p.el)).length,
+      strikethrough_outside_cards: prices.filter(p => p.strikethrough && !inCard(p.el)).length},
     ctas: strip(ctas), search, nav, products, filters, pdp, cart, forms,
     overlays: overlays.slice(0, 8).map(({el, ...o}) => ({...o, coverage: Math.round(o.coverage * 1000) / 1000,
       interrupting: interrupting(o)})),

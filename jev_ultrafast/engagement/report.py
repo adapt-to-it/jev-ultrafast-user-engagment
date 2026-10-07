@@ -3,34 +3,31 @@
 import base64
 import io
 import json
-import os
 import re
 from html import escape
 
 from .judgments import RUBRICS_VERSION, load_rubrics
 from .kpis import KPIS
 from .schemas import RISK_INDEX, SCHEMA_VERSION, SUB_INDICES
-from .scoring import load_anchors, run_observations, score_run
+from .scoring import NAMES, load_anchors, run_observations, score_run
 
 REPORT_VERSION = "report.v1"
 DISCLAIMER = (
     "Stima di engagement readiness ricavata da sessioni sintetiche: non è engagement misurato. "
     "Indica attrito previsto e segnali di rischio osservabili, non il comportamento di utenti reali."
 )
-JOURNEY_ONLY = "Run di solo journey: l'ERS richiede un audit; collegala a un audit con score_run"
+JOURNEY_ONLY = (
+    "Run di solo journey: l'ERS richiede un audit dello stesso negozio, da collegare con score_run (server MCP) "
+    "o con jev-engage score --journey (riga di comando)"
+)
+JOURNEY_AUDIT_KPIS = (  # a journey-only run's unobserved audit KPIs, folded into one line of the HTML
+    "KPI dell'audit ({}): nessuna osservazione in una run di solo journey; si valutano collegando la run a un audit"
+)
+AUDIT_PRODUCERS = ("checks", "deception")
 WIDGET_CAVEAT = "possibile widget non letto (iframe o shadow DOM chiuso sulla pagina)"
 DPR_NOT_ASSESSED = (
     "Rischio dark pattern non valutato: l'indice non include alcuna penalità ed è da leggere come limite superiore."
 )
-NAMES = {
-    "PERF": "Prestazioni",
-    "FAI": "Attrito previsto",
-    "TRI": "Segnali di fiducia",
-    "PTI": "Trasparenza di prezzi e costi",
-    "CCL": "Chiarezza e carico cognitivo",
-    "MPI": "Leve di persuasione genuine",
-    "DPR": "Segnali di rischio dark pattern",
-}
 # Italian text of every reason code the producers emit (tests/test_engagement_report.py collects them from the
 # producers' source and fails on one without a label here or under REASON_PREFIXES).
 REASONS = {
@@ -128,10 +125,27 @@ REASONS = {
     "no_category_word": "nessuna parola di categoria da cercare",
     "search_field_not_observed": "campo di ricerca non osservato",
     "unreadable": "risultato non leggibile",
+    # checkout guard refusals (safety.py), usually behind guard_refused:
+    "personal_field": "campo per dati personali: mai compilato",
+    "personal_field:newsletter": "campo di iscrizione alla newsletter: mai compilato",
+    "payment_field": "campo di pagamento: mai compilato",
+    "account_or_payment_form": "campo di un modulo di accesso o di pagamento: mai compilato",
+    "field_not_allowed": "campo non consentito: si scrive solo in ricerca, quantità e codici sconto",
+    "not_a_text_field": "non è un campo di testo",
+    "invalid_node": "elemento non valido",
+    "node_not_found": "elemento non più presente nella pagina",
+    "checkout_form": "modulo del checkout: mai compilato",
+    "checkout_submit": "invio o passo successivo del checkout: mai premuto",
+    "checkout_link_unverified": "link del checkout senza destinazione verificabile: mai premuto",
+    "checkout_link_not_navigation": "link del checkout che non porta a un'altra pagina: mai premuto",
+    "external_page": "pagina di un altro sito: solo scorrimento e attesa",
+    "forbidden_label:pay_now": "pulsante di pagamento: mai premuto",
+    "forbidden_label:place_order": "pulsante di conferma dell'ordine: mai premuto",
     # journey and its independent verification
     "no_journey": "nessun percorso dell'agente in questa run",
     "no_verification": "verifica indipendente non eseguita",
     "journey_error": "percorso interrotto da un errore del sistema di prova, non del sito",
+    "left_shop": "percorso uscito dal negozio verso un altro sito",
     "page_unreadable": "controlli trattenuti: la pagina non è stata letta dall'audit",
     "cart_unreadable": "pagina del carrello non leggibile dall'audit",
     "final_page_unreadable": "pagina finale non leggibile dall'audit",
@@ -145,12 +159,7 @@ REASONS = {
     "judgment_pending": "giudizio in attesa",
     "judgment_uncertain": "giudizio incerto: accordo insufficiente tra i valutatori",
     "judgment_unclear": "i valutatori non hanno potuto decidere",
-    "invalid_verdict": "verdetto non valido",
-    "unknown_task": "task di giudizio sconosciuto",
-    "samples_complete": "campioni del task già completi",
-    "task_already_final": "task di giudizio già concluso",
-    "duplicate_judge": "valutatore già registrato per il task",
-}
+}  # judgments.submit()'s verdict rejections are codes for the judge host (MCP rejected_reasons), never report text
 # "<prefix><detail>" reasons: the prefix's text, then the detail's own label, or the detail as written when it is free
 # text (an Italian sentence from the producer, an exception message). An identifier detail needs its own label.
 REASON_PREFIXES = {
@@ -164,7 +173,15 @@ REASON_PREFIXES = {
     "failed:": "azione non riuscita",
     "error:": "errore imprevisto del sistema di prova",
 }
-REASON_CODE = re.compile(r"[a-z][a-z0-9_]*(?::[a-z0-9_]+)?")
+# "<prefix><value>" reasons whose value is shown as written: a KPI id, an autocomplete token, a field type, a lexicon
+# key (safety.py refusals).
+REASON_VALUES = {
+    "credit_withheld:": "credito non assegnato: segnale di rischio {}",
+    "personal_field:": "campo per dati personali ({}): mai compilato",
+    "protected_field:": "campo protetto di tipo {}: mai compilato",
+    "forbidden_label:": "pulsante vietato ({}): mai premuto",
+}
+REASON_CODE = re.compile(r"[a-z][a-z0-9_]*(?::[a-z0-9_]+)*")  # an identifier detail (nested ones too) needs a label
 STEP_FLAGS = {  # journey step flags (steps.jsonl) in the timeline
     "dead_click": "click senza effetto",
     "rage": "click ripetuti senza effetto",
@@ -181,6 +198,66 @@ STEP_FLAGS = {  # journey step flags (steps.jsonl) in the timeline
     "follows_timeout": "dopo un assestamento scaduto",
     "session_gone": "scheda del browser persa",
 }
+OPERATIONS = {  # journey step operations in the timeline
+    "CLICK": "Click",
+    "TYPE_TEXT": "Testo digitato",
+    "SELECT": "Selezione",
+    "SCROLL_UP": "Scorrimento in su",
+    "SCROLL_DOWN": "Scorrimento in giù",
+    "WAIT": "Attesa",
+    "DONE": "Fine dichiarata dall'agente",
+    "BLOCKED": "Blocco dichiarato dall'agente",
+    "NAVIGATION": "Navigazione della pagina tra due passi",
+}
+SELF_DESCRIBED = {"SCROLL_UP", "SCROLL_DOWN", "WAIT", "DONE", "BLOCKED"}  # their name says it all: no control label
+ORACLES = {  # oracles.ORACLES
+    "cart_contains_item_under_price": "prodotto nel carrello entro il prezzo massimo",
+    "cart_not_empty": "carrello non vuoto",
+    "pdp_reached": "scheda prodotto raggiunta",
+    "search_results_shown": "risultati di ricerca mostrati",
+}
+VALUE_LABELS = {  # Italian text of the enum and label KPI values (anchors.json maps), shown in the KPI table
+    "FAI.PLP_PAGINATION": {"load_more": "pulsante «carica altri»", "pagination": "pagine numerate",
+                           "infinite": "scorrimento infinito", "none": "nessuna"},
+    "FAI.PDP_VARIANT_SELECTOR": {"buttons": "pulsanti", "select": "menu a tendina", "none": "nessuno"},
+    "TRI.RATING_BAND": {"4.0-4.7": "4,0-4,7", "4.8-5.0": "4,8-5,0", "3.5-3.9": "3,5-3,9", "<3.5": "sotto 3,5"},
+    "TRI.RETURNS_CLARITY": {"clear": "chiara", "vague": "vaga", "absent": "assente"},
+    "CCL.VALUE_PROP_CLARITY": {"clear": "chiara", "partial": "parziale", "unclear": "poco chiara"},
+    "MPI.AUTHORITY": {"present": "presenti", "weak": "deboli", "absent": "assenti"},
+    "MPI.SOCIAL_PROOF_RICH": {"rich": "ricca", "basic": "di base", "absent": "assente"},
+}
+JOURNEY_STATUS = {
+    "created": "creato",
+    "running": "in corso",
+    "done": "concluso secondo l'agente",
+    "blocked": "bloccato",
+    "stopped_at_checkout_boundary": "fermato al limite del checkout",
+    "budget_exhausted": "passi esauriti",
+    "error": "interrotto da un errore",
+    "abandoned": "abbandonato senza verifica",  # service.py: closed idle or at shutdown
+}
+POLICIES = {"host": "agente host (strumenti MCP)", "typesafe": "TypeSafe (automatica)"}
+STAGE_NAMES = {  # schemas.STAGES, plus "extra": an evidence page that feeds no stage's KPIs (a journey's start page,
+    # the cart an oracle read, a bot challenge, an error page, a rejected candidate); the "Tipo" column says what it is
+    "home": "home",
+    "plp": "listing di categoria",
+    "pdp": "pagina prodotto",
+    "cart": "carrello",
+    "checkout_entry": "primo step del checkout",
+    "extra": "nessuna (solo evidenza)",
+}
+PAGE_TYPE_NAMES = {  # schemas.PAGE_TYPES (pagetypes.classify)
+    "home": "home",
+    "plp": "listing",
+    "pdp": "pagina prodotto",
+    "cart": "carrello",
+    "checkout": "checkout",
+    "challenge": "verifica anti-bot",
+    "other": "altro",
+}
+RUN_KINDS = {"audit": "audit deterministico", "journey": "journey (percorso dell'agente)"}  # store.RUN_KINDS
+RUN_STATUS = {"created": "creata", "running": "in corso", "complete": "completa", "partial": "parziale",
+              "failed": "non riuscita"}
 TAGS = {
     "observed": ("Osservato", "tag-obs"),
     "inferred": ("Inferito", "tag-inf"),
@@ -261,6 +338,14 @@ def fmt_value(value, unit) -> str:
     return str(value)
 
 
+def kpi_value(row) -> str:
+    """A KPI row's value for display: an enum or label value in Italian (VALUE_LABELS), anything else fmt_value."""
+    value = row.get("value")
+    if isinstance(value, str):
+        value = VALUE_LABELS.get(row.get("id"), {}).get(value, value)
+    return fmt_value(value, row.get("unit"))
+
+
 def fmt_score(value) -> str:
     return "n/d" if value is None else _it(value, 1)
 
@@ -314,12 +399,13 @@ def scope_line(output, kind="audit") -> str:
 
 
 def reason_label(reason) -> str | None:
-    """Italian text for a reason code (REASONS, REASON_PREFIXES), or None when the code has none."""
+    """Italian text for a reason code (REASONS, REASON_VALUES, REASON_PREFIXES), or None when the code has none."""
     reason = "" if reason is None else str(reason)
     if reason in REASONS:
         return REASONS[reason]
-    if reason.startswith("credit_withheld:"):
-        return f"credito non assegnato: segnale di rischio {reason.split(':', 1)[1]}"
+    for prefix, template in REASON_VALUES.items():
+        if reason.startswith(prefix) and reason[len(prefix):].strip():
+            return template.format(reason[len(prefix):].strip())
     for prefix, label in REASON_PREFIXES.items():
         if reason.startswith(prefix):
             detail = reason[len(prefix):].strip(" :_")
@@ -354,7 +440,8 @@ def warning_text(warning) -> str:
     Italian (the producer's detail kept as written), any other technical message as written."""
     warning = str(warning)
     if match := STAGE_WARNING.fullmatch(warning):
-        return f"{match['profile']}: fase {match['stage']} non valutabile: {reason_text(match['reason'])}"
+        stage = STAGE_NAMES.get(match["stage"], match["stage"])
+        return f"{match['profile']}: fase {stage} non valutabile: {reason_text(match['reason'])}"
     if (match := CODE_WARNING.fullmatch(warning)) and match["code"] in REASONS:
         return f"{REASONS[match['code']]} ({match['detail']})"
     return warning
@@ -395,9 +482,12 @@ def _versions(run, scores) -> dict:
 
 
 def _pages(run) -> list:
+    """Page rows; kb is None when no request was recorded (a page read in place, e.g. the cart an oracle read where
+    the journey ended: its weight was never measured). notes: the producers' notes as written."""
     rows = []
     for page in run.get("pages") or []:
         vitals, network = page.get("vitals") or {}, page.get("network") or {}
+        measured = network.get("bytes_transfer") is not None and network.get("requests") != 0
         rows.append(
             {
                 "page_id": page.get("page_id"),
@@ -407,8 +497,9 @@ def _pages(run) -> list:
                 "type": (page.get("classification") or {}).get("type"),
                 "lcp_ms": vitals.get("lcp"),
                 "cls": vitals.get("cls"),
-                "kb": round(network["bytes_transfer"] / 1000) if network.get("bytes_transfer") is not None else None,
+                "kb": round(network["bytes_transfer"] / 1000) if measured else None,
                 "screenshot": page.get("screenshot"),
+                "notes": [str(n) for n in page.get("notes") or []],
             }
         )
     return rows
@@ -467,7 +558,7 @@ def build_report(run, scores, *, steps=None, journeys=None, thumbnails=None, anc
     state = run.get("judgments") or {}
     reason = ers.get("reason")
     if run.get("kind") == "journey" and not ers.get("published"):
-        reason = f"{JOURNEY_ONLY} ({reason})" if reason else JOURNEY_ONLY
+        reason = f"{JOURNEY_ONLY}; {reason}" if reason else JOURNEY_ONLY
     report = {
         "report_version": REPORT_VERSION,
         "run_id": run.get("run_id"),
@@ -700,8 +791,9 @@ def _journey(journey, steps, *, linked=False) -> str:
             f"assestamento {fmt_value(step.get('settle_ms'), 'ms')}" if step.get("settle_ms") is not None else "",
             f"segnali: {flags}" if flags else "",
         ]
+        label = "" if step.get("operation") in SELF_DESCRIBED else step.get("label") or ""
         items.append(
-            f"<li><b>{e(step.get('operation'))}</b>{e(target)} {e(step.get('label') or '')}"
+            f"<li><b>{e(OPERATIONS.get(step.get('operation'), step.get('operation')))}</b>{e(target)} {e(label)}"
             f'<div class="muted">{e(" · ".join(d for d in detail if d))}</div>'
             f'<div class="muted">{e(step.get("url_after") or step.get("url_before") or "")}</div></li>'
         )
@@ -720,8 +812,10 @@ def _journey(journey, steps, *, linked=False) -> str:
         f'<section><h2>{heading}</h2><div class="card">{source}'
         f"<p><b>Obiettivo:</b> {e(journey.get('goal'))}</p>"
         f'<div class="facts"><span>Profilo <b>{e(journey.get("profile"))}</b></span>'
-        f"<span>Politica <b>{e(journey.get('policy'))}</b></span><span>Stato <b>{e(journey.get('status'))}</b></span>"
-        f"<span>Verifica indipendente ({e(journey.get('oracle'))}) <b>{e(outcome)}</b></span></div>"
+        f"<span>Politica <b>{e(POLICIES.get(journey.get('policy'), journey.get('policy')))}</b></span>"
+        f"<span>Stato <b>{e(JOURNEY_STATUS.get(journey.get('status'), journey.get('status')))}</b></span>"
+        f"<span>Verifica indipendente ({e(ORACLES.get(journey.get('oracle'), journey.get('oracle')))}) "
+        f"<b>{e(outcome)}</b></span></div>"
         f"{unverified}{checks_html}{timeline}"
         '<p class="muted">Il tempo di decisione del modello è escluso dai tempi attribuiti al sito.</p></div></section>'
     )
@@ -747,7 +841,7 @@ def _kpi_table(overall, caveats, show_profile=False) -> str:
             note = f'<div class="muted">{e(reason)}</div>' if reason else ""
             provisional = ' <span class="muted" title="ancora editoriale">*</span>' if row.get("provisional") else ""
             third = row.get("weight") if owner != RISK_INDEX else (kpi.severity if kpi else None)
-            value = fmt_value(row.get("value"), row.get("unit"))
+            value = kpi_value(row)
             if show_profile and row.get("profile"):
                 value += f" ({row['profile']})"
             body.append(
@@ -781,19 +875,30 @@ def _pages_html(report, thumbs) -> str:
     for page in report["pages"]:
         thumb = thumbs.get(page["page_id"])
         image = f'<img class="thumb" alt="{e(page["page_id"])}" src="{e(thumb)}">' if thumb else ""
+        notes = "; ".join(page.get("notes") or [])
+        notes = f'<div class="muted">{e(notes)}</div>' if notes else ""
         rows.append(
-            f"<tr><td>{e(page['profile'])}</td><td>{e(page['stage'])}</td><td>{e(page['type'])}</td>"
+            f"<tr><td>{e(page['profile'])}</td><td>{e(STAGE_NAMES.get(page['stage'], page['stage']))}{notes}</td>"
+            f"<td>{e(PAGE_TYPE_NAMES.get(page['type'], page['type']))}</td>"
             f"<td><code>{e(page['url'])}</code></td><td class='num'>{e(fmt_value(page['lcp_ms'], 'ms'))}</td>"
             f"<td class='num'>{e(fmt_value(page['cls'], 'score'))}</td><td class='num'>"
             f"{e(fmt_value(page['kb'], 'KB'))}</td><td>{image}</td></tr>"
         )
     if not rows:
         return ""
+    pages = report["pages"]
+    legend = " ".join(text for shown, text in (
+        (any(p["stage"] == "extra" for p in pages),
+         f"Fase «{STAGE_NAMES['extra']}»: pagina conservata come prova, che non alimenta i KPI di alcuna fase."),
+        (any(p.get("notes") for p in pages), "Sotto la fase, le note della raccolta come registrate."),
+    ) if shown)
     return (
         '<section><h2>Pagine analizzate</h2><div class="card scroll"><table><thead><tr><th>Profilo</th>'
         '<th>Fase</th><th>Tipo</th><th>URL</th><th class="num">LCP</th><th class="num">CLS</th><th class="num">Peso'
         "</th><th></th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></div></section>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+        + (f'<p class="muted">{e(legend)}</p>' if legend else "")
+        + "</div></section>"
     )
 
 
@@ -802,11 +907,18 @@ def _missing(report) -> str:
     if not rows:
         return ""
     items = []
+    if report.get("kind") == "journey":  # the audit KPIs a journey-only run never observes: one line, not 70
+        folded = [r for r in rows if r.get("reason") == "no_observation" and r.get("kpi_id") in KPIS
+                  and KPIS[r["kpi_id"]].producer in AUDIT_PRODUCERS]
+        rows = [r for r in rows if r not in folded]
+        if folded:
+            items.append(f"<li>{e(JOURNEY_AUDIT_KPIS.format(len(folded)))}</li>")
     for row in rows:
-        what = row.get("kpi_id") or f"fase {row.get('stage')}"
-        where = " · ".join(str(x) for x in (row.get("profile"), row.get("stage") if row.get("kpi_id") else None) if x)
+        stage = STAGE_NAMES.get(row.get("stage"), row.get("stage"))
+        what = f"<code>{e(row['kpi_id'])}</code>" if row.get("kpi_id") else e(f"fase {stage}" if stage else "percorso")
+        where = " · ".join(str(x) for x in (row.get("profile"), stage if row.get("kpi_id") else None) if x)
         where = f" ({e(where)})" if where else ""
-        items.append(f"<li><code>{e(what)}</code>{where}: {e(reason_text(row.get('reason')))}</li>")
+        items.append(f"<li>{what}{where}: {e(reason_text(row.get('reason')))}</li>")
     return (
         '<section><h2>Non valutabile</h2><div class="card"><p class="muted">Questi elementi non entrano nel '
         f"punteggio e riducono la copertura.</p><ul>{''.join(items)}</ul></div></section>"
@@ -833,8 +945,8 @@ def _footer(report, overall) -> str:
         "modello con lo stesso prompt: la maggioranza controlla la stabilità del giudizio, non un accordo tra "
         f"valutatori indipendenti.{models}</p>"
         f"<p>{e(DISCLAIMER)}</p>"
-        f"<p>Run <code>{e(report['run_id'])}</code> · tipo {e(report['kind'])} · stato {e(report['status'])} · "
-        f"creata {e(report['created_at'])}</p>"
+        f"<p>Run <code>{e(report['run_id'])}</code> · tipo: {e(RUN_KINDS.get(report['kind'], report['kind']))} · "
+        f"stato: {e(RUN_STATUS.get(report['status'], report['status']))} · creata {e(report['created_at'])}</p>"
         f"<p>Versioni: schema {e(v['schema'])} · ancore {e(v['anchors'])} · rubriche {e(v['rubrics'])} · "
         f"profili {e(v['profiles'] or 'n/d')} · report {e(v['report'])} · giudizi: "
         f"{e(report['judgments']['final'])} finali su {e(report['judgments']['tasks'])} task</p></footer>"
@@ -854,7 +966,8 @@ def render_html(run, scores, report, steps, thumbs, linked_steps=()) -> str:
         f"<title>{e('Engagement readiness · ' + str(host))}</title>",
         f"<style>{CSS}</style></head><body><main>",
         f'<header><p class="eyebrow">Report di engagement readiness</p><h1>{e(host)}</h1>',
-        f'<p class="meta">Run {e(report["run_id"])} · {e(report["created_at"])} · {e(report["kind"])}</p></header>',
+        f'<p class="meta">Run {e(report["run_id"])} · {e(report["created_at"])} · '
+        f'{e(RUN_KINDS.get(report["kind"], report["kind"]))}</p></header>',
         _hero(report, overall),
         _sub_indices(overall, report["method"]),
         _profiles(scores),
@@ -894,7 +1007,8 @@ def thumbnail(path, *, width=240, height=480) -> str | None:
 
 
 def write_report(store, run_id, *, journey_run_ids=None) -> dict:
-    """Score the stored run and write report.json + report.html into its directory.
+    """Score the stored run and write report.json + report.html into its directory: {"report_json", "report_html"}
+    as absolute paths.
 
     journey_run_ids: journey runs to merge (see scoring.score_run). When None, the ones recorded by the last stored
     score (run["scores"]["overall"]["context"]["journey_runs"]) are used.
@@ -926,9 +1040,6 @@ def write_report(store, run_id, *, journey_run_ids=None) -> dict:
             if uri:
                 thumbs[page["page_id"]] = uri
     report, html = build_report(run, scores, steps=steps, journeys=journeys, thumbnails=thumbs)
-    json_path = store.write_json(run_id, "report.json", report)
-    html_path = run_dir / "report.html"
-    tmp = html_path.with_suffix(f".{os.getpid()}.tmp")
-    tmp.write_text(html, encoding="utf-8")
-    os.replace(tmp, html_path)
-    return {"report_json": str(json_path), "report_html": str(html_path)}
+    store.write_json(run_id, "report.json", report)  # RunStore returns the relative path
+    store.write_bytes(run_id, "report.html", html.encode("utf-8"))  # atomic: a unique temporary file, then rename
+    return {"report_json": str(run_dir / "report.json"), "report_html": str(run_dir / "report.html")}

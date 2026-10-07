@@ -5,6 +5,8 @@ deception tests in further fresh contexts (deception.run_deception_tests), then 
 (RunStore) receives pages, not_assessable, deception, warnings and errors as they are produced, and finally the
 deterministic observations (checks.observations) and a status: "complete" when every requested stage was reached on
 every profile, "partial" when funnel pages were collected but something is missing, "failed" when none was.
+The shop is where the start URL lands: a home page on another registrable domain re-anchors CheckoutGuard there for
+the funnel and the deception tests (crawler.landed_guard), and run["site"]["final_url"] records it.
 A Chromium this function launched is always closed, and so is the transport, whatever happens.
 """
 
@@ -12,7 +14,7 @@ from collections.abc import Callable
 
 from . import checks
 from .collectors import PageCollector
-from .crawler import discover_funnel
+from .crawler import discover_funnel, landed_guard
 from .deception import DECEPTION_VERSION, run_deception_tests
 from .judgments import RUBRICS_VERSION
 from .lexicon import lexicon_for
@@ -123,9 +125,14 @@ def _audit_profile(settings, profile, transport, store, run_id, say) -> None:
             close_context(transport, context)
         except (RuntimeError, TimeoutError, OSError) as exc:  # the collected pages stay; the context goes with Chrome
             closing = f"{profile}: browser context not closed: {type(exc).__name__}: {str(exc)[:160]}"
+    # the shop is where the start URL landed (the funnel re-anchored its own guard there): the deception tests too
+    home = next((p for p in pages if p.get("stage") == "home"), None)
+    landed = landed_guard(guard, home, settings.locale)
 
     def save_funnel(run):
         reached = {p["stage"] for p in pages if p["stage"] in STAGES}
+        if landed is not guard:
+            run["site"].setdefault("final_url", home["final_url"])  # oracles read cart links against this site
         run["pages"] += pages
         run["not_assessable"] += [m for m in missing if m["stage"] not in reached]
         if collector.applied_profile:
@@ -142,7 +149,7 @@ def _audit_profile(settings, profile, transport, store, run_id, say) -> None:
     say(f"{profile}: deception tests")
     try:
         result = run_deception_tests(transport, settings, pages, profile=profile, store=store, run_id=run_id,
-                                     guard=guard, progress=say)
+                                     guard=landed, progress=say)
     except Exception as exc:
         result = {"version": DECEPTION_VERSION, "profile": profile, "errors": [f"{type(exc).__name__}: {exc}"[:300]]}
 

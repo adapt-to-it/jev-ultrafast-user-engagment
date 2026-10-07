@@ -12,7 +12,7 @@
    "limiting_factor": "FAI",
    "llm_share": 0.0,
    "published": false,
-   "reason": "copertura complessiva 12% sotto il minimo 60%; copertura PERF 23% sotto il minimo 50%; copertura FAI 34% sotto il minimo 50%; copertura TRI 0% sotto il minimo 50%; copertura PTI 0% sotto il minimo 50%; copertura CCL 0% sotto il minimo 50%",
+   "reason": "copertura complessiva 12 % sotto il minimo del 60 %; copertura sotto il minimo del 50 % per Prestazioni (23 %), Attrito previsto (34 %), Segnali di fiducia (0 %), Trasparenza di prezzi e costi (0 %), Chiarezza e carico cognitivo (0 %)",
    "score": null
   },
   "kpis": {
@@ -795,7 +795,7 @@
     "limiting_factor": "FAI",
     "llm_share": 0.0,
     "published": false,
-    "reason": "copertura complessiva 12% sotto il minimo 60%; copertura PERF 23% sotto il minimo 50%; copertura FAI 34% sotto il minimo 50%; copertura TRI 0% sotto il minimo 50%; copertura PTI 0% sotto il minimo 50%; copertura CCL 0% sotto il minimo 50%",
+    "reason": "copertura complessiva 12 % sotto il minimo del 60 %; copertura sotto il minimo del 50 % per Prestazioni (23 %), Attrito previsto (34 %), Segnali di fiducia (0 %), Trasparenza di prezzi e costi (0 %), Chiarezza e carico cognitivo (0 %)",
     "score": null
    },
    "kpis": {

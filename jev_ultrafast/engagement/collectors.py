@@ -85,6 +85,11 @@ def _document_start(events: list[dict], frame_id: str | None) -> int | None:
     return start
 
 
+def _error_text(navigation) -> str | None:
+    """The net error Page.navigate answered with (the navigation did not commit), else None."""
+    return (navigation.get("errorText") or None) if isinstance(navigation, dict) else None
+
+
 def document_events(events: list[dict], frame_id: str | None) -> dict:
     """The events of the latest main-frame document and what its own Document request tells.
 
@@ -378,7 +383,7 @@ class PageCollector:
         browser = Browser(url, transport=self.transport, browser_context_id=self.context_id, background=False,
                           prepare=prepare, load_timeout=self.settle_timeout_s)
         self._pages[browser.session] = {"events": [], "started": state.get("started"), "url": url, "fresh": True,
-                                        "origins": {}}
+                                        "origins": {}, "error": _error_text(getattr(browser, "navigation", None))}
         return browser
 
     def close(self, browser: Browser) -> None:
@@ -407,17 +412,15 @@ class PageCollector:
         self._reset_frames(browser.session)
         self._ensure_watcher()
         self._loading_started(browser.session)
-        page.update(events=[], started=time.monotonic(), url=url, fresh=True)
-        result = browser.navigate(url, load_timeout=self.settle_timeout_s)
-        record = self.collect(browser, stage=stage, page_id=page_id, requested_url=url)
-        notes = record.setdefault("notes", [])
-        if (result or {}).get("errorText") and not any(n.startswith("navigation_error") for n in notes):
-            notes.append(f"navigation_error: {result['errorText']}")
-        return record
+        page.update(events=[], started=time.monotonic(), url=url, fresh=True, error=None)
+        page["error"] = _error_text(browser.navigate(url, load_timeout=self.settle_timeout_s))
+        return self.collect(browser, stage=stage, page_id=page_id, requested_url=url)
 
     def collect(self, browser: Browser, *, stage: str, page_id: str, requested_url: str | None = None) -> PageRecord:
-        """A navigation that failed (Chrome's own error page) gives a record without the shop's timings, audit or
-        visual metrics: classification "other" with the signal "navigation_error", and the failure in notes. The
+        """A navigation that failed (Chrome's own error page, or a Page.navigate errorText such as net::ERR_ABORTED
+        for a 204 answer or a download, where the tab keeps the previous document) gives a record without the shop's
+        timings, audit or visual metrics: classification "other" with the signal "navigation_error", and the failure
+        in notes. The
         document of an earlier record (a client-side route change, a back-forward cache restore, no navigation at
         all) gives a record without load timings (vitals.soft_navigation, a "same_document" note): network and errors
         then count what happened since the previous record. So does a document the shop's speculation rules fetched
@@ -464,7 +467,8 @@ class PageCollector:
         elif vitals.get("ttfb") is not None:
             vitals["ttfb_source"] = "navigation_timing"
         href = self._evaluate(browser, "location.href")
-        failure = own["failure"] or ("error page" if str(href or "").startswith("chrome-error:") else None)
+        failure = own["failure"] or page.get("error") or (
+            "error page" if str(href or "").startswith("chrome-error:") else None)
         audit: AuditPayload = {}
         if failure:
             vitals.update(dict.fromkeys(NAVIGATION_KEYS))
@@ -524,14 +528,21 @@ class PageCollector:
         if origin is not None:  # the record that loaded this document, and how far (document ms) records cover it
             seen = page["origins"].setdefault(origin, {"page_id": page_id, "until": 0.0})
             seen["until"] = max(seen["until"], (activity or {}).get("now") or 0.0)
-        page.update(events=[], started=None, fresh=False)
+        page.update(events=[], started=None, fresh=False, error=None)
         return record
 
     # ---------------------------------------------------------------- reads
     def language(self, browser: Browser) -> str:
-        """The page's effective language: its declared <html lang> when the lexicon has it, else the run locale's."""
+        """The page's effective language (lexicon.effective_language): its declared <html lang> when the lexicon has
+        it, else the run locale's; a declared language other than the run's is checked against the page's visible
+        text (a theme default lang="en" on an Italian shop reads as Italian)."""
         declared = self._evaluate(browser, "document.documentElement ? document.documentElement.lang : ''")
-        return effective_language(declared if isinstance(declared, str) else None, self.locale)
+        declared = declared if isinstance(declared, str) else None
+        language = effective_language(declared, self.locale)
+        if language != effective_language(None, self.locale):
+            sample = self._evaluate(browser, "document.body ? document.body.innerText.slice(0, 5000) : ''")
+            language = effective_language(declared, self.locale, sample if isinstance(sample, str) else None)
+        return language
 
     def audit(self, browser: Browser) -> AuditPayload:
         """One audit.js evaluation with the lexicon of the page's effective language (recorded as lexicon_lang).

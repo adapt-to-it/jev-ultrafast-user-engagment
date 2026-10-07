@@ -2,7 +2,8 @@
 
 No per-site plans and no hardcoded values: every choice comes from the collected AuditPayload (navigation categories,
 product cards, the add-to-cart, cart and checkout controls audit.js recognised with the lexicon), from the lexicon's URL
-patterns and from the elements Browser.observe() reports. A discovered URL is loaded with a GET (load_page); anything
+patterns and from the elements Browser.observe() reports. A discovered URL is loaded with a GET (load_page), never one
+whose GET changes the cart (a cart-action query key or path segment: oracles.clean_cart_url); anything
 else is Browser.act() on one observed element, consulted with CheckoutGuard first, executed once and never retried,
 and logged to steps.jsonl before its result is observed. A StalePage means nothing was sent: the page is cleared of
 late overlays, observed again and the action is tried once more (stale_reobserved in the probe); a second StalePage is
@@ -10,14 +11,17 @@ a failure. Every control sent is remembered by the tab and never sent again on t
 performance.timeOrigin and label; an origin that could not be read matches every document at that URL; reason
 "sent_earlier"), so a click without a visible effect is not repeated by a later clear-the-way pass (a close whose
 overlay went away frees its label: the same label elsewhere is another control); a click whose Browser.act() failed
-after it may have reached the page (CDP timeout or error) is never sent again on that page URL (reason
-"uncertain_earlier"). Nothing is ever typed but the search probe's word,
+after it may have reached the page (CDP timeout or error, a transport that closed: that one stops the funnel) is
+never sent again on that page URL (reason "uncertain_earlier"). Nothing is ever typed but the search probe's word,
 and the run stops at the first checkout page without filling or submitting anything there. A click that ends on
 Chrome's error page keeps that page as "extra" evidence and stops the funnel ("navigation_error"); a cart URL that
-does not lead to a cart (a "#" mini-cart link, a login redirect) is "extra" too and stops it ("not_found").
+does not lead to a cart (a "#" mini-cart link, a login redirect) is "extra" too and stops it ("not_found"). A load
+Chrome aborted (a 204 answer, a download: the tab keeps the previous document) is a failed load like its error page,
+and a listing candidate that lands on the home page is no listing: both are "extra" and the next candidate is tried.
 
 Overlays: after a home or listing page is accepted (and its repeats loaded), its interrupting non-consent overlays
-(modal or blocking newsletter, promo) are closed with their observed close or decline control, as a shopper would, and
+(modal or blocking newsletter, promo) are closed with their observed close or decline control, as a shopper would
+(that overlay's own control, located by its audit.js rect: never a cart line's "×" with the same label), and
 the closes are recorded in PageRecord.probes["dismiss_overlays"] with the overlay's key (overlay_key) and whether a
 fresh audit shows it gone; the product and cart pages do the same before their click
 (probes["add_to_cart"]["overlays"], probes["checkout_entry"]["overlays"]).
@@ -31,7 +35,8 @@ interrupts nor blocks clicks at most one control: a first-layer reject, else the
 ("not_blocking"); it never opens "manage" (deception.py probes "manage" in its own context). On such a bar the X
 follows a reject only when nothing reached the page (not sent, not observed, refused by the guard): a reject that may
 have been delivered (failed, or sent earlier) ends the chain, under any policy. Consent controls are matched by the
-banner's own labels (exactly, else by containment), never by a lexicon word anywhere on the page. Known residual: a
+banner's own labels (exactly, else by containment) among the banner's own controls (their audit.js rects), never by
+a lexicon word or a shared label anywhere else on the page. Known residual: a
 small non-Italian bar with no reject that overlaps a mobile sticky CTA is left alone. The funnel never clicks under a
 blocking banner (cart and checkout stop with "consent_blocking"); "none" leaves the banner alone. The choice is recorded
 in PageRecord.consent of the page that showed it, with the clicks it took, the path (via), whether the banner
@@ -66,7 +71,9 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 from ..browser import StalePage, session_gone
 from .collectors import AuditError
 from .lexicon import compile_lexicon, lexicon_for
-from .safety import GUARD_HREF
+from .oracles import clean_cart_url
+from .pagetypes import _home_path
+from .safety import GUARD_HREF, CheckoutGuard
 from .schemas import STAGES, NotAssessable, PageRecord
 
 CANDIDATES = 3  # listing and product candidates tried at most
@@ -122,6 +129,12 @@ def _url(href, base: str = "") -> str | None:
     return urlunsplit((parts.scheme, parts.netloc, parts.path or "/", parts.query, ""))
 
 
+def _href(page: dict, action: dict) -> str | None:
+    """The raw href snapshot.js observed on the action's element (CheckoutGuard's guard tuple), or None."""
+    guard = (page.get("guards") or {}).get(str(action.get("node")))
+    return guard[GUARD_HREF] if isinstance(guard, list) and len(guard) > GUARD_HREF and guard[GUARD_HREF] else None
+
+
 def _type(record: PageRecord | None) -> str | None:
     return ((record or {}).get("classification") or {}).get("type")
 
@@ -172,12 +185,38 @@ def button_labels(overlay: dict | None, *kinds: str) -> list[str]:
             for label in (b.get("label"), b.get("text")) if label]
 
 
+def own_controls(buttons, audit: dict):
+    """accept(action, page) for Tab.pick: only an observed action that is one of these audit.js buttons (its centre
+    inside one of their rects), never another control with the same label elsewhere on the page (a cart line's "×"
+    before a newsletter's "×"). audit.js rects are page coordinates at the audit's scroll (viewport.scroll_y); an
+    observed rect is in viewport coordinates: it matches at the page's scroll now (a box in the page flow) or at the
+    audit's scroll (a fixed overlay, which keeps its viewport place while the page scrolls). A button without a rect
+    matches nothing."""
+    rects = [b["rect"] for b in buttons or [] if isinstance(b, dict) and isinstance(b.get("rect"), dict)]
+    then = (audit.get("viewport") or {}).get("scroll_y") or 0
+
+    def inside(x: float, y: float, r: dict) -> bool:
+        return (r.get("x") or 0) - 2 <= x <= (r.get("x") or 0) + (r.get("w") or 0) + 2 and \
+            (r.get("y") or 0) - 2 <= y <= (r.get("y") or 0) + (r.get("h") or 0) + 2
+
+    def accept(action: dict, page: dict) -> bool:
+        r = action.get("rect") or {}
+        if not isinstance(r.get("x"), (int, float)) or not isinstance(r.get("y"), (int, float)):
+            return False
+        x, y = r["x"] + (r.get("w") or 0) / 2, r["y"] + (r.get("h") or 0) / 2
+        now = (page.get("scroll") or {}).get("y") or 0
+        return any(inside(x, y + scroll, rect) for rect in rects for scroll in (now, then))
+    return accept
+
+
 def is_listing(record: PageRecord) -> bool:
+    """A listing: classified as one, or an unclassified page with four product cards or more. A home page is not,
+    whatever it features (a category link that sends the shopper back home has no listing)."""
     kind, products = _type(record), _audit(record).get("products") or {}
     if kind == "plp":
         return True
     big = (products.get("main_group") or 0) >= 4 or (products.get("itemlist_jsonld") or 0) >= 4
-    return big and kind not in ("pdp", "cart", "checkout", "challenge")
+    return big and kind not in ("home", "pdp", "cart", "checkout", "challenge")
 
 
 def is_product(record: PageRecord) -> bool:
@@ -185,7 +224,7 @@ def is_product(record: PageRecord) -> bool:
     if kind == "pdp":
         return True
     buyable = (pdp.get("add_to_cart") or {}).get("present") and (pdp.get("price") or pdp.get("structured"))
-    return bool(buyable) and kind not in ("plp", "cart", "checkout", "challenge")
+    return bool(buyable) and kind not in ("home", "plp", "cart", "checkout", "challenge")
 
 
 def is_cart(record: PageRecord) -> bool:
@@ -261,12 +300,32 @@ def listing_candidates(record: PageRecord, guard, lx: dict) -> list[str]:
     return list(dict.fromkeys(url for *_, url in sorted(scored)))
 
 
+def landed_home(record: PageRecord, home: PageRecord) -> bool:
+    """record shows the home page: the home record's final URL, or a home path ("/", "/it/", "/index.html")."""
+    final = _url(record.get("final_url"))
+    if final is None:
+        return False
+    parts = urlsplit(final)
+    return final == _url(home.get("final_url")) or _home_path(parts.path, parts.query)
+
+
+def landed_guard(guard, record: PageRecord | None, locale: str):
+    """The guard of the shop the start URL landed on (JourneyRunner anchors its guard the same way): when the home
+    page's final URL is a web URL on another registrable domain than guard's, a new CheckoutGuard anchored there; else
+    guard itself (a failed load, a Chrome error page)."""
+    final = _url((record or {}).get("final_url"))
+    if final is None or guard.same_site(final):
+        return guard
+    return CheckoutGuard(final, lexicon_for(locale), stop_at=getattr(guard, "stop_at", "checkout_entry"))
+
+
 def _list(value) -> list:
     return value if isinstance(value, list) else [value] if value is not None else []
 
 
 def product_candidates(record: PageRecord | None, guard) -> list[str]:
-    """Product card links in page order, then the page's JSON-LD ItemList entries."""
+    """Product card links in page order, then the page's JSON-LD ItemList entries; never a URL whose GET changes the
+    cart (a cart-action query key or path segment: clean_cart_url)."""
     audit, here = _audit(record), _url((record or {}).get("final_url") or (record or {}).get("url"))
     hrefs = [card.get("href") for card in (audit.get("products") or {}).get("cards") or []]
     for item in audit.get("jsonld") or []:
@@ -278,7 +337,8 @@ def product_candidates(record: PageRecord | None, guard) -> list[str]:
     urls = []
     for href in hrefs:
         url = _url(href, here or "")
-        if url and url != here and guard.same_site(url) and not guard.is_checkout({"url": url}, None):
+        if url and url != here and guard.same_site(url) and not guard.is_checkout({"url": url}, None) and \
+                clean_cart_url(url) == (url, []):
             urls.append(url)
     return list(dict.fromkeys(urls))
 
@@ -379,13 +439,15 @@ class Tab:
     # ---------------------------------------------------------------- actions
     @staticmethod
     def pick(page: dict, lx: dict, *, labels=(), key: str | None = None, kinds=("click",), roles=None,
-             near: dict | None = None, strict: bool = False) -> dict | None:
+             near: dict | None = None, strict: bool = False, accept=None) -> dict | None:
         """The observed action whose label (for a select option: the option's label) equals one of labels
         (casefolded), else one whose label matches the lexicon key; several: the one closest to near (a
         page-coordinate rect). strict (an overlay's own controls): no lexicon match anywhere on the page, only a label
-        that contains one of labels or is contained in one ("Rifiuta" and "Rifiuta tutti i cookie")."""
+        that contains one of labels or is contained in one ("Rifiuta" and "Rifiuta tutti i cookie"). accept(action,
+        page): only actions it accepts are candidates (the control a caller verified, not another one with its
+        label)."""
         actions = [a for a in page.get("actions") or [] if a.get("kind") in kinds
-                   and (roles is None or a.get("role") in roles)]
+                   and (roles is None or a.get("role") in roles) and (accept is None or accept(a, page))]
         wanted = {_norm(label) for label in labels if _norm(label)}
 
         def named(a) -> bool:
@@ -458,12 +520,14 @@ class Tab:
             self.browser.act(action, page, text=text)
         except StalePage as exc:
             return False, f"not_executed:{str(exc)[:80]}"
-        except (RuntimeError, TimeoutError) as exc:  # may have reached the page: logged, never sent again
+        except (RuntimeError, OSError) as exc:  # may have reached the page (a CDP error or timeout, a transport
+            # that closed after the input): logged, never sent again
             self.uncertain.add((url, label))
             self.sent.add(sent)
-            self.log(action, page, purpose=purpose, stage=stage, status="error", text=text, note=str(exc)[:200])
-            if isinstance(exc, RuntimeError) and session_gone(exc):
-                raise
+            self.log(action, page, purpose=purpose, stage=stage, status="error", text=text,
+                     note=f"{type(exc).__name__}: {str(exc)[:200]}")
+            if isinstance(exc, ConnectionError) or (isinstance(exc, RuntimeError) and session_gone(exc)):
+                raise  # a gone session or a closed transport stops the funnel
             return False, f"failed:{type(exc).__name__}"
         self.sent.add(sent)
         self.log(action, page, purpose=purpose, stage=stage, status="executed", text=text)
@@ -471,8 +535,9 @@ class Tab:
 
     def click(self, record: PageRecord, *, purpose: str, stage: str, labels=(), key: str | None = None,
               rect: dict | None = None, roles=None, kinds=("click",), clear: bool = False,
-              strict: bool = False) -> dict:
-        """Observe, pick, guard, act once. {"executed", "reason", "label", "origin"}. Nothing sent (StalePage, or a
+              strict: bool = False, accept=None) -> dict:
+        """Observe, pick (accept: pick()), guard, act once. {"executed", "reason", "label", "href", "origin"}, href:
+        the observed href of the control picked. Nothing sent (StalePage, or a
         page that could not be observed): once more after clear_way() when clear (late overlays), with
         "stale_reobserved": 1 and what clear_way() did in "cleared"; a second StalePage is a failure. A control
         already sent to this document is not sent again ("sent_earlier"), nor one whose earlier click on this page
@@ -493,13 +558,13 @@ class Tab:
             if page is None:
                 continue
             action = self.pick(page, self.lexicon(record), labels=labels, key=key, near=rect, roles=roles,
-                               kinds=kinds, strict=strict)
+                               kinds=kinds, strict=strict, accept=accept)
             if action is None:
                 return {**result, "reason": "control_not_found"}
             origin = self.value("performance.timeOrigin")
             executed, reason = self.act(action, page, _type(record), purpose=purpose, stage=stage, origin=origin)
             result.update(executed=executed, reason=reason, label=str(action.get("label") or "")[:120],
-                          origin=origin)
+                          href=_href(page, action), origin=origin)
             if executed or not str(reason).startswith("not_executed:"):
                 break
         return result
@@ -528,7 +593,8 @@ class Tab:
         shape: {policy, choice, reason, blocking, interrupting, reject_offered, clicks, via, label, failed}. blocking
         is the layer shown last (the one "manage" opened, when it was clicked). after_manage: the caller already
         clicked "manage" (deception.py), so the layer shown is what it opened and "manage" is not pressed again."""
-        layer = consent_banner(_audit(record))
+        audit = _audit(record)
+        layer = consent_banner(audit)
         result: dict = {"policy": policy}
         if layer is None:
             return {**result, "choice": "none", "reason": "no_consent_banner"}
@@ -541,8 +607,9 @@ class Tab:
 
         def press(kind: str, current: dict) -> dict:
             nonlocal clicks
+            own = own_controls([b for b in current.get("buttons") or [] if b.get("kind") == kind], audit)
             clicked = self.click(record, purpose=f"consent_{kind}", stage=stage, labels=button_labels(current, kind),
-                                 key=CONSENT_KEYS[kind], strict=True)
+                                 key=CONSENT_KEYS[kind], strict=True, accept=own)
             if clicked["executed"]:
                 clicks += 1
                 self.await_effect(clicked["origin"], expect_navigation=False, timeout=5.0)
@@ -575,7 +642,8 @@ class Tab:
         # "manage" only where the banner is in the funnel's way, or when the user asked to reject
         if not after_manage and (policy == "reject" or interrupts or result["blocking"]) and button_labels(
                 layer, "manage") and press("manage", layer)["executed"]:
-            via, layer = "manage", consent_banner(self.fresh_audit()) or {}
+            audit = self.fresh_audit()
+            via, layer = "manage", consent_banner(audit) or {}
             result["blocking"] = bool(layer.get("blocking"))  # the layer shown now decides
             if button_labels(layer, "reject") and (clicked := press("reject", layer))["executed"]:
                 return chosen("reject", via, "reject behind manage", clicked)
@@ -595,7 +663,8 @@ class Tab:
         return unchosen(reason)
 
     def dismiss(self, audit: dict, record: PageRecord, *, stage: str) -> list[dict]:
-        """Close every modal or blocking non-consent overlay with its observed close (else decline) control. After an
+        """Close every modal or blocking non-consent overlay with its observed close (else decline) control, that
+        overlay's own (own_controls: never a control elsewhere on the page with the same label). After an
         executed close a fresh audit tells whether the overlay is gone (its overlay_key no longer listed; None when
         the audit failed): a label shared by two overlays may have closed the other one. The last such audit is kept
         in self.after_dismiss. A close whose overlay is gone went away with it: its label is free again on this
@@ -610,7 +679,9 @@ class Tab:
             if not labels:
                 done.append({**entry, "executed": False, "reason": "no_close_control"})
                 continue
-            clicked = self.click(record, purpose="dismiss_overlay", stage=stage, labels=labels)
+            own = own_controls([b for b in overlay.get("buttons") or [] if b.get("kind") in ("close", "decline")],
+                               audit)
+            clicked = self.click(record, purpose="dismiss_overlay", stage=stage, labels=labels, accept=own)
             entry.update(executed=clicked["executed"], reason=clicked["reason"], label=clicked.get("label"))
             done.append(entry)
             if clicked["executed"]:
@@ -763,9 +834,10 @@ class Crawl:
 
     @staticmethod
     def errored(record: PageRecord, stage: str, what: str) -> None:
-        """Chrome's own error page is evidence of a failed navigation, never the stage's page."""
+        """A failed navigation (Chrome's own error page, or one aborted while the tab kept the previous document) is
+        evidence, never the stage's page."""
         record["stage"] = "extra"
-        record.setdefault("notes", []).append(f"{stage}: {what} led to Chrome's error page")
+        record.setdefault("notes", []).append(f"{stage}: {what} did not load a page (navigation error)")
 
     def repeat(self, record: PageRecord, stage: str, url: str) -> None:
         """settings.repeats > 1: reload an accepted home, listing or product page before any interaction (a reload
@@ -844,11 +916,12 @@ class Crawl:
                 self.mark(stage, "not_requested")
 
     def home(self) -> PageRecord:
-        """The landing page: repeats, then its interrupting overlays closed, the consent policy applied and the
-        search probe run."""
+        """The landing page: the guard re-anchored where the start URL landed (landed_guard), repeats, then its
+        interrupting overlays closed, the consent policy applied and the search probe run."""
         record = self.visit("home", self.settings.url)
         if record is None:
             raise Stop("home", self.last_error)
+        self.guard = self.tab.guard = landed_guard(self.guard, record, self.settings.locale)
         self.repeat(record, "home", self.settings.url)
         closed = self.close_overlays(record, "home")
         current = self.tab.after_dismiss if any(c["executed"] for c in closed) else None
@@ -869,13 +942,19 @@ class Crawl:
         return record
 
     def listing(self, home: PageRecord) -> PageRecord | None:
-        """The first category link that leads to a listing; none: plp is not assessable, products come from home."""
+        """The first category link that leads to a listing; none: plp is not assessable, products come from home. A
+        link that lands on the home page (an empty or seasonal category redirected to "/") is no listing, however
+        the home page is classified: the next candidate is tried."""
         loaded = False
         for url in listing_candidates(home, self.guard, self.tab.lexicon(home))[:CANDIDATES]:
             record = self.visit("plp", url)
             if record is None:
                 continue
             loaded = True
+            if landed_home(record, home):
+                record["stage"] = "extra"
+                record.setdefault("notes", []).append("plp candidate rejected: it landed on the home page")
+                continue
             if is_listing(record):
                 self.repeat(record, "plp", url)
                 self.close_overlays(record, "plp")
@@ -1000,8 +1079,10 @@ class Crawl:
         return self.tab.fresh_audit() or audit
 
     def cart_url(self, product: PageRecord) -> str | None:
-        """The cart link audit.js found (now, else at load), else an observed link labelled as the cart; never the
-        product page itself (a "#" mini-cart toggle resolves to it)."""
+        """The cart link audit.js found (now, else at load), else an observed link labelled as the cart (not one that
+        adds or removes: "Aggiungi al carrello", "Rimuovi dal carrello"); never the product page itself (a "#"
+        mini-cart toggle resolves to it), never a URL whose GET changes the cart: its cart-action query keys are
+        dropped and a cart-action path is skipped (clean_cart_url). A candidate without a query comes first."""
         base = product.get("final_url") or product.get("url") or ""
         hrefs = []
         for audit in (self.tab.fresh_audit(), _audit(product)):
@@ -1011,16 +1092,18 @@ class Crawl:
         page = self.tab.observe() or {}
         lx = self.tab.lexicon(product)
         for action in page.get("actions") or []:
-            guard = (page.get("guards") or {}).get(str(action.get("node")))
-            if action.get("role") == "link" and "cart" in lx and lx["cart"].search(str(action.get("label") or "")):
-                if isinstance(guard, list) and len(guard) > GUARD_HREF:
-                    hrefs.append(guard[GUARD_HREF])
+            label = " ".join(str(action.get("label") or "").split())
+            if action.get("role") == "link" and "cart" in lx and lx["cart"].search(label) and not any(
+                    key in lx and lx[key].search(label) for key in ("add_to_cart", "buy_now", "remove")):
+                hrefs.append(_href(page, action))
         here = {_url(u) for u in (base, product.get("url"), page.get("url")) if u}
+        urls = []
         for href in hrefs:
             url = _url(href, page.get("url") or base)
+            url = clean_cart_url(url)[0] if url else None
             if url and url not in here and self.guard.same_site(url) and not self.guard.is_checkout({"url": url}, None):
-                return url
-        return None
+                urls.append(url)
+        return min(urls, key=lambda u: bool(urlsplit(u).query), default=None)
 
     def checkout(self, cart: PageRecord) -> None:
         if self.guard.should_stop(_type(cart)):
@@ -1071,27 +1154,32 @@ class Crawl:
     def guest_path(self, cart: PageRecord, audit: dict, probe: dict) -> str | None:
         """When the cart offers a guest path (forms.guest_option), take it as a first-time buyer would: one observed
         control the lexicon reads as "guest" (a link only when it leads to a same-site checkout URL, so an order
-        tracking link for guests is never taken). Its effect ("navigated", "quiet", "timeout"), or None when no such
-        control was clicked; recorded in probe["guest"]. The checkout entry it reaches is rule d's evidence."""
+        tracking link for guests is never taken). The click goes to such a control only, never to another control
+        with its label (an earlier off-site "Continua come ospite" link); probe["guest"]["href"] is the href of the
+        control clicked. Its effect ("navigated", "quiet", "timeout"), or None when no such control was clicked;
+        recorded in probe["guest"]. The checkout entry it reaches is rule d's evidence."""
         if not (audit.get("forms") or {}).get("guest_option"):
             return None
-        page, lx = self.tab.observe() or {}, self.tab.lexicon(cart)
-        labels = []
-        for action in page.get("actions") or []:
+        lx = self.tab.lexicon(cart)
+
+        def qualifies(action: dict, page: dict) -> bool:
             label = " ".join(str(action.get("label") or "").split())
             if action.get("kind") != "click" or "guest" not in lx or not lx["guest"].search(label):
-                continue
-            guard = (page.get("guards") or {}).get(str(action.get("node")))
-            href = guard[GUARD_HREF] if isinstance(guard, list) and len(guard) > GUARD_HREF and guard[GUARD_HREF] \
-                else None
-            url = _url(href, page.get("url") or "") if href else None
-            if href is None or (url and self.guard.same_site(url) and self.guard.is_checkout({"url": url}, None)):
-                labels.append((label, href))
+                return False
+            href = _href(page, action)
+            if href is None:
+                return True
+            url = _url(href, page.get("url") or "")
+            return bool(url and self.guard.same_site(url) and self.guard.is_checkout({"url": url}, None))
+
+        page = self.tab.observe() or {}
+        labels = [str(a.get("label") or "") for a in page.get("actions") or [] if qualifies(a, page)]
         if not labels:
             probe["guest"] = {"executed": False, "reason": "control_not_found"}
             return None
-        clicked = self.tab.click(cart, purpose="guest_checkout", stage="cart", labels=[labels[0][0]], clear=True)
-        probe["guest"] = {**{k: v for k, v in clicked.items() if k not in ("origin", "cleared")}, "href": labels[0][1]}
+        clicked = self.tab.click(cart, purpose="guest_checkout", stage="cart", labels=labels[:1], accept=qualifies,
+                                 clear=True)
+        probe["guest"] = {k: v for k, v in clicked.items() if k not in ("origin", "cleared")}
         probe["overlays"] += clicked.get("cleared") or []
         if not clicked["executed"]:
             return None

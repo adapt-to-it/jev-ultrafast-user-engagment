@@ -1214,3 +1214,15 @@ def test_an_overlay_closed_in_a_lost_tab_does_not_repeat_in_the_next_one():
     assert overlay_pages(pages, "mobile")["repeated"] == {}  # sessionStorage starts over in the new tab
     pages[1]["probes"]["dismiss_overlays"] = closed["dismiss_overlays"]
     assert overlay_pages(pages, "mobile")["repeated"] == {"newsletter": ["mobile-plp-1", "mobile-pdp-1"]}
+
+
+@pytest.mark.parametrize("text, shown", [
+    ("Spedizione 4,90 €", True),
+    ("Spedizione gratuita, altrimenti calcolata al checkout", True),
+    ("Imposte incluse. Spese di spedizione calcolate al momento del pagamento.", False),
+    ("Tax included. Shipping calculated at checkout.", False),
+])
+def test_a_shipping_cost_left_to_the_checkout_is_no_cost_shown(text, shown):
+    run = run_of([page("pdp", audit={"pdp": {"shipping_text": text}}),
+                  page("cart", audit={"cart": {"shipping_value": None}})])
+    assert one(checks.observations(run), "PTI.SHIPPING_COST_PRE_CHECKOUT")["value"] is shown

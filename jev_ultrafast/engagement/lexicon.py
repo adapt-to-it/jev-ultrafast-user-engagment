@@ -5,9 +5,10 @@ Every entry is a regular-expression source string that compiles unchanged in Jav
 boundaries are ASCII-only), no `\\p{...}`, no inline flags, no named groups, no possessive or atomic groups.
 
 lexicon_for(locale) merges the locale's lists with English, which is always included because shops in every language
-use English words ("checkout", "newsletter", "shop now"). effective_language(declared, locale) is the one resolver of
-a page's language (its <html lang> when the lexicon has it, else the run locale's): audit.js and the classifier read
-a page with lexicon_for() of that language. lexicon_all() joins every language: CheckoutGuard refuses a forbidden
+use English words ("checkout", "newsletter", "shop now"). effective_language(declared, locale, sample) is the one
+resolver of a page's language (its <html lang> when the lexicon has it, unless its text reads as the run locale's
+language; else the run locale's): audit.js and the classifier read a page with lexicon_for() of that language, and
+CCL.READABILITY picks its formula by it. lexicon_all() joins every language: CheckoutGuard refuses a forbidden
 label in any language.
 
 Forbidden labels. `pay_now` and `place_order` are matched on every page and only on control labels: they name the
@@ -22,9 +23,10 @@ way into the checkout rather than an order: "Concludi ordine" (legacy WooCommerc
 on a same-site link, outside a checkout page, whose observed href is a checkout URL. CheckoutGuard allows that link
 and audit.js reports it as the cart's `checkout` control; a button with the same label stays forbidden.
 
-URL keys (`category_url`, `product_url`, `cart_url`, `checkout_url`, `info_url`) are matched against the path plus
-the query string ("/index.php?route=checkout/checkout" is a checkout URL). `info_url` marks content pages
-("/pages/payment.html", "/content/pagamento.html") whose names would otherwise read as checkout steps.
+URL keys (`category_url`, `product_url`, `cart_url`, `cart_action_url`, `checkout_url`, `info_url`) are matched
+against the path plus the query string ("/index.php?route=checkout/checkout" is a checkout URL). `info_url` marks
+content pages ("/pages/payment.html", "/content/pagamento.html") whose names would otherwise read as checkout steps.
+`cart_action_url` marks a link whose GET changes the cart ("?add-to-cart=7", "/cart/change?line=1&quantity=0").
 """
 
 import re
@@ -32,6 +34,14 @@ from functools import lru_cache
 
 # Italian street words and articles are shared by several keys.
 _L = "['’]\\s?"  # elided article: l'ordine, all'acquisto, dell'ordine
+# Query keys and path segments that make a GET change the cart (WooCommerce ?add-to-cart=7 and ?remove_item=...,
+# PrestaShop ?add=1, Shopify /cart/add and /cart/change), in every language: no URL carrying one is loaded as a page
+# (oracles.clean_cart_url, the crawler) or reported as a product or cart link (audit.js, `cart_action_url`).
+CART_ACTION_KEYS = (r"add|add[-_]to[-_]cart|add[-_]item|remove|remove[-_]item|removed[-_]item|undo[-_]item|delete"
+                    r"|update|update[-_]cart|empty[-_]cart|clear[-_]cart|action|op|quantity|qty|_?wpnonce"
+                    r"|aggiungi|rimuovi|elimina|svuota|aggiorna|quantit[aà]|qt[aà]|azione")
+CART_ACTION_SEGMENTS = ("add", "change", "update", "clear", "remove", "delete", "empty",
+                        "aggiungi", "rimuovi", "elimina", "svuota", "aggiorna", "modifica")
 
 LEXICON: dict[str, dict[str, list[str]]] = {
     "it": {
@@ -70,6 +80,12 @@ LEXICON: dict[str, dict[str, list[str]]] = {
             # a cost row labelled by its delivery ("Consegna 4,90 €", "Costo consegna"), not a delivery-time sentence
             r"^\s*(costo\s+(della\s+)?)?consegna(\s+(standard|express|espressa|rapida|a\s+domicilio))?\s*:?\s*$",
         ],
+        # the cost is left to a later step: no shipping cost is shown ("Spese di spedizione calcolate al momento del
+        # pagamento", Shopify's "Spedizione calcolata al checkout")
+        "shipping_deferred": [
+            r"(spedizion[ei]|consegna)[^.!?]{0,40}calcolat[eoia]\s+(al|alla|nel|nella|durante\s+il|in\s+fase\s+di"
+            r"|al\s+momento\s+del(l" + _L + r")?)\s*(checkout|cassa|carrello|pagamento|ordine|acquisto)",
+        ],
         "free_shipping": [
             r"spedizion[ei]\s*:?\s*(sempre\s+)?(gratuit[ae]|gratis|in\s+omaggio)",
             r"(gratuit[ae]|gratis)\s+(la\s+)?spedizion",
@@ -101,7 +117,10 @@ LEXICON: dict[str, dict[str, list[str]]] = {
         "scarcity": [
             r"(solo|soltanto|ancora)\s+\d+\s+(pezz[io]|disponibil[ie]|rimast[oaie]|articol[io]|in\s+magazzino|unità)",
             r"(ultim[ie]|ultimo)\s+\d*\s*(pezz[io]|disponibil[ie]|taglie|articol[io])",
-            r"rimast[oaie]\s+(solo|soltanto)\s+\d+", r"disponibilità\s+limitata", r"scorte\s+limitate",
+            # a number of items, not of days ("Rimasti solo 3 giorni di saldi!" is a sale's deadline)
+            r"rimast[oaie]\s+(solo|soltanto)\s+\d+(?![\d.,]|\s*(giorn|or[ae]\b|minut|second|settiman|mes[ei]\b|ann[oi]\b"
+            r"|gg\b|h\b))",
+            r"disponibilità\s+limitata", r"scorte\s+limitate",
             r"quasi\s+esaurit[oa]", r"edizione\s+limitata", r"pezzi\s+limitati", r"in\s+esaurimento",
         ],
         "urgency": [
@@ -159,9 +178,19 @@ LEXICON: dict[str, dict[str, list[str]]] = {
             r"ospite", r"senza\s+(registrar|registrazione|account|iscrizione)",
             r"non\s+(ti\s+)?serve\s+(un\s+)?account",
             r"continua\s+senza\s+(account|registr|accedere)", r"non\s+creare\s+(un\s+)?account",
+            r"senza\s+(creare|aprire)\s+(un\s+)?account",
+        ],
+        # guest wording that its own sentence denies ("non è possibile acquistare senza creare un account"): no exit
+        "guest_negated": [
+            r"(non\s+(è|e'|e)\s+(più\s+)?(possibile|consentito|permesso)|non\s+(puoi|si\s+può|si\s+puo)|impossibile)"
+            r"[^.;:!?,]{0,60}(senza\s+(registra|un\s+account|account|creare|aprire|iscri|accedere)|ospite)",
+            r"(senza\s+(registra|un\s+account|account|creare|aprire|iscri|accedere)|ospite)[^.;:!?,]{0,40}"
+            r"(non\s+(è|e'|e)\s+(più\s+)?(possibile|consentit[oa]|permess[oa]|disponibile|attiv[oa]|abilitat[oa])"
+            r"|non\s+(puoi|si\s+può|si\s+puo))",
         ],
         "login": [
             r"^\s*accedi\s*$", r"accedi\s+(al|con|a)\b", r"\baccesso\b", r"il\s+mio\s+account", r"^\s*login\s*$",
+            r"^\s*entra\s*$",
             r"hai\s+già\s+un\s+account", r"entra\s+nel\s+tuo\s+account",
             # a login-or-register box ("Accedi o registrati") is a login box: its password is a current password
             r"accedi\s*(o|oppure|/|\|)\s*(registrati|iscriviti|crea)",
@@ -246,7 +275,7 @@ LEXICON: dict[str, dict[str, list[str]]] = {
             r"\bvoucher\b",
         ],
         "remove": [r"rimuovi", r"\belimina", r"\bcancella\b", r"\btogli\b"],
-        "subtotal": [r"subtotale", r"totale\s+parziale", r"totale\s+(prodotti|articoli|merce)"],
+        "subtotal": [r"subtotale", r"(totale|somma)\s+parziale", r"totale\s+(prodotti|articoli|merce)"],
         "total": [r"^\s*totale", r"totale\s+(ordine|complessivo|da\s+pagare)", r"importo\s+totale", r"da\s+pagare"],
         # a tax line of a cart summary ("IVA 22%", "Imposte"): never an unexplained fee (checks.py)
         "tax_line": [r"\biva\b", r"\bimpost[ae]\b", r"\btasse\b"],
@@ -356,6 +385,10 @@ LEXICON: dict[str, dict[str, list[str]]] = {
             r"shipping", r"delivery\s+(cost|fee|charge|price)", r"postage",
             r"^\s*((standard|express|next[-\s]day|tracked|home|premium)\s+)?delivery\s*:?\s*$",  # a cost row label
         ],
+        "shipping_deferred": [  # "Shipping calculated at checkout", "Taxes and shipping calculated at checkout"
+            r"(shipping|delivery|postage)[^.!?]{0,40}(calculated|determined|confirmed|added)\s+(at|during|in|on)\s+"
+            r"(the\s+)?(checkout|cart|basket|payment|next\s+step)",
+        ],
         "free_shipping": [r"free\s+(standard\s+)?(shipping|delivery|postage)", r"(shipping|delivery)\s*:?\s*free\b"],
         "returns": [
             r"\breturns\b", r"\breturn\s+(policy|window)", r"free\s+returns?", r"\d+[-\s]day\s+returns?",
@@ -423,7 +456,16 @@ LEXICON: dict[str, dict[str, list[str]]] = {
         ],
         "guest": [
             r"\bguest\b", r"without\s+(an\s+)?account", r"no\s+account\s+(needed|required)",
-            r"continue\s+without\s+(signing|registering|an\s+account)",
+            r"continue\s+without\s+(signing|registering|an\s+account)", r"without\s+creating\s+(an\s+)?account",
+            r"(do\s+not|don'?t)\s+create\s+(an?\s+)?(customer\s+)?account",
+        ],
+        "guest_negated": [
+            r"(cannot|can['’]?t|can\s+not|unable\s+to|not\s+(possible|able|allowed|permitted)\s+to)[^.;:!?,]{0,60}"
+            r"(without\s+(an?\s+(customer\s+)?account|creating|registering|signing|logging)|\bguest\b)",
+            r"(without\s+(an?\s+(customer\s+)?account|creating|registering|signing|logging)|\bguest\b)[^.;:!?,]{0,40}"
+            r"((is|are)\s+not|isn['’]t|aren['’]t)\s+(possible|allowed|available|permitted|supported|enabled)",
+            r"(without\s+(an?\s+(customer\s+)?account|creating|registering|signing|logging)|\bguest\b)[^.;:!?,]{0,40}"
+            r"(is|are)\s+(unavailable|disabled)",
         ],
         "login": [r"sign\s*in", r"log\s*in", r"my\s+account", r"already\s+have\s+an\s+account"],
         "register": [r"\bregister\b", r"sign\s*up", r"create\s+(an\s+|your\s+)?account", r"new\s+customer"],
@@ -565,6 +607,9 @@ LEXICON: dict[str, dict[str, list[str]]] = {
             r"[?&](pid|product_id|sku)=",
         ],
         "cart_url": [r"/(cart|basket|bag|shopping-?bag)(/|$|\?|\.|#)", r"cart\."],
+        # path and decoded query of a URL whose GET changes the cart (CART_ACTION_KEYS, CART_ACTION_SEGMENTS)
+        "cart_action_url": [rf"[?&](?:{CART_ACTION_KEYS})(?==|&|$)",
+                            rf"/(?:{'|'.join(CART_ACTION_SEGMENTS)})(?=/|\?|$)"],
         "checkout_url": [r"/(checkouts?|payment|onepage)(/|$|\?|\.|#)", r"checkout\."],
         "info_url": [
             r"/(pages?|help|support|policies|policy|legal|faq|blog|content|cms|info)/",
@@ -584,12 +629,20 @@ PUBLIC_SUFFIXES = frozenset({
     "com.pl", "com.gr", "com.cy", "com.mt", "co.at", "or.at", "gv.at", "co.hu", "com.pt", "com.es", "com.ru",
     "myshopify.com", "github.io", "netlify.app", "vercel.app", "herokuapp.com", "appspot.com", "blogspot.com",
     "pages.dev", "web.app", "firebaseapp.com", "azurewebsites.net", "cloudfront.net", "wixsite.com",
-    "squarespace.com", "wordpress.com",
+    "squarespace.com", "wordpress.com", "altervista.org", "webnode.it", "webnode.com", "webnode.page",
+    "jimdosite.com", "jimdofree.com", "weebly.com", "webflow.io", "square.site", "business.site", "company.site",
+    "bigcartel.com", "mystrikingly.com", "tilda.ws", "onrender.com",
 })
+# The second level of a two-letter ccTLD that is a public suffix almost everywhere ("com.vn", "co.id", "gob.mx",
+# "org.br"): an unlisted one keeps three labels, so a whole namespace never reads as one site. audit.js siteOf()
+# applies the same rule.
+GENERIC_SECOND_LEVEL = frozenset({"ac", "co", "com", "edu", "gob", "go", "gov", "gv", "ltd", "me", "mil", "ne", "net",
+                                  "nom", "or", "org", "plc", "sch"})
 
 
 def registrable_domain(host: str | None) -> str:
-    """"shop.example.co.uk" -> "example.co.uk"; IP addresses and single-label hosts are returned unchanged."""
+    """"shop.example.co.uk" -> "example.co.uk", "shop.example.com.vn" -> "example.com.vn", "mionegozio.altervista.org"
+    stays itself; IP addresses and single-label hosts are returned unchanged."""
     host = (host or "").strip().lower().rstrip(".")
     if not host or ":" in host or re.fullmatch(r"[\d.]+", host) or "." not in host:
         return host  # IPv6 / IPv4 / localhost
@@ -597,6 +650,8 @@ def registrable_domain(host: str | None) -> str:
     for size in (3, 2):
         if len(labels) > size and ".".join(labels[-size:]) in PUBLIC_SUFFIXES:
             return ".".join(labels[-size - 1:])
+    if len(labels) > 2 and len(labels[-1]) == 2 and labels[-2] in GENERIC_SECOND_LEVEL:
+        return ".".join(labels[-3:])
     return ".".join(labels[-2:])
 
 
@@ -629,11 +684,36 @@ def lexicon_all() -> dict[str, list[str]]:
     return {key: list(patterns) for key, patterns in _all()}
 
 
-def effective_language(declared: str | None, locale: str) -> str:
-    """The language a page's words are matched in: the primary subtag of its declared <html lang> when the lexicon
-    has that language, else the run locale's ("it-IT" page -> "it"; "de" page on an Italian run -> "it")."""
-    page = _base(declared)
-    return page if page in LEXICON else (_base(locale) or "en")
+# Function words that tell the language of a page's text, for a declared <html lang> that may be a theme default.
+FUNCTION_WORDS = {
+    "it": frozenset("il lo la le gli di del dello della delle dei degli che per con non una uno sono alla alle nel "
+                    "nella nelle sul sulla dal dalla anche più come questo questa ogni tutti tutte ai al da ed è"
+                    .split()),
+    "en": frozenset("the and of to with for is are you your our this that on at from by it be all more an or not we"
+                    .split()),
+}
+
+
+def text_languages(sample: str | None) -> dict[str, int]:
+    """How many function words of each FUNCTION_WORDS language the text holds."""
+    words = re.findall(r"[^\W\d_]+", (sample or "").lower())
+    return {language: sum(w in vocabulary for w in words) for language, vocabulary in FUNCTION_WORDS.items()}
+
+
+def effective_language(declared: str | None, locale: str, sample: str | None = None) -> str:
+    """The language a page's words are matched in and its text is read in: the primary subtag of its declared
+    <html lang> when the lexicon has that language, else the run locale's ("it-IT" page -> "it"; "de" page on an
+    Italian run -> "it"). A declared language other than the run's gives way to the run's when the page's text
+    (sample) reads as the run's language: at least 5 of its function words and twice as many as the declared one's
+    (an Italian shop whose theme declares lang="en" is read in Italian, whose lexicon includes English)."""
+    page, run = _base(declared), _base(locale) or "en"
+    if page not in LEXICON:
+        return run
+    if sample and page != run and page in FUNCTION_WORDS and run in FUNCTION_WORDS:
+        counts = text_languages(sample)
+        if counts[run] >= max(5, 2 * counts[page]):
+            return run
+    return page
 
 
 def compile_lexicon(lexicon: dict[str, list[str]]) -> dict[str, re.Pattern]:

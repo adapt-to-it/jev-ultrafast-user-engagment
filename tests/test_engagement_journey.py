@@ -127,6 +127,23 @@ def test_text_is_only_for_type_text_and_never_personal_data():
     assert personal_text("AB12 CD34 567E F890 1GH2 34") == "an IBAN"  # ten digits or more, no long digit run
 
 
+@pytest.mark.parametrize("text, what", [
+    ("Via Roma 12, 20121 Milano", "a street address"), ("Viale Monza 5", "a street address"),
+    ("221 Baker Street", "a street address"), ("nato il 12/03/1985", "a date"), ("12 marzo 1985", "a date"),
+    ("CVV 123", "a card security code"), ("mario.rossi(at)gmail.com", "an email address"),
+    ("mario.rossi at gmail dot com", "an email address"),
+    # product words stay typeable (a name cannot be recognised: the field guard is the guarantee)
+    ("Mario Rossi", None), ("Air Max 90", None), ("Xbox 360", None), ("corso di yoga 10", None),
+    ("via col vento dvd", None), ("Street Fighter 6", None), ("running shoes at discount", None),
+    ("tazza 12/24", None), ("calendario 2027", None), ("iPhone 15 Pro Max 256", None),
+])
+def test_text_that_looks_like_an_address_a_date_or_a_security_code_is_refused(text, what):
+    assert personal_text(text) == what
+    if what:
+        with pytest.raises(ValueError, match=f"looks like {what}"):
+            host().set("TYPE_TEXT", "1", text)
+
+
 def test_a_choice_whose_index_now_names_another_element_is_stale():
     policy = host()
     policy.set("CLICK", "2")

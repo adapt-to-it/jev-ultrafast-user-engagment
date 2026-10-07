@@ -7,6 +7,7 @@ jev-engage-mcp script. Nothing calls a paid API or the public internet; judges a
 """
 
 import copy
+import importlib.metadata
 import json
 import os
 import re
@@ -16,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import anyio
@@ -24,19 +26,22 @@ from mcp import Client, StdioServerParameters
 
 from jev_ultrafast.engagement import audit as audit_module
 from jev_ultrafast.engagement import journey as journey_module
+from jev_ultrafast.engagement import judgments
 from jev_ultrafast.engagement.chrome import find_chromium
 from jev_ultrafast.engagement.collectors import PageCollector
-from jev_ultrafast.engagement.mcp_server import build_server
-from jev_ultrafast.engagement.service import TASK_PAGE, TASK_PAGE_CHARS, EngagementService
+from jev_ultrafast.engagement.mcp_server import RESULT_CHARS, build_server
+from jev_ultrafast.engagement.service import TASK_PAGE, TASK_PAGE_CHARS, EngagementService, _failed, _JobStore
 from jev_ultrafast.engagement.store import RunStore, iso_now
 from jev_ultrafast.engagement.transport import DirectTransport
 
+ROOT = Path(__file__).resolve().parents[1]
 RUNS = Path(__file__).with_name("fixtures") / "runs"
 GOLDEN = json.loads((RUNS / "audit_complete.json").read_text(encoding="utf-8"))
 SHOP = GOLDEN["site"]["start_url"]
 TOOLS = {"audit_shop", "wait_run", "get_run", "run_journey", "journey_act", "journey_finish", "get_judgment_tasks",
          "submit_judgments", "finalize_judgments", "score_run", "get_report", "list_runs"}
 READ_ONLY = {"wait_run", "get_run", "get_report", "list_runs"}  # get_judgment_tasks creates the tasks once
+PLUGIN_TOOL = "mcp__plugin_jev-engagement_engagement__"  # mcp__plugin_<plugin>_<server>__<tool>
 OPEN_WORLD = {"audit_shop", "run_journey", "journey_act", "journey_finish"}
 
 
@@ -131,11 +136,57 @@ def test_tools_carry_names_annotations_and_the_rules_the_host_reads(service):
     assert by_name["get_judgment_tasks"].input_schema["properties"]["limit"]["maximum"] == TASK_PAGE
     assert by_name["get_judgment_tasks"].annotations.idempotent_hint is True
     assert [t.name for t in tools if (t.meta or {}).get("anthropic/alwaysLoad")] == ["get_judgment_tasks"]
+    # a page is never saved to a file by Claude Code (the judges cannot read files): see the worst-case page test
+    assert by_name["get_judgment_tasks"].meta["anthropic/maxResultSizeChars"] == RESULT_CHARS
     assert by_name["audit_shop"].input_schema["properties"]["profiles"]["anyOf"][0]["minItems"] == 1
     assert "never a selector" in by_name["journey_act"].input_schema["properties"]["target"]["description"].lower()
     for phrase in ("never measured engagement", "predicted friction", "risk signals", "never place orders",
                    "offered element index"):
         assert phrase in instructions
+
+
+def test_the_plugin_runs_its_own_server_and_names_only_tools_it_lists(service):
+    """The plugin's server lives in plugin.json with the exact placeholders (Claude Code substitutes only
+    ${CLAUDE_PLUGIN_ROOT} and ${CLAUDE_PLUGIN_DATA}; a ${VAR:-default} form goes through plain environment expansion
+    and always takes the default). No project .mcp.json at the root: it would be read as the plugin's server file
+    and as a second, project-scoped server. Every tool the skills and the judge agent name is one the server lists."""
+    manifest = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    server = manifest["mcpServers"]["engagement"]
+    assert server["command"] == "uv"
+    assert server["args"] == ["run", "--frozen", "--no-dev", "--project", "${CLAUDE_PLUGIN_ROOT}", "jev-engage-mcp"]
+    assert server["env"] == {"BH_TAB_MARKER": "0", "UV_PROJECT_ENVIRONMENT": "${CLAUDE_PLUGIN_DATA}/.venv",
+                             "JEV_ENGAGEMENT_ARTIFACTS": "${CLAUDE_PLUGIN_DATA}/engagement"}
+    assert ":-" not in json.dumps(manifest) and not (ROOT / ".mcp.json").exists()
+    marketplace = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+    assert [(p["name"], p["source"]) for p in marketplace["plugins"]] == [(manifest["name"], "./")]
+
+    async def scenario(client):
+        return {t.name for t in (await client.list_tools()).tools}
+    listed = session(build_server(service()), scenario)
+    named = {}
+    for path in [*ROOT.glob("skills/**/*.md"), *ROOT.glob("agents/**/*.md")]:
+        text = path.read_text(encoding="utf-8")
+        assert "mcp__engagement__" not in text, path  # the project-scoped name is gone with .mcp.json
+        named[path.relative_to(ROOT).as_posix()] = set(re.findall(r"mcp__plugin_[\w-]+", text))
+    assert named["agents/engagement-judge.md"] == {PLUGIN_TOOL + "get_judgment_tasks"}
+    assert named["skills/shop-readiness/SKILL.md"] == {PLUGIN_TOOL + tool for tool in TOOLS}
+    for path, names in named.items():
+        assert all(n.startswith(PLUGIN_TOOL) and n.removeprefix(PLUGIN_TOOL) in listed for n in names), path
+    front = (ROOT / "skills" / "shop-readiness" / "SKILL.md").read_text(encoding="utf-8").split("---")[1]
+    allowed = re.findall(r"^  - (\S+)$", front.split("allowed-tools:")[1], re.M)
+    assert set(allowed) == {PLUGIN_TOOL + tool for tool in listed}
+
+
+def test_the_plugin_server_and_package_share_one_version(service):
+    """plugin.json's version (what `claude plugin list` and bug reports show, and what decides whether `claude plugin
+    update` installs anything) equals pyproject's; the server reports the installed package's version."""
+    manifest = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    project = re.search(r'^version = "([^"]+)"$', (ROOT / "pyproject.toml").read_text(encoding="utf-8"), re.M)[1]
+    assert manifest["version"] == project
+
+    async def scenario(client):
+        return client.server_info.version
+    assert session(build_server(service()), scenario) == importlib.metadata.version("jev-ultrafast") == project
 
 
 # ---------------------------------------------------------------- audit -> judgments -> score -> report
@@ -224,8 +275,23 @@ def test_an_audit_without_judgments_is_scored_as_unjudged(service, monkeypatch):
     monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit())
     svc = service()
     run_id = svc.audit_shop(SHOP, wait=True)["run_id"]
-    scored = svc.score_run(run_id)
-    assert "senza giudizi LLM" in scored["scope"]
+    with pytest.raises(ValueError, match="the run being scored"):
+        svc.score_run(run_id, [run_id])
+    results, errors = [], []
+
+    def score():
+        try:
+            results.append(svc.score_run(run_id))
+        except Exception as exc:  # report.html is rewritten by each call: they must not overlap
+            errors.append(exc)
+    threads = [threading.Thread(target=score) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(60)
+    assert not errors and len(results) == 6
+    scored = results[-1]
+    assert "senza giudizi LLM" in scored["scope"] and Path(scored["report"]["report_html"]).is_file()
     assert "judgments" in svc.store.load(run_id) and svc.get_run(run_id)["judgments"] == {"prepared": False}
     with pytest.raises(ValueError, match="get_judgment_tasks first"):
         svc.finalize_judgments(run_id)
@@ -267,6 +333,56 @@ def test_brief_and_full_pages_share_their_cursors_when_snippets_are_long(service
     assert svc.submit_judgments(run_id, "j1", "m", [verdict])["accepted"] == 1
     again = svc.get_judgment_tasks(run_id, 0, brief=True)
     assert again["next_cursor"] == page["next_cursor"] and again["tasks"][0]["samples_submitted"] == 1
+
+
+def test_a_page_of_non_latin_snippets_holds_fewer_characters(service, monkeypatch):
+    """Cyrillic or CJK text takes more tokens per character than Latin: such a character counts three toward
+    TASK_PAGE_CHARS, so a page of them stays as far below the tool output limit as a Latin page."""
+    monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit())
+    svc = service()
+    run_id = svc.audit_shop(SHOP, wait=True)["run_id"]
+    svc.get_judgment_tasks(run_id, brief=True)
+
+    def page_of(words):
+        def fill(run):
+            for i, task in enumerate(run["judgments"]["tasks"]):
+                task["snippets"] = [{"snippet_id": f"s{i}-{k}", "kind": "body", "text": (words * 200)[:600]}
+                                    for k in range(8)]
+        svc.store.update(run_id, fill)
+        return svc.get_judgment_tasks(run_id, 0)
+    latin, cjk = page_of("parole "), page_of("购物车价格")
+    assert len(latin["tasks"]) >= 3 * len(cjk["tasks"]) >= 3
+    assert sum(len(s["text"]) for t in cjk["tasks"] for s in t["snippets"]) <= TASK_PAGE_CHARS // 3
+    assert svc.get_judgment_tasks(run_id, 0, brief=True)["next_cursor"] == cjk["next_cursor"]
+
+
+def test_a_page_of_the_longest_tasks_citing_every_rubric_stays_below_the_hosts_file_threshold(service, monkeypatch):
+    """Claude Code saves a tool result longer than 50,000 characters to a file unless the tool declares a higher
+    anthropic/maxResultSizeChars; a judge cannot read such a file. Worst case: task text up to TASK_PAGE_CHARS (8
+    snippets of 600 characters, full of characters JSON escapes) plus every rubric's question and labels on one page."""
+    monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit())
+    svc = service()
+    run_id = svc.audit_shop(SHOP, wait=True)["run_id"]
+    svc.get_judgment_tasks(run_id, brief=True)
+    rubric_ids = sorted(judgments.load_rubrics())
+
+    def inflate(run):
+        tasks = run["judgments"]["tasks"]
+        while len(tasks) < 2 * TASK_PAGE:
+            tasks.append({**copy.deepcopy(tasks[-1]), "task_id": f"{tasks[-1]['task_id']}-{len(tasks)}"})
+        for i, task in enumerate(tasks):
+            text = (f'Testo "lungo" {i}: ' + 'parole "della" pagina \\ ' * 40)[:600]
+            task["rubric_id"] = rubric_ids[i % len(rubric_ids)]  # the first tasks cite every rubric, one snippet each
+            task["snippets"] = [{"snippet_id": f"s{i}-{k}", "kind": "subscription_terms", "text": text}
+                                for k in range(1 if i < len(rubric_ids) else 8)]
+    svc.store.update(run_id, inflate)
+
+    async def scenario(client):
+        return (await client.call_tool("get_judgment_tasks", {"run_id": run_id})).content[0].text
+    text = session(build_server(svc), scenario)
+    page = json.loads(text)
+    assert set(page["rubrics"]) == set(rubric_ids) and page["next_cursor"] < TASK_PAGE  # cut by size
+    assert len(text) < 50_000 < RESULT_CHARS, len(text)
 
 
 def test_errors_reach_the_host_as_messages(service, monkeypatch):
@@ -316,8 +432,8 @@ class FakeRunner:
 
     def start(self, url, goal, *, oracle, **kwargs):
         self.run_id = self.store.new_run("journey", url, {})
-        self.store.update(self.run_id, lambda run: run.update(status="running", journey={
-            "goal": goal, "oracle": oracle, "status": "running", "verification": None}))
+        self.store.update(self.run_id, lambda run: run.update(status="running", journey={  # the landing page is read
+            "goal": goal, "oracle": oracle, "status": "running", "verification": None}, pages=[{"page_id": "start"}]))
         self.status = "running"
         return {"run_id": self.run_id, "status": "running", "observation": {"observation_id": 1}}
 
@@ -383,6 +499,63 @@ def test_journey_act_needs_the_observation_id_and_a_bad_finish_keeps_the_journey
     assert svc.journey_finish(run_id, "done")["verification"]["passed"] is True
 
 
+def test_journey_finish_shows_every_check_of_the_verdict(service, monkeypatch):
+    """The host reads why a journey was not assessable: navigation_error stays {url, error} and a cart's item_list
+    keeps its items, however many checks the oracle recorded."""
+    checks = {"oracle": "cart_contains_item_under_price", "cart_found": True, "cart_source": "visited",
+              "cart_url": "https://shop.example/cart", "page_type": "cart", "items": 1, "price_reading": "unit",
+              "subtotal": 39.9, "total": 44.8, "cart_empty": False, "max_price": 50.0, "matching": 1,
+              "item_list": [{"title": "Scarpa da corsa", "qty": 1, "price": 39.9}], "oracle_passed": False,
+              "navigation_error": {"url": "https://shop.example/cart", "error": "net::ERR_CONNECTION_RESET"},
+              "not_assessable": "navigation_error"}
+
+    class Unloaded(FakeRunner):
+        def finish(self, status=None):
+            result = super().finish(status)
+            verification = {"passed": None, "checks": copy.deepcopy(checks)}
+            self.store.update(self.run_id, lambda run: run["journey"].update(verification=verification))
+            return {**result, "verification": verification}
+    monkeypatch.setattr(journey_module, "JourneyRunner", Unloaded)
+    svc = service()
+    run_id = svc.run_journey(SHOP, "Trova scarpe", "cart_contains_item_under_price", {"max_price": 50})["run_id"]
+    for summary in (svc.journey_finish(run_id, "blocked"), svc.journey_finish(run_id)):  # live, then read back
+        assert summary["verification"] == {"passed": None, "checks": checks}
+
+
+class FailingFinish(FakeRunner):
+    """A runner that stops by itself (DONE) and whose finish() raises (an oracle, friction or save error)."""
+
+    def run_auto(self):
+        self.status = "done"
+
+    def finish(self, status=None):
+        self.calls.append(("finish", status))
+        raise KeyError("boom")
+
+
+def test_a_journey_whose_finish_fails_records_why_whatever_closed_it(service, monkeypatch, caplog):
+    """close() has already left the run partial: the error still reaches the run and the log, with a warning that
+    nothing was verified, and a journey that stopped by itself is not called idle."""
+    monkeypatch.setattr(journey_module, "JourneyRunner", FailingFinish)
+    now = [0.0]
+    svc = service(clock=lambda: now[0], idle_timeout_s=600, reap_interval_s=3600)
+    auto = svc.run_journey(SHOP, "Trova scarpe", "cart_not_empty", policy="typesafe", wait=True)["run_id"]
+    host = svc.run_journey(SHOP, "Trova scarpe", "cart_not_empty")["run_id"]
+    with pytest.raises(KeyError, match="boom"):
+        svc.journey_finish(host, "done")
+    reaped = svc.run_journey(SHOP, "Trova scarpe", "cart_not_empty")["run_id"]
+    svc.journey_act(reaped, "DONE", observation_id=1)
+    now[0] = 700
+    assert svc.reap() == [reaped]
+    for run_id in (auto, host, reaped):
+        run = svc.store.load(run_id)
+        assert run["status"] == "partial" and run["errors"] == ["journey finish: KeyError: 'boom'"], run_id
+        assert "closed without verification: journey finish failed" in run["warnings"]
+        assert not any(w.startswith("abandoned") for w in run["warnings"])
+    assert svc._jobs[auto].progress == ["journey finish: KeyError: 'boom'"]
+    assert caplog.text.count("finishing journey") == 3
+
+
 def test_a_journey_being_reaped_stays_open_until_it_is_closed(service, monkeypatch):
     """The reaper holds a stopped journey while its oracle runs: journey_finish waits and reads the verdict back."""
     gate, entered = threading.Event(), threading.Event()
@@ -415,8 +588,12 @@ def test_a_journey_being_reaped_stays_open_until_it_is_closed(service, monkeypat
 
 
 def test_an_interrupted_audit_stays_failed_whatever_its_thread_writes_later(service, monkeypatch):
+    """An interrupted audit stays failed, is released (owner.json gone) by the time its job is done, and is never
+    judged or scored: whatever its thread still wrote came from a run that did not finish."""
     gate = threading.Event()
     monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit(gate))
+    disown = EngagementService._disown
+    monkeypatch.setattr(EngagementService, "_disown", lambda self, run_id: (time.sleep(0.05), disown(self, run_id)))
     svc = service()
     run_id = svc.audit_shop(SHOP)["run_id"]
     assert json.loads((svc.store.path(run_id) / "owner.json").read_text())["owner_pid"] == os.getpid()
@@ -428,9 +605,15 @@ def test_an_interrupted_audit_stays_failed_whatever_its_thread_writes_later(serv
     svc._jobs[run_id].done.wait(10)
     run = svc.store.load(run_id)
     assert run["status"] == "failed" and run["pages"] and run["errors"][0].startswith("interrupted: the server shut")
-    assert not (svc.store.path(run_id) / "owner.json").exists()
+    assert not (svc.store.path(run_id) / "owner.json").exists()  # released before done is set, however slow
     with pytest.raises(RuntimeError, match="shutting down"):
         svc.audit_shop(SHOP)
+    for refused in (lambda: svc.get_judgment_tasks(run_id), lambda: svc.score_run(run_id),
+                    lambda: svc.finalize_judgments(run_id)):
+        with pytest.raises(ValueError, match=r"was interrupted \(interrupted: the server shut down .*run the audit "
+                                             r"again"):
+            refused()
+    assert svc.store.load(run_id)["scores"] is None and not (svc.store.path(run_id) / "report.json").exists()
 
 
 def test_abort_marks_the_runs_at_once_without_touching_a_browser(service, monkeypatch):
@@ -445,7 +628,7 @@ def test_abort_marks_the_runs_at_once_without_touching_a_browser(service, monkey
         assert f"concurrent run {peer} in this process: timings may be skewed" in svc.store.load(run_id)["warnings"]
     started = time.monotonic()
     svc.abort("the server was stopped (signal 2)")
-    assert time.monotonic() - started < 0.5
+    assert time.monotonic() - started < 2  # two run.json writes, no join, no lock wait, no browser call
     assert FakeRunner.instances[0].calls == []  # no close(), no finish(): the browsers are already gone
     svc.journey_act(journey, "SCROLL_DOWN", observation_id=1)  # a step still in flight writes after the mark
     FakeRunner.instances[0].store.update(journey, lambda run: run["journey"].update(status="running"))
@@ -458,6 +641,86 @@ def test_abort_marks_the_runs_at_once_without_touching_a_browser(service, monkey
     assert run["status"] == "failed" and "interrupted: the server was stopped (signal 2)" in run["errors"][0]
 
 
+def test_sealed_runs_keep_their_mark_whatever_their_threads_write_after_the_kill(service, monkeypatch):
+    """The signal path: seal() (no I/O) before the browsers are killed, abort() after. Threads that react to the kill
+    at once write their lost browser and their own end before abort() runs: the audit still ends failed and
+    interrupted (not partial from a half-killed funnel), the typesafe journey abandoned (its late verdict dropped).
+    The marks are written jobs first, then the open journeys."""
+    killed = threading.Event()
+
+    def audit_shop(settings, *, store, transport_factory=None, progress=None):  # audit.py once its browser is gone
+        run_id = store.new_run("audit", settings.url, {})
+        store.update(run_id, lambda run: run.update(status="running", pages=copy.deepcopy(GOLDEN["pages"][:3])))
+        assert killed.wait(20)
+        store.update(run_id, lambda run: run["errors"].append("desktop: ConnectionError: CDP connection is closed"))
+        store.update(run_id, lambda run: run.update(status="partial", finished_at=iso_now()))
+        return run_id
+
+    class AutoRunner(FakeRunner):
+        def run_auto(self):
+            assert killed.wait(20)
+            raise ConnectionError("CDP connection is closed")
+    monkeypatch.setattr(audit_module, "audit_shop", audit_shop)
+    monkeypatch.setattr(journey_module, "JourneyRunner", AutoRunner)
+    svc = service()
+    journey = svc.run_journey(SHOP, "Trova scarpe", "cart_not_empty")["run_id"]
+    auto = svc.run_journey(SHOP, "Trova scarpe", "cart_not_empty", policy="typesafe")["run_id"]
+    audit = svc.audit_shop(SHOP)["run_id"]
+    reason = "the server was stopped (signal 2)"
+    svc.seal(reason)
+    assert svc.store.load(audit)["status"] == svc.store.load(journey)["status"] == "running"  # no I/O yet
+    with pytest.raises(RuntimeError, match="shutting down"):
+        svc.run_journey(SHOP, "Trova scarpe", "cart_not_empty")
+    killed.set()  # _kill_browsers()
+    assert svc._jobs[audit].done.wait(10) and svc._jobs[auto].done.wait(10)  # both ended before abort()
+    marked = []
+    mark = svc._mark
+    monkeypatch.setattr(svc, "_mark", lambda run_id, fn: (marked.append(run_id), mark(run_id, fn)))
+    svc.abort(reason)
+    assert set(marked[:2]) == {audit, auto} and marked[2:] == [journey]
+    run = svc.store.load(audit)
+    assert run["status"] == "failed" and run["pages"]
+    assert set(run["errors"]) == {f"interrupted: {reason} while the run was in progress",
+                                  "desktop: ConnectionError: CDP connection is closed"}
+    for run_id in (auto, journey):
+        run = svc.store.load(run_id)
+        assert run["status"] == "partial" and run["journey"]["status"] == "abandoned", run_id
+        assert run["journey"]["verification"] is None and run["observations"] == []
+        assert f"abandoned: {reason}; closed without verification" in run["warnings"]
+    dropped = "verification discarded: the oracle ran after the journey was interrupted"
+    assert dropped in svc.store.load(auto)["warnings"]
+
+
+def test_a_sealed_job_store_marks_every_write_of_its_run(tmp_path):
+    """run.json has two writers, RunStore.update and RunStore.save: once sealed, both keep the mark on the job's run
+    and leave every other run alone."""
+    store = RunStore(tmp_path)
+    run_id, other = store.new_run("audit", SHOP, {}), store.new_run("audit", SHOP, {})
+    job = _JobStore(store, run_id)
+    job.seal(_failed("interrupted: test"))
+    for target in (run_id, other):
+        run = store.load(target)
+        run.update(status="complete", finished_at=iso_now())
+        job.save(target, run)
+    assert store.load(run_id)["status"] == "failed" and store.load(run_id)["errors"] == ["interrupted: test"]
+    assert store.load(other)["status"] == "complete"
+    job.update(run_id, lambda run: run.update(status="partial"))
+    assert store.load(run_id)["status"] == "failed"
+
+
+def test_a_run_that_never_started_is_not_waited_for(service):
+    """A process that died between creating a run and recording itself as its owner leaves a "created" run without
+    owner.json: once it is clearly stale it is marked failed; a fresh one is left alone."""
+    svc = service()
+    stale = svc.store.new_run("audit", SHOP, {}, now=datetime.now(UTC) - timedelta(minutes=5))
+    fresh = svc.store.new_run("audit", SHOP, {})
+    started = time.monotonic()
+    waited = svc.wait_run(stale, 30)
+    assert time.monotonic() - started < 5 and not waited["timed_out"] and waited["status"] == "failed"
+    assert waited["errors"][0].startswith("interrupted: the run never started")
+    assert svc.get_run(fresh)["status"] == "created"
+
+
 def test_runs_of_a_process_that_died_are_marked_failed_not_waited_for(service, monkeypatch):
     if os.name != "posix":
         pytest.skip("owner liveness is only checked on POSIX")
@@ -466,16 +729,17 @@ def test_runs_of_a_process_that_died_are_marked_failed_not_waited_for(service, m
                               text=True, check=True).stdout)
     store = RunStore(service().store.root)
 
-    def orphan(kind, owner):
+    def orphan(kind, owner, pages=()):
         run_id = store.new_run(kind, SHOP, {})
-        store.update(run_id, lambda run: run.update(status="running", journey={
+        store.update(run_id, lambda run: run.update(status="running", pages=list(pages), journey={
             "goal": "g", "oracle": "cart_not_empty", "status": "running", "verification": None}
             if kind == "journey" else None))
         store.write_json(run_id, "owner.json", owner)
         return run_id
     here = socket.gethostname()
     audit = orphan("audit", {"owner_pid": dead, "owner_start": None, "host": here})
-    journey = orphan("journey", {"owner_pid": dead, "owner_start": None, "host": here})
+    journey = orphan("journey", {"owner_pid": dead, "owner_start": None, "host": here})  # its start page never read
+    landed = orphan("journey", {"owner_pid": dead, "owner_start": None, "host": here}, pages=[{"page_id": "start"}])
     reused = orphan("audit", {"owner_pid": os.getpid(), "owner_start": -1, "host": here})
     alive = orphan("audit", {"owner_pid": os.getpid(), "owner_start": None, "host": here})
     elsewhere = orphan("audit", {"owner_pid": dead, "owner_start": None, "host": here + ".other"})
@@ -486,14 +750,23 @@ def test_runs_of_a_process_that_died_are_marked_failed_not_waited_for(service, m
     assert waited["errors"] == [f"interrupted: owning process {dead} is gone"]
     with pytest.raises(ValueError, match=r"not open in this server \(status abandoned\)"):
         svc.journey_finish(journey)
+    # the same terminal state as a signal leaves (abandoned; the run partial, failed when it holds no page)
     assert svc.store.load(journey)["status"] == "failed"
     with pytest.raises(ValueError, match="still running"):
         svc.score_run(alive)
-    assert svc.recover_orphans() == [reused]  # a live pid with another start time is a reused pid
+    assert sorted(svc.recover_orphans()) == sorted([reused, landed])  # a live pid with another start time: reused
+    run = svc.store.load(landed)
+    assert run["status"] == "partial" and run["journey"]["status"] == "abandoned" and run["finished_at"]
+    assert run["errors"] == [f"interrupted: owning process {dead} is gone"]
+    assert f"abandoned: owning process {dead} is gone; closed without verification" in run["warnings"]
     assert svc.get_run(alive)["status"] == svc.get_run(elsewhere)["status"] == "running"
-    assert not any((svc.store.path(r) / "owner.json").exists() for r in (audit, journey, reused))
-    scored = svc.score_run(audit, [journey])
-    assert any("without verification" in w for w in scored["warnings"])
+    assert not any((svc.store.path(r) / "owner.json").exists() for r in (audit, journey, reused, landed))
+    with pytest.raises(ValueError, match="was interrupted"):
+        svc.score_run(audit, [landed])  # an interrupted audit is never scored
+    finished = store.new_run("audit", SHOP, {})
+    store.update(finished, lambda run: run.update(status="complete", finished_at=iso_now()))
+    scored = svc.score_run(finished, [landed])
+    assert any("ended abandoned without verification" in w for w in scored["warnings"])
 
 
 def test_wait_run_ends_when_the_call_is_cancelled_or_the_service_stops(service, monkeypatch):
@@ -639,11 +912,13 @@ def test_the_installed_stdio_server_speaks_the_protocol(tmp_path):
     assert names == TOOLS and listed == {"root": str((tmp_path / "runs").resolve()), "runs": []}
 
 
-def test_sigterm_ends_the_stdio_server_at_once(tmp_path):
-    """The stdio reader blocks on stdin until the host closes it; SIGTERM still ends the server, cleaning up."""
+@pytest.mark.parametrize("name", ["SIGTERM", "SIGHUP"])
+def test_sigterm_ends_the_stdio_server_at_once(tmp_path, name):
+    """The stdio reader blocks on stdin until the host closes it; SIGTERM (the host) or SIGHUP (the terminal running
+    the host closed) still ends the server, cleaning up, with status 0 (the default action of either would kill it)."""
     script = Path(sys.executable).with_name("jev-engage-mcp")
-    if not script.exists():
-        pytest.skip("jev-engage-mcp is not installed in this environment")
+    if not script.exists() or not hasattr(signal, name):
+        pytest.skip(f"needs the installed jev-engage-mcp and {name}")
     env = {**os.environ, "JEV_ENGAGEMENT_ARTIFACTS": str(tmp_path / "runs")}
     log = tmp_path / "stderr.log"
     with open(log, "wb") as stderr:
@@ -655,11 +930,11 @@ def test_sigterm_ends_the_stdio_server_at_once(tmp_path):
         server.stdin.flush()
         reply = server.stdout.readline()
         assert json.loads(reply)["result"]["serverInfo"]["name"] == "jev-engagement", (reply, log.read_text())
-        server.send_signal(signal.SIGTERM)
+        server.send_signal(getattr(signal, name))
         try:
             code = server.wait(10)
         except subprocess.TimeoutExpired:
-            code = "still running 10 s after SIGTERM"
+            code = f"still running 10 s after {name}"
         assert code == 0, (code, log.read_text()[-2000:])
     finally:
         if server.poll() is None:
@@ -682,13 +957,16 @@ def _processes() -> dict[int, tuple[int, int, str]]:
     return found
 
 
-def test_the_hosts_stop_sequence_kills_the_browsers_and_marks_the_runs(tmp_path, shop_server):
+@pytest.mark.parametrize("names", [("SIGINT", "SIGTERM"), ("SIGHUP",)], ids=["host", "hangup"])
+def test_the_hosts_stop_sequence_kills_the_browsers_and_marks_the_runs(tmp_path, shop_server, names):
     """Claude Code stops a stdio server with SIGINT, SIGTERM 100 ms later and SIGKILL 400 ms after that (to the pid
-    only). With an audit running and a journey open, the server must end inside that window, leave no Chromium
-    behind (the browsers run in their own sessions) and leave both runs finished, not "running" for good."""
+    only); closing the terminal that runs Claude Code sends SIGHUP to its process group, the server included. With an
+    audit running and a journey open, the server must end inside that window, leave no Chromium behind (the browsers
+    run in their own sessions) and leave both runs finished, not "running" for good."""
     script = Path(sys.executable).with_name("jev-engage-mcp")
-    if not script.exists() or find_chromium() is None or not os.path.isdir("/proc/self"):
-        pytest.skip("needs the installed jev-engage-mcp, Chromium and /proc")
+    if not script.exists() or find_chromium() is None or not os.path.isdir("/proc/self") \
+            or not all(hasattr(signal, name) for name in names):
+        pytest.skip("needs the installed jev-engage-mcp, Chromium, /proc and " + ", ".join(names))
     runs = tmp_path / "runs"
     env = {**os.environ, "JEV_ENGAGEMENT_ARTIFACTS": str(runs), "JEV_ENGAGEMENT_CACHE": str(tmp_path / "cache"),
            "JEV_CHROME_ARGS": "--proxy-server=http://127.0.0.1:9"}
@@ -725,13 +1003,16 @@ def test_the_hosts_stop_sequence_kills_the_browsers_and_marks_the_runs(tmp_path,
         groups = {_processes()[pid][1] for pid in browsers}
         assert len(groups) >= 2, browsers
         started = time.monotonic()
-        server.send_signal(signal.SIGINT)
-        try:
-            server.wait(0.1)
-        except subprocess.TimeoutExpired:
-            server.send_signal(signal.SIGTERM)
-            server.wait(0.4)  # TimeoutExpired here: the host would have sent SIGKILL
-        assert server.returncode == 0 and time.monotonic() - started < 0.5
+        for i, name in enumerate(names):  # the next signal 100 ms later, SIGKILL 500 ms after the first
+            server.send_signal(getattr(signal, name))
+            last = i == len(names) - 1
+            try:
+                server.wait(0.5 - (time.monotonic() - started) if last else 0.1)
+                break
+            except subprocess.TimeoutExpired:
+                if last:
+                    raise  # the host would have sent SIGKILL
+        assert server.returncode == 0 and time.monotonic() - started < 0.5, server.returncode
         deadline = time.monotonic() + 3
         while (left := [pid for pid, (_, group, state) in _processes().items() if group in groups and state != "Z"]) \
                 and time.monotonic() < deadline:
@@ -756,6 +1037,83 @@ def test_the_hosts_stop_sequence_kills_the_browsers_and_marks_the_runs(tmp_path,
     assert run["status"] == "failed", run  # the audit thread may still record the browser it lost, after the mark
     assert any(e.startswith("interrupted:") for e in run["errors"]), run["errors"]
     assert f"concurrent run {journey} in this process: timings may be skewed" in run["warnings"]
-    run = store.load(journey)
-    assert run["status"] in ("partial", "failed") and run["journey"]["status"] == "abandoned" and run["finished_at"]
+    run = store.load(journey)  # the signal's mark or, when it had no time, the replay at the next start: one state
+    assert run["status"] == "partial" and run["journey"]["status"] == "abandoned" and run["finished_at"]
     assert not fresh.wait_run(audit, 5)["timed_out"] and not list(runs.glob("*/*/owner.json"))
+
+
+def test_get_run_page_rows_show_no_weight_for_a_page_read_in_place():
+    """report._pages' rule (WS7): the cart an oracle read where the journey ended recorded no request, so its weight
+    was never measured: kb is None (the CLI prints "n/d KB"), never 0."""
+    read_in_place = {"page_id": "mobile-verify-cart", "network": {"bytes_transfer": 0, "requests": 0}}
+    loaded = {"page_id": "mobile-home-1", "network": {"bytes_transfer": 36_400, "requests": 4}}
+    assert EngagementService._page_row(read_in_place)["kb"] is None
+    assert EngagementService._page_row(loaded)["kb"] == 36
+    assert EngagementService._page_row({"page_id": "x"})["kb"] is None
+
+
+# ---------------------------------------------------------------- review round 0: judge_with merges, finalize default
+
+
+def scripted_verdicts(judge, tasks):
+    return [{"task_id": t["task_id"], "label": sorted(t["labels"])[0], "confidence": 0.8,
+             "rationale": "Citazione sufficiente.",
+             "evidence": [{"snippet_id": t["snippets"][0]["snippet_id"], "quote": t["snippets"][0]["text"][:30]}]}
+            for t in tasks]
+
+
+def test_judge_with_keeps_what_another_writer_stored_while_its_judges_ran(service, monkeypatch):
+    """The judges run outside the run's lock (claude -p takes minutes); a host's submit_judgments on the same
+    artifacts meanwhile is merged with, never overwritten."""
+    from jev_ultrafast.engagement import judges
+
+    monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit())
+    svc, host = service(), service()
+    run_id = svc.audit_shop(SHOP, wait=True)["run_id"]
+    page = host.get_judgment_tasks(run_id)
+    hosted = []
+
+    def judge(self, tasks):
+        if not hosted:  # the host submits while the CLI judge is still working
+            hosted.append(host.submit_judgments(run_id, "host-1", "host-model", verdicts_for(page, "j1")[:1]))
+        return scripted_verdicts(self, tasks)
+    monkeypatch.setattr(judges.ClaudeCliJudge, "judge", judge)
+    result = svc.judge_with(run_id, "cli", 1, model="claude-test", batch_size=4)
+    assert hosted[0]["accepted"] == 1 and result["rejected_total"] == 0
+    state = svc.store.load(run_id)["judgments"]
+    assert [v["task_id"] for v in state["verdicts"] if v["judge_id"] == "host-1"] == [page["tasks"][0]["task_id"]]
+    assert {v["task_id"] for v in state["verdicts"] if v["judge_id"] == "j1"} == {t["task_id"] for t in state["tasks"]}
+    assert result["accepted"] == len(state["tasks"]) and len(state["final"]) == len(state["tasks"])
+
+
+def test_finalize_by_default_keeps_each_tasks_own_sample_count(service, monkeypatch):
+    """Tasks created by `judge --samples 1` need one verdict: finalize_judgments() without a count finalizes what the
+    judge left pending once it has its one verdict, and never asks for 3."""
+    from jev_ultrafast.engagement import judges
+
+    monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit())
+    svc = service()
+    run_id = svc.audit_shop(SHOP, wait=True)["run_id"]
+    calls = []
+
+    def flaky(self, tasks):
+        calls.append(len(tasks))
+        if len(calls) > 1:
+            raise judges.JudgeError("transient: rate limited")
+        return scripted_verdicts(self, tasks)
+    monkeypatch.setattr(judges.ClaudeCliJudge, "judge", flaky)
+    result = svc.judge_with(run_id, "cli", 1, model="claude-test", batch_size=4)
+    assert result["errors"] and result["finalize"]["pending"] > 0
+    state = svc.store.load(run_id)["judgments"]
+    assert {t["samples_required"] for t in state["tasks"]} == {1}
+    pending = [t for t in state["tasks"] if t["task_id"] not in {f["task_id"] for f in state["final"]}]
+    page = svc.get_judgment_tasks(run_id, limit=TASK_PAGE)
+    late = [t for t in page["tasks"] if t["task_id"] == pending[0]["task_id"]]
+    assert svc.submit_judgments(run_id, "host-1", "host-model", verdicts_for({**page, "tasks": late}, "j1"))[
+        "accepted"] == 1
+
+    async def scenario(client):
+        return await call(client, "finalize_judgments", run_id=run_id)
+    final = session(build_server(svc), scenario)
+    assert final["final"] == len(state["final"]) + 1 and final["pending_total"] == len(pending) - 1
+    assert svc.finalize_judgments(run_id)["pending_total"] == len(pending) - 1

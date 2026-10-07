@@ -35,8 +35,10 @@ counted as the shop's time; your choices are counted as actions (predicted frict
   "Reject all"); accept only when no reject control is offered and the banner blocks progress. Close newsletter or
   promotional overlays with their close or decline control.
 - TYPE_TEXT values come only from the goal or from words visible on the page (for example "scarpe da corsa" in a
-  search field). Never personal data (names, email, phone, address, fiscal code), payment data, passwords or coupon
-  codes; the server refuses text that looks like them. A typed query still needs its search button or a matching
+  search field). Never personal data (names, email, phone, address, fiscal code, birth date), payment data, passwords
+  or coupon codes. The server offers only search, quantity and coupon fields and refuses text that looks like an
+  email, a phone, card or account number, an IBAN, a fiscal code, a date, a street address or a card security code;
+  it cannot recognise a name, so never type one. A typed query still needs its search button or a matching
   suggestion.
 - Options such as size or colour: pick an available one that fits the goal (the first available when the goal does
   not say). With a price limit, compare the visible prices and pick an item below it.

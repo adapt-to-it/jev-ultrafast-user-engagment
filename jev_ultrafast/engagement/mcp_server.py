@@ -2,12 +2,15 @@
 
 stdout carries the protocol, so logging goes to stderr. The end of stdin closes every open journey (verifying the
 stopped ones) and every browser this process launched. A signal (Claude Code stops a stdio server with SIGINT, then
-SIGTERM 100 ms later, then SIGKILL 400 ms after that) kills the browsers at once, marks the runs in progress and exits
-within that window; runs left behind by a process that died anyway are marked failed at the next start.
+SIGTERM 100 ms later, then SIGKILL 400 ms after that; a closed terminal or a dropped SSH or tmux session sends SIGHUP)
+seals the runs in progress, kills the browsers at once, writes the marks and exits within that window; runs left behind
+by a process that died anyway are closed the same way at the next start. Either way an interrupted audit ends
+"failed" and an interrupted journey "abandoned" (its run "partial", or "failed" when it holds no page).
 """
 
 import asyncio
 import functools
+import importlib.metadata
 import inspect
 import json
 import logging
@@ -51,23 +54,39 @@ READ = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_h
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
 IDEMPOTENT = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
 BROWSE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True)
-ALWAYS_LOAD = {"anthropic/alwaysLoad": True}  # Claude Code never defers this tool (the judges read their tasks with it)
+# Claude Code never defers this tool (the judges read their tasks with it) and never saves one of its pages to a file
+# (by default it does so above 50,000 characters, and the judge agent has no tool to read a file): a page holds at most
+# TASK_PAGE_CHARS of task text plus the rubrics it cites, well below RESULT_CHARS
+RESULT_CHARS = 100_000
+JUDGE_META = {"anthropic/alwaysLoad": True, "anthropic/maxResultSizeChars": RESULT_CHARS}
+# the signals that stop the server: Claude Code's SIGINT and SIGTERM, and SIGHUP when the terminal running it closes
+SIGNALS = tuple(getattr(signal, name) for name in ("SIGTERM", "SIGINT", "SIGHUP") if hasattr(signal, name))
 
 RunId = Annotated[str, Field(description="A run id returned by audit_shop, run_journey or list_runs")]
 Profile = Literal["mobile", "desktop"]
 Stage = Literal["home", "plp", "pdp", "cart", "checkout_entry"]
 Oracle = Literal["cart_contains_item_under_price", "cart_not_empty", "pdp_reached", "search_results_shown"]
 Operation = Literal["CLICK", "TYPE_TEXT", "SELECT", "SCROLL_UP", "SCROLL_DOWN", "WAIT", "DONE", "BLOCKED"]
-Browser = Annotated[str, Field(description="auto (a headless Chromium launched here), launch, harness (the user's "
-                                           "Chrome through Browser Harness) or cdp:<DevTools URL>")]
+Browser = Annotated[str, Field(description="auto (the DevTools endpoint in BU_CDP_WS or BU_CDP_URL when set, else a "
+                                           "headless Chromium launched here, else the user's Chrome through Browser "
+                                           "Harness when no Chromium is found), launch (always a launched Chromium), "
+                                           "harness (the user's Chrome through Browser Harness) or cdp:<DevTools URL>")]
 Locale = Annotated[str, Field(description="Lexicon and Accept-Language, e.g. it or en")]
 Result = dict[str, Any]
+
+
+def _version() -> str:
+    """The installed package's version (the plugin's version in plugin.json is kept equal to it)."""
+    try:
+        return importlib.metadata.version("jev-ultrafast")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0"
 
 
 def build_server(service: EngagementService | None = None) -> MCPServer:
     """The jev-engagement MCP server over `service` (default: artifacts in $JEV_ENGAGEMENT_ARTIFACTS)."""
     service = service or default_service()
-    server = MCPServer("jev-engagement", instructions=INSTRUCTIONS, version="0.1.0")
+    server = MCPServer("jev-engagement", instructions=INSTRUCTIONS, version=_version())
     server.service = service
 
     def tool(annotations: ToolAnnotations, title: str, meta: dict | None = None):
@@ -129,8 +148,8 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
         timeout_s: Annotated[float, Field(ge=0, le=MAX_WAIT_S, description="Seconds to wait (at most 110)")] = 100,
     ) -> Result:
         """Block until the run finished or timeout_s passed, then return get_run's summary plus timed_out. Call it
-        again while timed_out is true; status complete, partial or failed means the audit is done (a run whose
-        server process died is reported failed, not waited for)."""
+        again while timed_out is true; status complete, partial or failed means the run is done. A run whose server
+        process died is not waited for: an audit is reported failed, a journey abandoned (its run partial)."""
         cancel = threading.Event()  # the host cancelled the call or closed the session: the waiting thread ends too
         try:
             return await anyio.to_thread.run_sync(
@@ -149,7 +168,9 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
         url: Annotated[str, Field(description="Start page of the journey (the shop's home page)")],
         goal: Annotated[str, Field(description="One natural-language shopping goal, e.g. 'Aggiungi al carrello un "
                                                "paio di scarpe da corsa sotto i 50 euro'")],
-        oracle: Annotated[Oracle, Field(description="Independent check of the outcome after journey_finish")],
+        oracle: Annotated[Oracle, Field(description="Independent check of the outcome after journey_finish. It "
+                                                    "checks only what its params state: the cart oracles a price or a "
+                                                    "non-empty cart, never product words")],
         oracle_params: Annotated[dict[str, float | str] | None, Field(
             description="cart_contains_item_under_price: {max_price}; pdp_reached: {query?, max_price?}; "
                         "search_results_shown: {query?}; cart_not_empty: none")] = None,
@@ -169,8 +190,10 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
         status, observation}. The observation lists the offered elements (elements[].index with their operations;
         select options carry their own index such as "3:2"), the controls (SCROLL_UP, SCROLL_DOWN, WAIT, DONE,
         BLOCKED), page_type, visible text, guard_notes and observation_id. Drive it with journey_act using only
-        offered indices and operations, then call journey_finish. A journey nobody drives for 10 minutes is closed as
-        abandoned. Follow the journey-driver rules: never personal or payment data, stop at checkout."""
+        offered indices and operations, then call journey_finish. A journey nobody drives for 10 minutes is closed by
+        the server: verified like journey_finish when it had already stopped (DONE, BLOCKED, the checkout boundary,
+        the step budget), else abandoned without verification. Follow the journey-driver rules: never personal or
+        payment data, stop at checkout."""
         return service.run_journey(url, goal, oracle, oracle_params, profile, policy, max_steps, browser,
                                    optimal_steps, optimal_pages, locale=locale)
 
@@ -207,7 +230,7 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
         values and the steps path. Pass this run_id to score_run(audit_run_id, journey_run_ids=[...])."""
         return service.journey_finish(run_id, status)
 
-    @tool(IDEMPOTENT, "Judgment tasks", meta=ALWAYS_LOAD)  # the first call creates the tasks (writes the run)
+    @tool(IDEMPOTENT, "Judgment tasks", meta=JUDGE_META)  # the first call creates the tasks (writes the run)
     def get_judgment_tasks(
         run_id: RunId,
         cursor: Annotated[int | str | None, Field(description="next_cursor of the previous page; omit for the "
@@ -243,8 +266,9 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
     @tool(IDEMPOTENT, "Finalize judgments")
     def finalize_judgments(
         run_id: RunId,
-        samples_required: Annotated[int, Field(ge=1, le=5, description="Verdicts needed per task (may only lower "
-                                                                       "the tasks' own 3)")] = 3,
+        samples_required: Annotated[int | None, Field(ge=1, le=5, description="Verdicts needed per task; omit for "
+                                                                              "each task's own (default 3); may only "
+                                                                              "lower it")] = None,
     ) -> Result:
         """Majority label per task with enough verdicts; ties or agreement below 2/3 stay uncertain (not assessed).
         Finality is terminal. Returns counts of final, decided, uncertain, disagreements and pending tasks; pending
@@ -258,8 +282,10 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
     ) -> Result:
         """Compute the engagement-readiness scores (ERS with its confidence grade and coverage, the six sub-indices,
         the dark-pattern risk DPR, the top risk signals, the limiting factor), store them and write report.json and a
-        self-contained report.html. warnings name merged journeys that ended without verification (abandoned) or
-        ran on another host. Present them with the readiness vocabulary and the report path."""
+        self-contained report.html. warnings name merged journeys that ended without verification (abandoned: idle,
+        or their server went away; their run is partial) or ran on another host. Present them with the readiness
+        vocabulary and the report path. An interrupted audit (failed with an "interrupted: ..." error) is refused, as
+        by the judgment tools: run the audit again."""
         return service.score_run(run_id, journey_run_ids or ())
 
     @tool(READ, "Read a report")
@@ -328,20 +354,30 @@ def main() -> None:
     server = build_server(service)
 
     def stop(signum, frame=None):
-        """SIGINT / SIGTERM: clean up and exit, once, inside the host's window (SIGINT, SIGTERM 100 ms later, SIGKILL
-        400 ms after that). Kill the browsers first (never waiting), then mark the runs (journeys abandoned, jobs
-        failed) without waiting for any thread, lock or oracle, then remove the profiles; each step is cut short at
-        its deadline. A run left unmarked is marked failed at the next start (its owner process is gone)."""
+        """SIGINT / SIGTERM / SIGHUP: clean up and exit, once, inside the host's window (SIGINT, SIGTERM 100 ms later,
+        SIGKILL 400 ms after that; SIGHUP when the terminal running the host closes, which would otherwise kill this
+        process with its browsers still running). Seal the runs in progress first (no lock, no I/O: whatever an audit
+        thread writes once its browser is gone keeps the interrupted mark), then kill the browsers (never waiting),
+        then write the marks (the jobs first: audits failed, typesafe journeys abandoned; then the host journeys
+        abandoned) without waiting for any thread or oracle, then remove the profiles; each step is cut short at its
+        deadline. A run left unmarked is closed the same way at the next start (its owner process is gone). A signal
+        during the post-loop shutdown() while the main thread holds a run's lock skips the mark on purpose: the
+        helper's wait is bounded, then the process exits and the next start replays the mark."""
         if _STOPPING.is_set():
             return  # the host's next signal while the first one is being handled
         _STOPPING.set()
         started = time.monotonic()
+        reason = f"the server was stopped (signal {int(signum)})"
         try:
+            try:
+                service.seal(reason)
+            except Exception:  # never in the way of killing the browsers
+                pass
             _kill_browsers()
 
             def mark():
-                service.abort(f"the server was stopped (signal {int(signum)})")
-                log.info("signal %s: browsers killed, runs in progress marked", int(signum))
+                service.abort(reason)
+                log.info("signal %s: runs in progress sealed, browsers killed, marks written", int(signum))
             _within(started + MARK_S, mark)
             _within(started + CLEAN_S, close_all)  # the browsers are dead already: this only removes their profiles
         finally:
@@ -351,19 +387,19 @@ def main() -> None:
         # The event loop sleeps in epoll while the tools run in threads: a signal some other thread receives would
         # not wake it, so the loop watches the signals itself (signal.signal covers start-up and the shutdown after).
         loop = asyncio.get_running_loop()
-        for signum in (signal.SIGTERM, signal.SIGINT):
+        for signum in SIGNALS:
             try:
                 loop.add_signal_handler(signum, stop, signum)
             except (NotImplementedError, RuntimeError):  # Windows event loops: signal.signal stays in place
                 pass
         await server.run_stdio_async()
 
-    for signum in (signal.SIGTERM, signal.SIGINT):
+    for signum in SIGNALS:
         signal.signal(signum, stop)
     try:
         anyio.run(serve)
     finally:  # stdin closed: the host ended the session
-        for signum in (signal.SIGTERM, signal.SIGINT):
+        for signum in SIGNALS:
             signal.signal(signum, stop)  # the closed event loop restored the default handlers
         service.shutdown()
 

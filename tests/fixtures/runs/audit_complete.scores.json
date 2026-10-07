@@ -1168,7 +1168,7 @@
      null,
      false,
      true,
-     "probe_timeout",
+     "probe:failed:TimeoutError",
      null
     ],
     "FAI.SEARCH_VISIBLE": [

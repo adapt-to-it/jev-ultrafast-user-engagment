@@ -16,6 +16,15 @@ from .schemas import RISK_INDEX, SUB_INDICES
 
 ANCHORS_PATH = Path(__file__).with_name("anchors.json")
 NOT_APPLICABLE = "not_applicable"
+NAMES = {  # Italian names of the sub-indices and the risk index (ers() reasons, report.py, service.py)
+    "PERF": "Prestazioni",
+    "FAI": "Attrito previsto",
+    "TRI": "Segnali di fiducia",
+    "PTI": "Trasparenza di prezzi e costi",
+    "CCL": "Chiarezza e carico cognitivo",
+    "MPI": "Leve di persuasione genuine",
+    "DPR": "Segnali di rischio dark pattern",
+}
 
 
 def load_anchors(path=None) -> dict:
@@ -390,6 +399,13 @@ def dpr(signals) -> float:
     return round(100 * (1 - keep), 2)
 
 
+def _share(value, below=None) -> str:
+    """0.123 -> "12 %", as report.fmt_share writes it; a value under `below` never reads as reaching it ("59,9 %")."""
+    if below is not None and round(value * 100) >= round(below * 100):
+        return f"{math.floor(value * 1000) / 10:.1f} %".replace(".", ",")
+    return f"{round(value * 100):d} %"
+
+
 def ers(sub_indices, dpr_score, anchors) -> dict:
     weights = anchors["weights"]
     publish = anchors["publish"]
@@ -404,12 +420,13 @@ def ers(sub_indices, dpr_score, anchors) -> dict:
     reasons = []
     if not present:
         reasons.append("nessun sotto-indice valutabile")
-    if coverage + 1e-9 < publish["min_coverage"]:
-        reasons.append(f"copertura complessiva {coverage:.0%} sotto il minimo {publish['min_coverage']:.0%}")
-    for name in SUB_INDICES:
-        cov = covered[name]
-        if weights.get(name, 0) >= publish.get("major_weight", 15) and cov + 1e-9 < publish["min_major_coverage"]:
-            reasons.append(f"copertura {name} {cov:.0%} sotto il minimo {publish['min_major_coverage']:.0%}")
+    least, least_major = publish["min_coverage"], publish["min_major_coverage"]
+    if coverage + 1e-9 < least:
+        reasons.append(f"copertura complessiva {_share(coverage, least)} sotto il minimo del {_share(least)}")
+    low = [f"{NAMES[n]} ({_share(covered[n], least_major)})" for n in SUB_INDICES
+           if weights.get(n, 0) >= publish.get("major_weight", 15) and covered[n] + 1e-9 < least_major]
+    if low:
+        reasons.append(f"copertura sotto il minimo del {_share(least_major)} per {', '.join(low)}")
     limiting = min(present, key=lambda n: (present[n], n)) if present else None
     result = {
         "score": None,

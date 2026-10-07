@@ -1,0 +1,14 @@
+{
+  "name": "jev-engagement-local",
+  "owner": {
+    "name": "adapt-to-it"
+  },
+  "description": "The jev-engagement plugin from this repository: engagement-readiness audits of e-commerce shops (MCP server, shop-readiness skill, journey-driver skill, engagement-judge agent).",
+  "plugins": [
+    {
+      "name": "jev-engagement",
+      "source": "./",
+      "description": "Engagement-readiness audits of e-commerce shops: performance, key elements, predicted friction, trust, price transparency and dark-pattern risk signals, scored into versioned 0-100 indices. Estimates from synthetic sessions, not measured engagement; never places orders."
+    }
+  ]
+}

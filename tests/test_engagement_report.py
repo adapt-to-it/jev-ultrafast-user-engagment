@@ -112,6 +112,12 @@ def test_audit_report_content():
     assert "<td class=\"num\">1,5</td>" in html and "<td class=\"num\">1.5</td>" not in html  # Italian decimals
     assert "<td class=\"num\">0,9</td>" in html  # DPR severities too
     assert "campioni dello stesso modello" in html and "Modelli dei valutatori: claude-sonnet-5-5" in html
+    # closed codes in Italian: stages and page types, run kind and status (report.json keeps the codes)
+    assert "<li>fase primo step del checkout (desktop): tempo scaduto</li>" in html
+    assert "<td>listing di categoria</td><td>listing</td>" in html and "<td>checkout_entry</td>" not in html
+    assert "<td>primo step del checkout</td><td>checkout</td>" in html and "<td>pdp</td>" not in html
+    assert "· tipo: audit deterministico · stato: parziale ·" in html and "stato partial" not in html
+    assert (data["kind"], data["status"], data["pages"][1]["stage"]) == ("audit", "partial", "plp")
 
 
 def test_profile_rule_in_the_kpi_caption_matches_the_scores():
@@ -154,7 +160,8 @@ def test_unassessed_dark_pattern_risk_is_never_shown_as_zero():
     assert set(missing) == {"DPR.COUNTDOWN_RESET", "DPR.FAKE_LOW_STOCK", "DPR.SNEAK_INTO_BASKET",
                             "DPR.PRECHECKED_PAID_ADDONS", "DPR.CONSENT_ASYMMETRY", "DPR.NAGGING_OVERLAYS"}
     assert set(missing.values()) == {"no_observation"}  # judged risk signals are not applicable without judgments
-    assert "<code>DPR.COUNTDOWN_RESET</code>: nessuna osservazione" in html
+    assert report.e(report.JOURNEY_AUDIT_KPIS.format(70)) in html  # a journey-only run folds the audit KPIs
+    assert "<code>DPR.COUNTDOWN_RESET</code>: nessuna osservazione" not in html
 
     audit = load("audit_complete")  # deception tests and judgments never ran
     for row in audit["observations"]:
@@ -176,6 +183,72 @@ def test_unassessed_dark_pattern_risk_is_never_shown_as_zero():
     assert overall["assessed"] == 8 and 0 < overall["coverage"] < 1
     assert f"Rischio dark pattern <b>{report.fmt_score(overall['score'])} (parziale: 8/9 segnali)</b>" in html
     assert "<code>DPR.COUNTDOWN_RESET</code>: nessuna osservazione" in html
+
+
+def test_journey_only_report_folds_the_unobserved_audit_kpis():
+    run = load("journey_run")
+    run["not_assessable"] = [{"stage": None, "profile": "mobile", "kpi_id": None, "reason": "navigation_error"}]
+    for row in run["observations"]:
+        if row["kpi_id"] == "FAI.LOSTNESS":
+            row.update(assessed=False, value=None, reason="no_measurement: nessuna pagina visitata")
+    data, html = build(run, steps=steps())
+    audit = [r for r in data["not_assessable"] if r["reason"] == "no_observation"]
+    assert len(audit) == 70 and {r["kpi_id"] for r in audit} == {
+        k.id for k in KPI_LIST if k.producer in ("checks", "deception")}  # report.json keeps every row
+    section = html[html.index("<h2>Non valutabile</h2>"):]
+    section = section[: section.index("</section>")]
+    assert section.count("<li>") == 3 and report.e(report.JOURNEY_AUDIT_KPIS.format(70)) in section
+    assert "<code>FAI.LOSTNESS</code>: non misurato: nessuna pagina visitata" in section
+    assert "<li>percorso (mobile): pagina non caricata: errore di rete del browser</li>" in section
+    audit_run = load("audit_complete")  # an audit run never folds
+    audit_run["observations"] = [o for o in audit_run["observations"] if o["kpi_id"] != "PERF.LCP"]
+    _, html = build(audit_run)
+    assert "<code>PERF.LCP</code>: nessuna osservazione" in html and "KPI dell&#x27;audit (" not in html
+
+
+def test_evidence_pages_unmeasured_weight_and_step_labels():
+    run = load("journey_run")
+    run["pages"] = [
+        {"page_id": "mobile-journey-start", "profile": "mobile", "stage": "extra", "url": "https://shop.example/",
+         "classification": {"type": "home"}, "vitals": {"lcp": 1800, "cls": 0.02},
+         "network": {"requests": 40, "bytes_transfer": 1_200_000}, "notes": ["journey start page"]},
+        {"page_id": "mobile-verify-cart", "profile": "mobile", "stage": "extra", "url": "https://shop.example/cart",
+         "classification": {"type": "cart"}, "vitals": {}, "network": {"requests": 0, "bytes_transfer": 0},
+         "notes": ["journey verification: cart_contains_item_under_price"]},
+    ]
+    journey_steps = steps()
+    journey_steps.insert(1, {**journey_steps[0], "step": 2, "operation": "SCROLL_DOWN", "target": None,
+                             "label": "Scroll down", "page_changed": False, "flags": {}})
+    journey_steps[-1]["label"] = "Done"
+    data, html = build(run, steps=journey_steps)
+    assert [(p["stage"], p["kb"], p["notes"]) for p in data["pages"]] == [
+        ("extra", 1200, ["journey start page"]),
+        ("extra", None, ["journey verification: cart_contains_item_under_price"])]  # read in place: never measured
+    section = html[html.index("<h2>Pagine analizzate</h2>"):]
+    section = section[: section.index("</section>")]
+    rows = section.split("<tr>")[2:]
+    assert all("<td>nessuna (solo evidenza)<div class=\"muted\">journey " in r for r in rows)
+    assert "<td>home</td>" in rows[0] and "<td>carrello</td>" in rows[1] and "fuori dal funnel" not in html
+    assert f"<td class='num'>{report.fmt_value(1200, 'KB')}</td>" in rows[0]
+    assert "<td class='num'>—</td><td></td></tr>" in rows[1] and "KB" not in rows[1]
+    assert "pagina conservata come prova" in section and "come registrate" in section
+    assert "<li><b>Scorrimento in giù</b> <div" in html and "Scroll down" not in html
+    assert "<li><b>Fine dichiarata dall&#x27;agente</b> <div" in html and "Done" not in html
+    assert "<li><b>Click</b> [4] Uomo<div" in html  # an element's label is kept
+    _, html = build(load("audit_complete"))  # funnel pages without notes: no legend
+    assert "solo evidenza" not in html and "come registrate" not in html
+
+
+def test_enum_values_are_shown_in_italian():
+    enums = {k: set(v["map"]) for k, v in load_anchors()["kpis"].items() if v.get("direction") == "enum"}
+    assert {k: set(v) for k, v in report.VALUE_LABELS.items()} == enums
+    _, html = build(load("audit_complete"))
+    for kpi_id, text in (("FAI.PLP_PAGINATION", "pulsante «carica altri»"), ("FAI.PDP_VARIANT_SELECTOR", "pulsanti"),
+                         ("TRI.RATING_BAND", "4,0-4,7"), ("TRI.RETURNS_CLARITY", "chiara")):
+        row = html[html.index(f"<code>{kpi_id}</code>"):]
+        assert f'<td class="num">{report.e(text)}' in row[: row.index("</tr>")]
+    assert report.kpi_value({"id": "FAI.PLP_PAGINATION", "value": "brand_new", "unit": "enum"}) == "brand_new"
+    assert report.kpi_value({"id": "FAI.PLP_PAGINATION", "value": ["x"], "unit": "enum"}) == "['x']"
 
 
 def test_single_profile_report_does_not_name_the_profile():
@@ -231,7 +304,8 @@ def test_absence_reason_follows_the_value_read_without_llm():
     _, html = build(run)
     row = html[html.index("<code>MPI.SOCIAL_PROOF_RICH</code>"):]
     row = row[: row.index("</tr>")]
-    assert "basic" in row and "valore minimo ricavato da link, rating o badge" in row and "vale come assenza" not in row
+    assert '<td class="num">di base</td>' in row and "valore minimo ricavato da link, rating o badge" in row
+    assert "vale come assenza" not in row
 
 
 def test_report_has_no_external_resources():
@@ -281,7 +355,7 @@ def test_journey_report_timeline_and_unpublished_index():
     assert data["journey"]["steps"] == 7 and data["journey"]["verification"]["passed"] is True
     assert data["headline"]["published"] is False and data["headline"]["ers"] is None
     assert "Percorso dell'agente" in html and run["journey"]["goal"] in html
-    assert "superata" in html and "cart_contains_item_under_price" in html
+    assert "Verifica indipendente (prodotto nel carrello entro il prezzo massimo) <b>superata</b>" in html
     assert html.count("<li><b>") == 7 and "segnali: click senza effetto" in html and "Prezzo crescente" in html
     assert "dead_click" not in html  # step flags are shown in Italian
     assert "Indice non pubblicato" in html and "copertura complessiva" in html
@@ -289,6 +363,7 @@ def test_journey_report_timeline_and_unpublished_index():
     assert report.JOURNEY_ONLY.replace("'", "&#x27;") in html
     assert "<b>n/d</b>" in html or ">n/d<" in html
     assert build(run)[0]["journey"]["steps"] == 0
+    assert "· tipo: journey (percorso dell&#x27;agente) · stato: completa ·" in html
 
 
 def test_report_vocabulary():
@@ -340,10 +415,13 @@ class FakeStore:
     def read_steps(self, run_id):
         return list(self.runs[run_id][1]) if run_id in self.runs else list(self.steps)
 
-    def write_json(self, run_id, rel, payload):
-        target = self.path(run_id) / rel
-        target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        return str(target)
+    def write_json(self, run_id, rel, payload):  # like RunStore: the path relative to the run directory
+        (self.path(run_id) / rel).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return rel
+
+    def write_bytes(self, run_id, rel, data):
+        (self.path(run_id) / rel).write_bytes(data)
+        return rel
 
 
 def test_write_report_with_fake_store(tmp_path):
@@ -357,6 +435,7 @@ def test_write_report_with_fake_store(tmp_path):
     Image.new("RGB", (390, 1600), (40, 120, 90)).save(store.path(run["run_id"]) / "shots" / "mobile-home-1.png")
     paths = report.write_report(store, run["run_id"])
     assert set(paths) == {"report_json", "report_html"}
+    assert paths["report_json"] == str(store.path(run["run_id"]) / "report.json")  # absolute, like report_html
     saved = json.loads(Path(paths["report_json"]).read_text(encoding="utf-8"))
     html = Path(paths["report_html"]).read_text(encoding="utf-8")
     assert saved["run_id"] == run["run_id"] and saved["headline"]["ers"] == score_run(run)["overall"]["ers"]["score"]
@@ -370,6 +449,22 @@ def test_write_report_with_fake_store(tmp_path):
     journey_store = FakeStore(tmp_path / "j", journey, steps())
     html = Path(report.write_report(journey_store, journey["run_id"])["report_html"]).read_text(encoding="utf-8")
     assert html.count("<li><b>") == 7
+
+
+def test_write_report_returns_absolute_paths_with_the_real_store(tmp_path):
+    from jev_ultrafast.engagement.store import RunStore
+
+    store = RunStore(tmp_path)
+    run = load("audit_complete")
+    run_id = store.new_run("audit", run["site"]["start_url"], run["settings"])
+    store.save(run_id, {**run, "run_id": run_id})
+    paths = report.write_report(store, run_id)
+    for key, name in (("report_json", "report.json"), ("report_html", "report.html")):
+        assert Path(paths[key]).is_absolute() and Path(paths[key]) == store.path(run_id) / name
+        assert Path(paths[key]).is_file()
+    assert "<h1>shop.example</h1>" in Path(paths["report_html"]).read_text(encoding="utf-8")
+    assert not [p.name for p in store.path(run_id).iterdir() if p.name.startswith(".report") or p.suffix == ".tmp"]
+    assert json.loads(Path(paths["report_json"]).read_text(encoding="utf-8"))["run_id"] == run_id
 
 
 def test_write_report_links_journeys_from_arguments_or_stored_scores(tmp_path):
@@ -393,7 +488,10 @@ def test_write_report_links_journeys_from_arguments_or_stored_scores(tmp_path):
 # ---------------------------------------------------------------- reason labels
 
 PRODUCERS = ("checks.py", "deception.py", "crawler.py", "friction.py", "journey.py", "oracles.py", "judgments.py",
-             "audit.py", "collectors.py", "scoring.py")
+             "audit.py", "collectors.py", "scoring.py", "safety.py")
+# f-string heads whose detail is another producer's code: the guard's refusals behind crawler.Tab.act's
+# f"guard_refused:{why}" and, for the search field, checks._autocomplete's f"probe:{reason}"
+HEAD_DETAILS = {"guard_refused:": "safety.py", "probe:guard_refused:": "safety.py"}
 REASON_NAMES = {"reason", "then", "unverified"}  # keywords and variables that hold a reason
 REASON_KEYS = {"reason", "not_assessable", "unreadable"}  # dict keys and subscripts that hold one
 REASON_ARGS = {"_na": 0, "NotAssessed": 0, "Stop": 1, "_missing": 1, "mark": 1}  # call: index of the reason argument
@@ -405,7 +503,9 @@ def reason_literals(source):
     """(codes, f-string heads) a producer writes in a reason position: reason=/then=/unverified= keywords, the
     "reason"/"not_assessable"/"unreadable" keys, variables of those names, self.last_error, _na()/NotAssessed()/
     Stop()/_missing()/mark() arguments, the reason of an (executed, reason) return and what reason() methods return.
-    Conditional expressions, `or` chains, local variables and `{...}.get(key, default)` maps are followed."""
+    Conditional expressions, `or` chains, local variables and `{...}.get(key, default)` maps are followed: literals
+    and simple assignments, never reasons read from data (record["consent"]["reason"]); a producer that ever surfaces
+    such a reason (the consent sentences of PageRecord.consent) must map it to a code first."""
     tree = ast.parse(source)
     assigned = {}
     for node in ast.walk(tree):
@@ -473,6 +573,18 @@ def reason_literals(source):
     return codes, heads
 
 
+def verdict_rejections():
+    """judgments.submit()'s rejection codes, the (None, "code") pairs of _check() and submit(): the judge host reads
+    them (MCP rejected_reasons), the report never shows them."""
+    found = set()
+    for node in ast.walk(ast.parse((PACKAGE / "judgments.py").read_text(encoding="utf-8"))):
+        pair = node.value if isinstance(node, (ast.Return, ast.Assign)) else None
+        if (isinstance(pair, ast.Tuple) and len(pair.elts) == 2 and isinstance(pair.elts[0], ast.Constant)
+                and pair.elts[0].value is None and isinstance(pair.elts[1], ast.Constant)):
+            found.add(pair.elts[1].value)
+    return found
+
+
 def producer_reasons():
     codes, heads = {}, {}
     for name in PRODUCERS:
@@ -510,11 +622,46 @@ def test_every_producer_reason_has_an_italian_label():
     assert {"navigation_error", "journey_error", "page_unreadable", "out_of_stock", "not_requested",
             "countdown_not_paired", "sent_earlier"} <= set(codes)  # the collector still reads the producers
     unlabelled = {code: files for code, files in codes.items()
-                  if code not in NOT_REASONS and report.reason_label(code) is None}
+                  if code not in NOT_REASONS | verdict_rejections() and report.reason_label(code) is None}
     assert unlabelled == {}, "add these reasons to report.REASONS (or a REASON_PREFIXES rule)"
     loose = {head: files for head, files in heads.items() if not head.startswith(tuple(NOT_TEMPLATES))
              and report.reason_label(head + "Dettaglio dinamico") is None}
     assert loose == {}, "add a report.REASON_PREFIXES rule for these f-string reasons"
+    for head, source in HEAD_DETAILS.items():  # an identifier detail composes only when it has its own label
+        found, templates = reason_literals((PACKAGE / source).read_text(encoding="utf-8"))
+        details = found | {template + "some_value" for template in templates}  # f"protected_field:{type}"
+        assert {"personal_field", "checkout_submit", "protected_field:some_value"} <= details
+        unlabelled = sorted(d for d in details if report.reason_label(head + d) is None)
+        assert unlabelled == [], f"add report.REASONS (or REASON_VALUES) labels for these {head} details"
+
+
+def test_verdict_rejections_have_no_report_label():
+    rejections = verdict_rejections()
+    assert {"invalid_verdict", "duplicate_judge", "unknown_label", "quote_not_verbatim", "missing_evidence"} <= (
+        rejections)
+    assert sorted(code for code in rejections if report.reason_label(code) is not None) == []  # none, not some
+
+
+def test_reason_code_warnings_have_an_italian_label():
+    heads = set()  # the journey's "<code>: <detail>" run warnings (report.warning_text)
+    for node in ast.walk(ast.parse((PACKAGE / "journey.py").read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "_warn" and node.args:
+            first = node.args[0]
+            first = first.values[0] if isinstance(first, ast.JoinedStr) and first.values else first
+            text = first.value if isinstance(first, ast.Constant) and isinstance(first.value, str) else ""
+            if match := report.CODE_WARNING.match(text + "detail"):
+                heads.add(match["code"])
+    assert {"bot_challenge", "left_shop", "navigation_error", "renderer_crashed", "page_unreadable"} <= heads
+    assert sorted(head for head in heads if head not in report.REASONS) == []
+    for head in heads:
+        assert report.warning_text(f"{head}: detail") == f"{report.REASONS[head]} (detail)"
+
+
+@pytest.mark.parametrize("name", ["audit_complete", "journey_run"])
+def test_golden_run_reasons_are_producer_shaped(name):
+    run = load(name)
+    reasons = {row.get("reason") for row in [*run["observations"], *run["not_assessable"]]} - {None}
+    assert sorted(r for r in reasons if report.reason_label(r) is None) == []  # a code no producer writes
 
 
 @pytest.mark.parametrize("reason, text", [
@@ -527,13 +674,22 @@ def test_every_producer_reason_has_an_italian_label():
     ("revisit_navigation_error", "nuova visita non riuscita: pagina non caricata: errore di rete del browser"),
     ("error: KeyError: 'x'", "errore imprevisto del sistema di prova: KeyError: 'x'"),
     ("credit_withheld:DPR.FAKE_LOW_STOCK", "credito non assegnato: segnale di rischio DPR.FAKE_LOW_STOCK"),
+    ("probe:guard_refused:personal_field", "test della ricerca non riuscito: rifiutato dalla guardia di sicurezza: "
+                                           "campo per dati personali: mai compilato"),
+    ("probe:guard_refused:protected_field:password", "test della ricerca non riuscito: rifiutato dalla guardia di "
+                                                     "sicurezza: campo protetto di tipo password: mai compilato"),
+    ("guard_refused:personal_field:address-line1", "rifiutato dalla guardia di sicurezza: campo per dati personali "
+                                                   "(address-line1): mai compilato"),
+    ("guard_refused:forbidden_label:pay_now", "rifiutato dalla guardia di sicurezza: pulsante di pagamento: "
+                                              "mai premuto"),
 ])
 def test_reason_text_composes_prefixes(reason, text):
     assert report.reason_text(reason) == text and report.reason_label(reason) == text
 
 
 def test_unknown_reason_codes_have_no_label_and_show_as_written():
-    for code in ("brand_new_reason", "not_applicable:brand_new", "probe:brand_new", "revisit_brand_new"):
+    for code in ("brand_new_reason", "not_applicable:brand_new", "probe:brand_new", "revisit_brand_new",
+                 "probe:guard_refused:brand_new", "probe:guard_refused:brand:new_code", "not_applicable:a:b:c"):
         assert report.reason_label(code) is None and report.reason_text(code) == code
 
 
@@ -542,19 +698,21 @@ def test_journey_verification_reason_is_shown_in_italian():
     run["journey"]["verification"] = {"passed": None, "checks": {"oracle": "cart_not_empty",
                                                                  "not_assessable": "cart_price_ambiguous"}}
     _, html = build(run, steps=steps())
-    assert "Verifica indipendente (cart_contains_item_under_price) <b>non valutabile</b>" in html
+    assert "Verifica indipendente (prodotto nel carrello entro il prezzo massimo) <b>non valutabile</b>" in html
     assert "Verifica non valutabile: prezzo nel carrello ambiguo tra prezzo unitario e totale di riga." in html
 
 
 @pytest.mark.parametrize("warning, text", [
     ("mobile: checkout_entry not assessable (navigation_error)",
-     "mobile: fase checkout_entry non valutabile: pagina non caricata: errore di rete del browser"),
+     "mobile: fase primo step del checkout non valutabile: pagina non caricata: errore di rete del browser"),
     ("desktop: cart not assessable (error: KeyError: 'x')",
-     "desktop: fase cart non valutabile: errore imprevisto del sistema di prova: KeyError: 'x'"),
+     "desktop: fase carrello non valutabile: errore imprevisto del sistema di prova: KeyError: 'x'"),
+    ("desktop: brand_new not assessable (timeout)", "desktop: fase brand_new non valutabile: tempo scaduto"),
     ("bot_challenge: an anti-bot page interrupted the journey (no evasion is attempted)",
      "pagina di verifica anti-bot (an anti-bot page interrupted the journey (no evasion is attempted))"),
     ("finished by the host without DONE/BLOCKED", "finished by the host without DONE/BLOCKED"),
-    ("left_shop: https://pay.example/", "left_shop: https://pay.example/"),
+    ("left_shop: https://pay.example/", "percorso uscito dal negozio verso un altro sito (https://pay.example/)"),
+    ("brand_new_code: detail", "brand_new_code: detail"),
 ])
 def test_known_warning_patterns_are_shown_in_italian(warning, text):
     assert report.warning_text(warning) == text

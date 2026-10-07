@@ -17,7 +17,9 @@ Agent a guarded view of one tab in an isolated browser context with the device p
   operation (HostPolicy): never a selector, never code, and only on the observation it was shown. Every observation
   carries an observation_id and act() names the one its choice was made on: a choice on any other (a repeated or
   parallel tool call) executes nothing, and an index must still name the same element of the same document. Text
-  that looks like personal or payment data is never typed.
+  is typed only into the fields the guard leaves (search, quantity, coupon); text that looks like an email address,
+  a phone, card or account number, an IBAN, a fiscal code, a card security code, a date or a street address is
+  refused (PERSONAL_TEXT, a best-effort net: a name cannot be told from a product word).
 - A browser mutation is never retried. After each action the runner waits until the page settles (no main-frame
   load, no request in flight, 0.5 s without page-side activity; at least 1 s when nothing visible answered, the
   dead-click window: a request holds the settle but is no answer), reads what changed since the action (vitals.js
@@ -94,11 +96,22 @@ MAX_TEXT = 200
 MAX_NOTES = 25
 MAX_STALE = 10  # consecutive stale decisions before an automatic run gives up on an unstable page
 PAGE_KEY_JS = "(() => { const c = window.__jevFast; return {key: c ? c.pageKey() : null}; })()"
+MONTHS = ("gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre|january|"
+          "february|march|april|may|june|july|august|september|october|november|december")
+# A best-effort net over the text itself (the field guard is the guarantee): a name cannot be told from a product word.
 PERSONAL_TEXT = {
-    "an email address": re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}"),
+    "an email address": re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}|[\w.+-]+\s*(?:[(\[{]at[)\]}]|\s(?:at|chiocciola)\s)"
+                                   r"\s*[\w-]+(?:\s*(?:\.|[(\[{]dot[)\]}]|\s(?:dot|punto)\s)\s*[a-z]{2,})+", re.I),
     "a card, phone or account number": re.compile(r"(?:\d[\s./-]?){9,}"),
     "an IBAN": re.compile(r"\b[a-z]{2}\d{2}(?:\s?[a-z0-9]){11,30}\b", re.I),
     "a fiscal code": re.compile(r"\b[a-z]{6}\d{2}[a-z]\d{2}[a-z]\d{3}[a-z]\b", re.I),
+    "a card security code": re.compile(r"\b(?:cvv|cvc|cvv2|cvc2|cid|csc)\b\W{0,3}\d{3,4}\b", re.I),
+    "a date": re.compile(rf"\b(?:0?[1-9]|[12]\d|3[01])(?:\s?[./-]\s?(?:0?[1-9]|1[0-2])\s?[./-]\s?|\s+(?i:{MONTHS})\s+)"
+                         r"(?:19|20)\d\d\b"),
+    "a street address": re.compile(
+        r"(?i:\b(?:via|viale|v\.le|piazza|p\.zza|p\.za|piazzale|corso|c\.so|largo|vicolo|contrada)\b\.?)\s+"
+        r"(?:[A-ZÀ-Ý][\w'’.-]*\s+){1,4}\d{1,4}\b|\b\d{1,5}\s+(?:[A-Z][a-z]+\s+){1,3}"
+        r"(?i:street|st|road|rd|avenue|ave|lane|drive|boulevard|blvd)\b"),
 }
 SETTLE_JS = """(() => { const v = window.__jevVitals;
   return {href: location.href, ready: document.readyState, quiet: v ? v.quiet(%d) : null,
@@ -149,8 +162,8 @@ def _read_key(page: dict) -> tuple:
 
 
 def personal_text(text: str | None) -> str | None:
-    """What the text looks like when it looks like personal or payment data, else None. An IBAN holds at least ten
-    digits: a product code such as "XR12ABCDEF12345" is not one."""
+    """What the text looks like when it looks like personal or payment data (PERSONAL_TEXT), else None. An IBAN holds
+    at least ten digits: a product code such as "XR12ABCDEF12345" is not one. A name is not recognised."""
     for what, pattern in PERSONAL_TEXT.items():
         for match in pattern.finditer(text or ""):
             if what != "an IBAN" or sum(c.isdigit() for c in match.group(0)) >= 10:

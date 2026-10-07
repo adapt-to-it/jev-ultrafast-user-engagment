@@ -40,9 +40,25 @@ def with_fields(observed, labels, scope="", kind="fill", first=11):
     ("www.shop.example", "shop.example"), ("a.b.shop.co.uk", "shop.co.uk"), ("negozio.it", "negozio.it"),
     ("store.myshopify.com", "store.myshopify.com"), ("127.0.0.1", "127.0.0.1"), ("localhost", "localhost"),
     ("CDN.Shop.Example.", "shop.example"), ("", ""),
+    # an unlisted ccTLD second level and shared hosts: each subdomain is another site
+    ("shop.example.com.vn", "example.com.vn"), ("www.toko.co.id", "toko.co.id"), ("a.org.br", "a.org.br"),
+    ("tramites.gob.mx", "tramites.gob.mx"), ("www.mionegozio.altervista.org", "mionegozio.altervista.org"),
+    ("miobrand.webnode.it", "miobrand.webnode.it"), ("www.example.me", "example.me"), ("shop.co", "shop.co"),
 ])
 def test_registrable_domain(host, domain):
     assert registrable_domain(host) == domain
+
+
+@pytest.mark.parametrize("start, other", [
+    ("https://mionegozio.altervista.org/", "https://altro-sito.altervista.org/"),
+    ("https://miobrand.webnode.it/", "https://phishing.webnode.it/"),
+    ("https://shop.example.com.vn/", "https://evil.com.vn/"), ("https://a.org.br/", "https://b.org.br/"),
+])
+def test_a_shared_suffix_is_not_one_site(start, other):
+    guard = CheckoutGuard(start, lexicon_for("it"))
+    assert not guard.same_site(other) and guard.same_site(start + "carrello")
+    add = {"kind": "click", "role": "button", "label": "Aggiungi al carrello", "node": 1}
+    assert guard.allowed_action(add, {"url": other + "p/1"}, "pdp") == (False, "external_page")
 
 
 def test_same_site_compares_registrable_domains(guard):

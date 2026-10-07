@@ -37,7 +37,9 @@ product cards the scope of an item is unknown ("card_scope_unknown"): see low_st
   contradicts it, one that equals N corroborates it (that product leaves the shared-number count). A visit whose
   number may be a product card's (card_scope_unknown) counts in neither the shared number nor the contradictions,
   and a change between two such visits counts only when both list the same cards in the same order (a carousel
-  that changes between contexts is no change of stock).
+  that changes between contexts is no change of stock). A statement the funnel's home or listing page also shows
+  outside product cards (an announcement bar, a header: site_copy) is site copy, no product's stock claim: it is left
+  out of every product visit (low_stock["site_copy"] lists it).
 - sneak_into_basket: cart lines that cost something and are not the item the crawler added (probes["add_to_cart"]).
 - prechecked_paid: paid options audit.js found pre-checked on the cart and checkout-entry pages, each with its add-on
   flag (insurance, protection, donation: the lexicon's "addon"); an empty cart shows none and is not assessed.
@@ -70,6 +72,7 @@ from .crawler import (
     failed_navigation,
     interrupting,
     overlay_key,
+    own_controls,
     product_candidates,
 )
 from .lexicon import lexicon_for
@@ -220,6 +223,22 @@ def _product(record: PageRecord, at: float, context: int | None = None) -> dict:
         found.update(card_scope_unknown=True, cards=[c.get("href") for c in (audit.get("products") or {}).get(
             "cards") or [] if isinstance(c, dict)])
     return found
+
+
+def site_copy(funnel: dict[str, PageRecord]) -> set[str]:
+    """The scarcity statements the funnel's home and listing pages show outside product cards and overlays: site copy
+    (an announcement bar, a header line shown on every page), no product's own stock claim."""
+    return {_norm(str(s.get("text") or "")[:160]) for stage in ("home", "plp")
+            for s in (_audit(funnel.get(stage)).get("persuasion") or {}).get("scarcity") or []
+            if s.get("text") and not s.get("in_card") and not s.get("overlay")}
+
+
+def without_site_copy(found: dict | None, copy: set[str]) -> dict | None:
+    """A product visit without its stock statements that are site copy (site_copy); their texts go to "site_copy"."""
+    shared = [s for s in (found or {}).get("stock") or [] if _norm(s["text"]) in copy]
+    if not shared:
+        return found
+    return {**found, "stock": [s for s in found["stock"] if s not in shared], "site_copy": [s["text"] for s in shared]}
 
 
 def ticking(first: list[dict], second: list[dict], elapsed: float) -> tuple[list[dict], list[dict]]:
@@ -605,7 +624,13 @@ def _live_tests(live: _Live, result: dict, funnel: dict[str, PageRecord]) -> Non
     reason = next((f"revisit_{f}" for f in failures if f), None)
     reference = _product(product, 0.0)
     result["countdown"] = countdown_result(first, second, page_id=page_id, funnel=reference, reason=reason)
+    copy = site_copy(funnel)  # the same statement on the home or listing page is no stock claim of a product
+    first, second, reference = (without_site_copy(v, copy) for v in (first, second, reference))
+    others = [without_site_copy(v, copy) for v in others]
     result["low_stock"] = low_stock_result(first, second, others, page_id=page_id, funnel=reference, reason=reason)
+    left_out = sorted({t for v in (first, second, *others) if v for t in v.get("site_copy") or []})
+    if left_out:
+        result["low_stock"]["site_copy"] = left_out
 
 
 def _consent(live: _Live, tab: Tab, home: PageRecord) -> dict:
@@ -633,7 +658,8 @@ def _consent(live: _Live, tab: Tab, home: PageRecord) -> dict:
                     "stage": "home", "first_layer": first}
         manage = first["manage"]
         clicked = tab.click(record, purpose="consent_manage", stage="home", key="consent_manage",
-                            labels=[manage["label"], manage["text"]], rect=manage.get("rect"), strict=True)
+                            labels=[manage["label"], manage["text"]], rect=manage.get("rect"), strict=True,
+                            accept=own_controls([manage], _audit(record)))
         result["manage_click"] = {k: clicked.get(k) for k in ("executed", "reason", "label")}
         second, unread = None, clicked["reason"]
         if clicked["executed"]:
