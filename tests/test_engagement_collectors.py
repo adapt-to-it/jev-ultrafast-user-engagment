@@ -175,6 +175,10 @@ def test_lexicon_patterns_are_portable_between_python_and_javascript():
     # site utilities are not categories; a "Cookie" or a "Tote Bag" category is
     ("utility", "Cookie", False), ("utility", "Tote Bag", False), ("utility", "Informativa sui cookie", True),
     ("utility", "Cookie policy", True), ("utility", "Bag (2)", True),
+    # a search that found nothing, never a cart counter
+    ("no_results", "Nessun prodotto trovato per «zaino»", True), ("no_results", "Carrello (0 articoli)", False),
+    ("no_results", "Nessun prodotto nel carrello", False), ("no_results", "Sorry, we couldn't find any match", True),
+    ("no_results", "0 items", False), ("no_results", "24 risultati", False),
 ])
 def test_lexicon_samples(key, text, expected):
     assert bool(compile_lexicon(lexicon_for("it"))[key].search(text)) is expected
@@ -994,7 +998,8 @@ def test_a_request_before_the_visible_change_is_reported_apart(lab, shop_server)
 class PlainServer:
     """A local server without Cache-Control: no-store, so its pages may enter the back-forward cache, with an
     EventSource stream that sends a message every 0.3 s and /slow?ms=N, which answers after N ms. fhost.html embeds
-    fwidget.html from localhost: another site, so another renderer."""
+    fwidget.html from localhost: another site, so another renderer. workers.html starts a dedicated worker (which
+    fetches a page), a shared worker and a service worker."""
 
     PAGES = {
         "/a.html": "<!doctype html><html lang=it><title>A</title><h1>Pagina A</h1><p>Prima pagina.</p>"
@@ -1012,6 +1017,16 @@ class PlainServer:
         "/fwidget.html": "<!doctype html><html lang=it><title>Widget</title><p>Widget recensioni</p><script>"
                          "console.error('widget: recensioni non disponibili');"
                          "setTimeout(() => { throw new Error('widget rotto'); });</script>",
+        "/workers.html": "<!doctype html><html lang=it><title>Lavoratori</title><h1>Ricerca veloce</h1><script>"
+                         "window.state = {};"
+                         "new Worker('w.js').onmessage = m => { window.state.worker = m.data; };"
+                         "const shared = new SharedWorker('sh.js');"
+                         "shared.port.onmessage = m => { window.state.shared = m.data; };"
+                         "navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready)"
+                         ".then(() => { window.state.service = 'ready'; });</script>",
+        "/w.js": "fetch('b.html?from=worker').then(r => r.text()).then(t => postMessage('fetched ' + t.length));",
+        "/sh.js": "onconnect = e => e.ports[0].postMessage('connected');",
+        "/sw.js": "self.addEventListener('install', () => self.skipWaiting());",
     }
 
     def __init__(self):
@@ -1051,7 +1066,8 @@ class PlainServer:
                     return
                 body = pages.get(path, "").encode()
                 self.send_response(200 if body else 404)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Type", "text/javascript" if path.endswith(".js") else
+                                 "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -1273,6 +1289,29 @@ def test_requests_of_the_previous_document_do_not_hold_the_next_settle(chromium,
     assert record["errors"]["console"] == 0
 
 
+def test_workers_run_and_their_scripts_do_not_hold_the_settle(chromium, plain):
+    """waitForDebuggerOnStart pauses every worker a page starts, even one the auto-attach filter leaves out: each is
+    attached and resumed. A dedicated worker's requests count with the page; a worker's own script, whose end is
+    reported on the worker's session (a shared worker's on none the collector reads), never holds the settle."""
+    transport, context, collector = frame_collector(chromium)
+    browser = collector.open(plain.url("workers.html"))
+    try:
+        started = time.monotonic()
+        record = collector.collect(browser, stage="x", page_id="p1")
+        took = time.monotonic() - started
+        assert wait_for(lambda: len(browser.evaluate("window.state") or {}) == 3, timeout=5)
+        state = browser.evaluate("window.state")
+    finally:
+        collector.close(browser)
+        close_context(transport, context)
+        transport.close()
+    size = len(PlainServer.PAGES["/b.html"].encode())
+    assert state == {"worker": f"fetched {size}", "shared": "connected", "service": "ready"}
+    assert record["vitals"]["settled_reason"] == "quiet" and took < 4.5, took
+    assert not [n for n in record["notes"] if n.startswith("settle:")]
+    assert record["network"]["by_type"]["fetch"]["requests"] == 1  # the dedicated worker's own request
+
+
 def test_a_dead_frame_watcher_is_started_again(chromium, shop_server):
     """Architect ruling 2: the watcher ends on any error, and the collector starts a new one when it needs it; a dead
     watcher would leave every new cross-site iframe paused (and the page's load event waiting)."""
@@ -1374,6 +1413,57 @@ style="position:fixed;inset:20% 20%;background:#fff;border:1px solid #000;paddin
 <h2>Iscriviti alla newsletter e ottieni il 10% di sconto sul tuo primo ordine</h2>
 <button aria-label="Chiudi finestra">×</button><button aria-label="Chiudi">No grazie, preferisco pagare di più</button>
 <a href="#" aria-label="Rifiuta offerta">Non mi interessa risparmiare</a></div></body></html>"""
+
+
+def no_results_page(heading: str, block: str) -> str:
+    cards = "".join(f'<li class="product-card"><a href="/p/{i}"><img src="data:," width="160" height="160" alt="">'
+                    f'<h3>{name}</h3></a><span class="price">{19 + i},90 €</span></li>'
+                    for i, name in enumerate(("Borraccia termica", "Felpa con cappuccio", "Calzini sportivi",
+                                              "Cappello di lana", "Guanti touch", "Fascia running")))
+    return (f'<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Ricerca</title></head><body>'
+            f'<header><a href="/">Negozio</a> <a href="/carrello">Carrello (0 articoli)</a></header><main>'
+            f'<h1>{heading}</h1><p>Prova con altre parole.</p><h2>{block}</h2><ul class="products">{cards}</ul>'
+            f'</main></body></html>')
+
+
+@pytest.mark.parametrize("heading, block, expected", [
+    ("0 risultati per «zaino impermeabile»", "Ti potrebbero interessare", "0 risultati per «zaino impermeabile»"),
+    ("La tua ricerca non ha prodotto risultati", "I più venduti", "La tua ricerca non ha prodotto risultati"),
+    ("No results for “waterproof backpack”", "You may also like", "No results for “waterproof backpack”"),
+    ("Risultati per «borraccia»", "Prodotti trovati", None),  # the header's "0 articoli" is a cart, not a search
+])
+def test_a_no_results_statement_is_read_above_a_grid_of_recommendations(lab, monkeypatch, heading, block,
+                                                                         expected):
+    from jev_ultrafast.engagement import oracles
+
+    audit = page_audit(lab, no_results_page(heading, block), "/search?q=zaino+impermeabile")
+    assert audit["filters"]["no_results_text"] == expected
+    assert classify(audit, audit["url"])["type"] == "plp" and audit["products"]["cards_count"] == 6
+    monkeypatch.setattr(oracles, "read_page", lambda browser, collector: (audit, classify(audit, audit["url"])))
+    run = {"site": {"start_url": audit["url"]}}
+    for params in ({}, {"query": "zaino impermeabile"}):
+        result = oracles.verify("search_results_shown", params, browser=None, collector=None, run=run)
+        assert result["passed"] is (expected is None and not params), (heading, params)  # never the URL's echo
+
+
+def test_the_buttons_of_product_cards_are_marked_and_count_once(lab):
+    from test_engagement_checks import one, page, run_of
+
+    from jev_ultrafast.engagement import checks
+
+    button = '<button style="background:#333;color:#fff;border:0;padding:10px 16px">Aggiungi</button>'
+    cards = "".join(f'<li class="card"><a href="/p/{n}.html"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" '
+                    f'width="120" height="90" alt="Calza {n}">Calza sportiva {n}</a><span class="price">{9 + n},90 €'
+                    f'</span>{button}</li>' for n in range(3))
+    html = ('<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Scarpa Aurora</title></head><body>'
+            '<main style="display:grid;grid-template-columns:2fr 1fr"><div><h1>Scarpa Aurora</h1><p>89,90 €</p>'
+            '<button style="background:#060;color:#fff;border:0;padding:14px 40px;font-size:18px">Aggiungi al '
+            f'carrello</button></div><aside><h2>Completa il look</h2><ul>{cards}</ul></aside></main></body></html>')
+    audit = page_audit(lab, html, "/scarpa-aurora")
+    shown = [(c["label"], c["in_card"]) for c in audit["ctas"] if c["primary_like"] and c["above_fold"]]
+    assert sorted(shown) == [("Aggiungi", True)] * 3 + [("Aggiungi al carrello", False)]
+    row = one(checks.observations(run_of([page("pdp", audit=audit)])), "CCL.PRIMARY_CTA_COUNT", stage="pdp")
+    assert row["value"] == 2 and row["evidence"]["card_buttons"] == 3
 
 
 def test_overlay_buttons_are_read_by_their_visible_text(lab):
@@ -2395,18 +2485,38 @@ def test_a_products_own_block_beside_its_related_cards_is_not_a_card(lab, cards)
     assert classify(audit, audit["url"])["type"] == "pdp"
 
 
+def sale_listing(cards: int, statements: int) -> str:
+    """A listing of struck card prices; the first `statements` cards carry their own lowest-30-days statement."""
+    items = "".join(
+        f'<li><a href="/p/{n}.html"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width=150 height=100 '
+        f'alt="Articolo {n}"><h3>Articolo {n}</h3></a><p><span>{20 + n},90 €</span> <del>{30 + n},90 €</del></p>'
+        + (f"<p>Prezzo più basso negli ultimi 30 giorni: {25 + n},90 €</p>" if n < statements else "") + "</li>"
+        for n in range(cards))
+    return f"""<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Saldi</title></head>
+      <body><main><h1>Saldi</h1><p>{cards} prodotti</p><ul>{items}</ul></main></body></html>"""
+
+
 def test_price_counts_cover_every_price_past_the_payload_cut(lab):
     """Fable ruling 5: `prices` keeps 80 items in document order, so a 48-card sale listing drops its last cards'
     struck prices; price_counts counts every price read, struck ones inside and outside the cards apart."""
-    cards = "".join(
-        f'<li><a href="/p/{n}.html"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width=150 height=100 '
-        f'alt="Articolo {n}"><h3>Articolo {n}</h3></a><p><span>{20 + n},90 €</span> <del>{30 + n},90 €</del></p></li>'
-        for n in range(48))
-    audit = page_audit(lab, f"""<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Saldi</title></head>
-      <body><main><h1>Saldi</h1><p>48 prodotti</p><ul>{cards}</ul></main></body></html>""", "/saldi")
+    audit = page_audit(lab, sale_listing(48, 0), "/saldi")
     assert len(audit["prices"]) == 80 and sum(p["strikethrough"] for p in audit["prices"]) == 40
     assert audit["price_counts"] == {"total": 96, "strikethrough_in_card": 48, "strikethrough_outside_cards": 0}
     assert audit["products"]["cards_count"] == 48
+
+
+@pytest.mark.parametrize("statements, compliant", [(48, True), (40, False), (30, False)])
+def test_struck_prices_past_the_payload_cut_still_need_their_statement(lab, statements, compliant):
+    """The statements' prices fill the 80-item cut too: PTI.STRIKETHROUGH_LOWEST30 counts every struck price."""
+    from test_engagement_checks import one, page, run_of
+
+    from jev_ultrafast.engagement import checks
+
+    audit = page_audit(lab, sale_listing(48, statements), "/saldi")
+    assert audit["price_counts"]["strikethrough_in_card"] == 48
+    assert sum(p["strikethrough"] for p in audit["prices"]) < 48  # the cut left some out
+    row = one(checks.observations(run_of([page("plp", audit=audit)])), "PTI.STRIKETHROUGH_LOWEST30", stage="plp")
+    assert row["value"] is compliant and row["evidence"]["in_cards"]["strikethrough_prices"] == 48
 
 
 def test_an_open_variant_dropdown_on_a_listing_is_reported_and_the_page_stays_a_listing(lab):

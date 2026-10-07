@@ -983,12 +983,14 @@
     : (document.querySelector('link[rel="next"],a[rel="next"]') || ALL.some(e => e.matches('nav') && hit('pagination', clean(e.getAttribute('aria-label')))) ||
        visibleLinks.some(a => hit('pagination', name(a))) || pagerLinks.length >= 2) ? 'pagination' : 'none';
   const countBlock = blocks.find(b => b.text.length <= 120 && !b.overlay && hit('result_count', b.text));
+  const noResults = blocks.find(b => b.text.length <= 200 && !b.overlay && hit('no_results', b.text));
   const filters = {
     controls: Math.max(facets, filterToggle ? 1 : 0), facets, toggle: !!filterToggle,
     inputs: filterRegion ? filterRegion.querySelectorAll('input,select').length : 0,
     sort: {present: !!(sortSelect || sortButton), kind: sortSelect ? 'select' : sortButton ? 'button' : null,
       options: sortSelect ? [...sortSelect.options].map(o => cut(o.text, 40)).slice(0, 10) : []},
     result_count_text: countBlock ? cut(countBlock.text, 120) : null,
+    no_results_text: noResults ? cut(noResults.text, 120) : null,
     chips: filterRegion ? allButtons.filter(b => hit('remove', name(b)) && within(b, filterRegion)).length : 0, pagination,
   };
 
@@ -1400,7 +1402,7 @@
     // `prices` keeps 80 items in document order (a sale listing's last cards drop out): the counts cover every price read
     price_counts: {total: prices.length, strikethrough_in_card: prices.filter(p => p.strikethrough && inCard(p.el)).length,
       strikethrough_outside_cards: prices.filter(p => p.strikethrough && !inCard(p.el)).length},
-    ctas: strip(ctas), search, nav, products, filters, pdp, cart, forms,
+    ctas: strip(ctas.map(c => ({...c, in_card: inCard(c.el)}))), search, nav, products, filters, pdp, cart, forms,
     overlays: overlays.slice(0, 8).map(({el, ...o}) => ({...o, coverage: Math.round(o.coverage * 1000) / 1000,
       interrupting: interrupting(o)})),
     trust, persuasion, images, targets: targetSizes, a11y, snippets, truncated, audit_ms: Math.round(performance.now() - T0),

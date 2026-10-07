@@ -132,6 +132,13 @@ def test_text_is_only_for_type_text_and_never_personal_data():
     ("221 Baker Street", "a street address"), ("nato il 12/03/1985", "a date"), ("12 marzo 1985", "a date"),
     ("CVV 123", "a card security code"), ("mario.rossi(at)gmail.com", "an email address"),
     ("mario.rossi at gmail dot com", "an email address"),
+    # year-first, month-first and month-name-first dates; lowercase, comma and particle street forms
+    ("1985-03-15", "a date"), ("03/15/1985", "a date"), ("1985/03/15", "a date"), ("March 15, 1985", "a date"),
+    ("marzo 12, 1985", "a date"), ("Via Garibaldi, 12", "a street address"), ("via roma 12", "a street address"),
+    ("Piazza del Duomo 1", "a street address"), ("Via dei Mille 5", "a street address"),
+    ("Via dell'Indipendenza 5", "a street address"), ("Corso Vittorio Emanuele II 45", "a street address"),
+    ("Corso di cucina 2024", None), ("materasso una piazza e mezza 160", None), ("pantalone largo taglia 42", None),
+    ("maglia taglia 12/14 anni", None), ("tv 55 pollici 2024", None),
     # product words stay typeable (a name cannot be recognised: the field guard is the guarantee)
     ("Mario Rossi", None), ("Air Max 90", None), ("Xbox 360", None), ("corso di yoga 10", None),
     ("via col vento dvd", None), ("Street Fighter 6", None), ("running shoes at discount", None),
@@ -437,9 +444,33 @@ def test_page_oracles_pass_on_the_shops_own_site_only(monkeypatch):
             assert result["passed"] is same and result["checks"]["same_site"] is same, (name, url)
 
 
+def test_page_oracles_look_for_the_querys_own_words_in_what_the_page_shows(monkeypatch):
+    """A function word is in any title, and a search URL echoes whatever was typed: neither finds the product."""
+    run = {"site": {"start_url": "https://shop.test/"}}
+
+    def verify(name, params, audit, kind):
+        monkeypatch.setattr(oracles, "read_page", lambda browser, collector: (audit, {"type": kind}))
+        return oracles.verify(name, params, browser=Mock(), collector=Mock(), run=run)
+
+    case = {"url": "https://shop.test/p/9", "pdp": {"title": "Custodia per tablet 10 pollici"}}
+    result = verify("pdp_reached", {"query": "zaino per laptop"}, case, "pdp")
+    assert result["passed"] is False and result["checks"]["query_words_found"] == []
+    assert verify("pdp_reached", {"query": "custodia per laptop"}, case, "pdp")["checks"]["query_words_found"] == [
+        "custodia"]
+    listing = {"url": "https://shop.test/search?q=zaino+impermeabile", "doc": {"h1s": ["I più venduti"]},
+               "products": {"cards_count": 4, "cards": [{"title": "Borraccia termica"}, {"title": "Felpa"}]}}
+    result = verify("search_results_shown", {"query": "zaino impermeabile"}, listing, "plp")
+    assert result["passed"] is False and result["checks"]["query_words_found"] == []
+    found = {**listing, "products": {"cards_count": 1, "cards": [{"title": "Zaino impermeabile 30 L"}]}}
+    assert verify("search_results_shown", {"query": "zaino impermeabile"}, found, "plp")["passed"] is True
+    empty = {**found, "filters": {"no_results_text": "Nessun risultato per «zaino impermeabile»"}}
+    result = verify("search_results_shown", {}, empty, "plp")
+    assert result["passed"] is False and result["checks"]["no_results_text"].startswith("Nessun risultato")
+
+
 @pytest.mark.parametrize("kwargs", [
     {"oracle": "made_up"}, {"profile": "tablet"}, {"policy": "random"}, {"max_steps": 0}, {"max_steps": 500},
-    {"optimal_steps": 0}, {"goal": " "}, {"url": "ftp://shop.test/"},
+    {"optimal_steps": 0}, {"goal": " "}, {"url": "ftp://shop.test/"}, {"url": "https://stage:S3cret-pw@shop.test/"},
     {"oracle": "cart_contains_item_under_price", "oracle_params": {}},
 ])
 def test_start_validates_everything_before_opening_a_browser(tmp_path, kwargs):

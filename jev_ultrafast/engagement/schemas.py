@@ -127,11 +127,12 @@ class AuditPayload(TypedDict, total=False):
     #                       overlay, in_card (inside a product card)}], the first 80 in document order
     price_counts: dict  # {total, strikethrough_in_card, strikethrough_outside_cards}: over every price read, before the
     #                     80-item cut of `prices` (overlays included, the same in_card test)
-    ctas: list[dict]  # [{label, lexicon_hit, rect, above_fold, fg, bg, contrast, area, primary_like}]
+    ctas: list[dict]  # [{label, lexicon_hit, rect, above_fold, fg, bg, contrast, area, primary_like,
+    #                    in_card (inside a product card: one action repeated on every item)}]
     search: dict  # {present, above_fold, width, has_autocomplete_attr, rect}
     nav: dict  # {links, categories:[{label, href}], breadcrumbs, generic_label_share, cart_link}
     products: dict  # {cards_count, cards:[{title, href, price}], itemlist_jsonld}
-    filters: dict  # {controls, sort, result_count_text, chips, pagination}
+    filters: dict  # {controls, sort, result_count_text, no_results_text (a "no results" statement), chips, pagination}
     pdp: dict  # {add_to_cart, add_to_cart_count (outside product cards), add_to_cart_all, stock_text, delivery_text,
     #            shipping_text, returns_text, images, zoom, variants, variant_selector,
     #            variant_groups:[{label, kind, options, selected, first_available, rect}],

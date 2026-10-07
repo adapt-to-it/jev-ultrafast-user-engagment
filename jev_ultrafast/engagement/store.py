@@ -56,6 +56,12 @@ def host_slug(url_or_host: str) -> str:
     return slug[:MAX_SLUG].strip(".-") or "unknown"
 
 
+def _public(url: str) -> str:
+    """url without a user:password@ part (EngagementSettings refuses such URLs; nothing stores one either)."""
+    parts = urlsplit(url)
+    return parts._replace(netloc=parts.netloc.rpartition("@")[2]).geturl() if "@" in parts.netloc else url
+
+
 def _atomic_write(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -90,7 +96,7 @@ class RunStore:
             "run_id": run_id,
             "schema_version": SCHEMA_VERSION,
             "kind": kind,
-            "site": {"host": urlsplit(start_url).hostname or slug, "start_url": start_url},
+            "site": {"host": urlsplit(start_url).hostname or slug, "start_url": _public(start_url)},
             "created_at": iso_now(now),
             "finished_at": None,
             "settings": settings,

@@ -66,9 +66,11 @@ Pick the oracle that verifies the goal independently of the agent's DONE:
 | search and see results | `search_results_shown` | `{"query"?}` | (2) |
 
 (1) The final page is a product page of the shop; with `query`, a query word is in its title; with `max_price`, its
-price is at most that. (2) The final page is a result listing of the shop with at least one result; with `query`, a
-query word is in the search, the page title or the result titles. One query word is enough, so pass only the
-distinctive product words (`scarpe corsa`, not `un paio di scarpe`).
+price is at most that. (2) The final page is a result listing of the shop with at least one result and no "no
+results" statement (a no-results page that shows recommendations fails); with `query`, a query word is in its
+headings or the result titles (never the URL, which echoes the search). Function words (`per`, `con`, `the`, ...) do
+not count, but one other query word is enough, so pass only the distinctive product words (`scarpe corsa`, not
+`un paio di scarpe`).
 
 An oracle checks only what its params state: the cart oracles check a price or a non-empty cart, never product words
 (a gift card under 50 € passes "scarpe da corsa sotto i 50 euro"); `pdp_reached` checks the page type plus the query

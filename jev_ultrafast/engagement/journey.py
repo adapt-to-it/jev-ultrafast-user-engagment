@@ -80,7 +80,7 @@ from .profiles import DEVICE_PROFILES, PROFILES_VERSION, close_context, new_cont
 from .safety import CheckoutGuard
 from .schemas import JourneyRecord, JourneyStep
 from .scoring import load_anchors
-from .settings import EngagementSettings
+from .settings import CREDENTIALS, EngagementSettings, has_credentials
 from .store import RunStore, iso_now
 from .transport import open_transport
 
@@ -98,6 +98,15 @@ MAX_STALE = 10  # consecutive stale decisions before an automatic run gives up o
 PAGE_KEY_JS = "(() => { const c = window.__jevFast; return {key: c ? c.pageKey() : null}; })()"
 MONTHS = ("gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre|january|"
           "february|march|april|may|june|july|august|september|october|november|december")
+DAY, MONTH, YEAR, SEP = r"(?:0?[1-9]|[12]\d|3[01])", r"(?:0?[1-9]|1[0-2])", r"(?:19|20)\d\d", r"\s?[./-]\s?"
+NTH = r"(?i:st|nd|rd|th)?"
+# A street word, then the name: capitalised words after any lowercase particles ("Piazza del Duomo"), or any words of
+# three letters or more after a word that only names a street (corso, largo and contrada also name courses and sizes).
+STREET = r"(?i:\b(?:via|viale|v\.le|piazza|p\.zza|p\.za|piazzale|corso|c\.so|largo|vicolo|contrada)\b\.?)\s+"
+ONLY_STREET = r"(?i:\b(?:via|viale|v\.le|piazza|p\.zza|p\.za|piazzale|vicolo)\b\.?)\s+"
+PARTICLE = (r"(?i:(?:di|da|de|del|dal|dei|degli|della|delle|dello|dalla|dalle|dallo|san|santa|santo|s\.)\s+"
+            r"|(?:d|dell|dall|sant)['’])")
+HOUSE = r"(?:,\s*|\s+)\d{1,4}[a-zA-Z]?\b"  # "12", ", 12", "12a"
 # A best-effort net over the text itself (the field guard is the guarantee): a name cannot be told from a product word.
 PERSONAL_TEXT = {
     "an email address": re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}|[\w.+-]+\s*(?:[(\[{]at[)\]}]|\s(?:at|chiocciola)\s)"
@@ -106,12 +115,14 @@ PERSONAL_TEXT = {
     "an IBAN": re.compile(r"\b[a-z]{2}\d{2}(?:\s?[a-z0-9]){11,30}\b", re.I),
     "a fiscal code": re.compile(r"\b[a-z]{6}\d{2}[a-z]\d{2}[a-z]\d{3}[a-z]\b", re.I),
     "a card security code": re.compile(r"\b(?:cvv|cvc|cvv2|cvc2|cid|csc)\b\W{0,3}\d{3,4}\b", re.I),
-    "a date": re.compile(rf"\b(?:0?[1-9]|[12]\d|3[01])(?:\s?[./-]\s?(?:0?[1-9]|1[0-2])\s?[./-]\s?|\s+(?i:{MONTHS})\s+)"
-                         r"(?:19|20)\d\d\b"),
+    "a date": re.compile(  # 15/03/1985, 03/15/1985, 1985-03-15, 12 marzo 1985, March 15, 1985
+        rf"\b(?:{DAY}{SEP}{MONTH}|{MONTH}{SEP}{DAY}){SEP}{YEAR}\b|\b{YEAR}{SEP}{MONTH}{SEP}{DAY}\b"
+        rf"|\b{DAY}{NTH}\s+(?i:{MONTHS})\s+{YEAR}\b|\b(?i:{MONTHS})\s+{DAY}{NTH},?\s+{YEAR}\b"),
     "a street address": re.compile(
-        r"(?i:\b(?:via|viale|v\.le|piazza|p\.zza|p\.za|piazzale|corso|c\.so|largo|vicolo|contrada)\b\.?)\s+"
-        r"(?:[A-ZÀ-Ý][\w'’.-]*\s+){1,4}\d{1,4}\b|\b\d{1,5}\s+(?:[A-Z][a-z]+\s+){1,3}"
-        r"(?i:street|st|road|rd|avenue|ave|lane|drive|boulevard|blvd)\b"),
+        STREET + PARTICLE + "*" + r"[A-ZÀ-Ý][\w'’.-]*(?:\s+" + PARTICLE + r"*[A-ZÀ-Ý][\w'’.-]*){0,3}" + HOUSE
+        + "|" + ONLY_STREET + r"(?i:" + PARTICLE + r"*[^\W\d_][\w'’.-]{2,}(?:\s+" + PARTICLE
+        + r"*[^\W\d_][\w'’.-]{2,}){0,2})" + HOUSE
+        + r"|\b\d{1,5}\s+(?:[A-Z][a-z]+\s+){1,3}(?i:street|st|road|rd|avenue|ave|lane|drive|boulevard|blvd)\b"),
 }
 SETTLE_JS = """(() => { const v = window.__jevVitals;
   return {href: location.href, ready: document.readyState, quiet: v ? v.quiet(%d) : null,
@@ -400,6 +411,8 @@ class JourneyRunner:
             if policy == "typesafe" and not os.environ.get("TYPESAFE_API_KEY"):
                 raise ValueError("policy 'typesafe' needs TYPESAFE_API_KEY; use policy 'host' inside Claude Code")
             parts = urlsplit(url) if isinstance(url, str) else None
+            if parts is not None and has_credentials(url):  # before any message that would echo the URL
+                raise ValueError(CREDENTIALS)
             if parts is None or parts.scheme not in ("http", "https") or not parts.hostname:
                 raise ValueError(f"Expected an http(s) start URL, got {url!r}")
             self.policy = policy

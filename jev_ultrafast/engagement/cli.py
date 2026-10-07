@@ -93,6 +93,10 @@ def _integer(low: int, high: int | None = None):
 
 def _shop_url(value: str) -> str:
     parts = urlsplit(value)
+    if "@" in parts.netloc:  # never echoed: the value holds a password
+        raise argparse.ArgumentTypeError("l'URL contiene credenziali (utente:password@host): toglile, finirebbero "
+                                         "nella run, nei messaggi di avanzamento e nel rapporto (un negozio protetto "
+                                         "da autenticazione HTTP non si può analizzare)")
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise argparse.ArgumentTypeError(f"atteso un URL http(s) del negozio, ricevuto {value!r}")
     return value
@@ -220,13 +224,20 @@ def _say(message: str) -> None:
 
 
 def _journey_options(args, parser) -> dict | None:
+    """The journey's options, checked before any audit or browser: invalid oracle parameters are an argument error."""
+    from .oracles import parse_params
+
     if not args.goal and not args.oracle:
         return None
     if not (args.goal and args.oracle):
         parser.error("--goal e --oracle vanno indicati insieme")
+    try:
+        params = parse_params(args.oracle, dict(args.oracle_param))
+    except ValueError as exc:
+        parser.error(f"--oracle-param: {exc}")
     if not os.environ.get("TYPESAFE_API_KEY"):
         raise Failure(NO_TYPESAFE)
-    return {"goal": args.goal, "oracle": args.oracle, "oracle_params": dict(args.oracle_param), "policy": args.policy,
+    return {"goal": args.goal, "oracle": args.oracle, "oracle_params": params, "policy": args.policy,
             "max_steps": args.max_steps, "optimal_steps": args.optimal_steps, "optimal_pages": args.optimal_pages}
 
 
@@ -331,10 +342,14 @@ def _audit(args, parser) -> int:
         result = {"audit": audited}
         journey_ids = []
         if journey and audited["status"] != "failed":
-            done = service.run_journey(args.url, profile=args.journey_profile, browser=args.browser,
-                                       locale=args.locale, wait=True, headless=not args.headed, **journey)
-            result["journey"] = done
-            journey_ids.append(done["run_id"])
+            try:  # a journey that cannot start leaves the finished audit printed and scored
+                done = service.run_journey(args.url, profile=args.journey_profile, browser=args.browser,
+                                           locale=args.locale, wait=True, headless=not args.headed, **journey)
+            except (ValueError, LookupError, OSError, RuntimeError) as exc:
+                result["journey_error"] = str(exc)
+            else:
+                result["journey"] = done
+                journey_ids.append(done["run_id"])
         if args.judge != "none" and audited["status"] != "failed":
             result["judgments"] = service.judge_with(audited["run_id"], args.judge, args.samples,
                                                      model=args.judge_model)
@@ -347,12 +362,14 @@ def _audit(args, parser) -> int:
         _print_run(result["audit"])
         if result.get("journey"):
             _print_journey(result["journey"])
+        if result.get("journey_error"):
+            print(f"Journey non avviato: {result['journey_error']}")
         if result.get("judgments"):
             _print_judgments(result["judgments"])
         if result.get("score"):
             _print_score(result["score"])
     _emit(args, result, show)
-    return 1 if audited["status"] == "failed" else 0
+    return 1 if audited["status"] == "failed" or "journey_error" in result else 0
 
 
 def _print_journey(result: dict) -> None:

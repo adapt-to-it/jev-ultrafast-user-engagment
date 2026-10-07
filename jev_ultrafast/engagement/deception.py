@@ -119,6 +119,13 @@ def same_item(a, b) -> bool:
     return bool(tx and ty) and len(tx & ty) / len(tx | ty) >= 0.6
 
 
+def _ours(line: dict, added) -> bool:
+    """A cart line is the added item: the same item, and for a line audit.js marks as an add-on (protection,
+    insurance, donation), no word beyond the item's own: "Protezione Scarpa Aurora 2 anni" is an add-on named after
+    "Scarpa Aurora", while a product named like one ("Crema protezione solare") is itself."""
+    return same_item(line["title"], added) and (not line["addon"] or _tokens(line["title"]) <= _tokens(added))
+
+
 def same_product(a: dict, b: dict) -> bool:
     """Two product visits show one product: the same URL, the same sku, or the same title (a variant title extends
     the other: "Scarpa Aurora" and "Scarpa Aurora - Rosso"). Similar names of a catalogue are different products."""
@@ -275,7 +282,7 @@ def sneak_into_basket(product: PageRecord | None, cart: PageRecord | None) -> di
     if not lines:  # an empty cart, or one whose lines audit.js could not read although it shows a total
         reason = "empty_cart" if cart_empty(_audit(cart)) else "cart_lines_not_recognised"
         return {"assessed": False, "reason": reason, "page_id": cart.get("page_id"), "stage": "cart"}
-    ours = [line for line in lines if same_item(line["title"], added.get("title"))]
+    ours = [line for line in lines if _ours(line, added.get("title"))]
     if not ours:
         return {"assessed": False, "reason": "added_item_not_recognised", "page_id": cart.get("page_id"),
                 "stage": "cart", "added": {"title": added.get("title"), "price": added.get("price")},

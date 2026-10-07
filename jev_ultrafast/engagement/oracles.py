@@ -52,6 +52,8 @@ PRICE = re.compile(r"\d{1,3}(?:[.\s']\d{3})+(?:,\d{1,2})?(?!\d)"  # 1.299,00 or 
                    r"|\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?(?!\d)"  # 1,299.00
                    r"|\d+(?:[.,]\d{1,2})?")  # 49,90 or 49.90
 WORD = re.compile(r"[^\W\d_]{3,}")
+# words a query shares with any title ("zaino per laptop" is not found in "Custodia per tablet")
+STOP_WORDS = frozenset().union(*lexicon.FUNCTION_WORDS.values(), "sotto sopra senza tra fra under over into".split())
 CURRENCY = r"(?:[€$£]|\b(?:eur|euro|usd|gbp|chf)\b)"
 # a currency mark directly followed by a number belongs to that number ("Qtà 2 €60,00": the 2 is a quantity)
 CURRENCY_BEFORE = re.compile(CURRENCY + r"\s?$", re.I)
@@ -84,6 +86,20 @@ def check_params(name: str, params: dict | None) -> dict:
         elif kind == "text" and (not isinstance(value, str) or not value.strip() or len(value) > 200):
             raise ValueError(f"{name}.{key} must be a short non-empty text")
     return params
+
+
+def parse_params(name: str, params: dict | None) -> dict:
+    """check_params() of parameters given as text (CLI K=V pairs, MCP strings): a numeric parameter may be "50" or
+    "49,90"."""
+    params = dict(params or {})
+    for key, (_, kind) in PARAMS.get(name, {}).items():
+        if kind == "number" and isinstance(params.get(key), str):
+            try:
+                number = float(params[key].strip().replace(",", "."))
+            except ValueError:
+                continue  # check_params says what is wrong
+            params[key] = int(number) if number.is_integer() else number
+    return check_params(name, params)
 
 
 def parse_price(text) -> float | None:
@@ -332,6 +348,12 @@ def _words(text: str) -> set[str]:
     return {w.lower() for w in WORD.findall(text or "")}
 
 
+def _query_words(query: str) -> set[str]:
+    """The query's own words: its function words only when it has nothing else."""
+    words = _words(query)
+    return (words - STOP_WORDS) or words
+
+
 def _final_page(ctx: dict) -> tuple[dict, dict, dict]:
     """(audit, classification, checks) of the journey's final page; checks hold its URL and whether it is the shop's,
     or not_assessable "final_page_unreadable" when audit.js could not read it (a harness failure: no guess)."""
@@ -356,7 +378,7 @@ def pdp_reached(params: dict, ctx: dict) -> dict:
     checks["title"] = title[:80]
     passed = classification.get("type") == "pdp" and checks["same_site"]
     if params.get("query"):
-        hit = _words(params["query"]) & _words(f"{title} {audit.get('title') or ''}")
+        hit = _query_words(params["query"]) & _words(f"{title} {audit.get('title') or ''}")
         checks["query_words_found"] = sorted(hit)
         passed = passed and bool(hit)
     if params.get("max_price") is not None:
@@ -367,6 +389,9 @@ def pdp_reached(params: dict, ctx: dict) -> dict:
 
 
 def search_results_shown(params: dict, ctx: dict) -> dict:
+    """A listing of the shop with product cards and no "no results" statement (a no-results page often shows a grid
+    of recommendations). The query is looked for in what the page shows, its headings and card titles, never in the
+    URL, which echoes whatever was typed."""
     audit, classification, checks = _final_page(ctx)
     if checks.get("not_assessable"):
         return {"passed": None, "checks": checks}
@@ -374,11 +399,13 @@ def search_results_shown(params: dict, ctx: dict) -> dict:
     cards = products.get("cards") or []
     checks["results"] = products.get("cards_count") or 0
     passed = classification.get("type") == "plp" and checks["results"] >= 1 and checks["same_site"]
+    if no_results := (audit.get("filters") or {}).get("no_results_text"):
+        checks["no_results_text"] = str(no_results)[:120]
+        passed = False
     if params.get("query"):
-        query = " ".join(v for _, v in parse_qsl(urlsplit(checks["url"]).query))
-        haystack = " ".join([query, audit.get("title") or "", *((audit.get("doc") or {}).get("h1s") or []),
+        haystack = " ".join([*((audit.get("doc") or {}).get("h1s") or []),
                              *(str(c.get("title") or "") for c in cards[:20])])
-        hit = _words(params["query"]) & _words(haystack)
+        hit = _query_words(params["query"]) & _words(haystack)
         checks["query_words_found"] = sorted(hit)
         passed = passed and bool(hit)
     return {"passed": bool(passed), "checks": checks}

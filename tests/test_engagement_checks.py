@@ -524,6 +524,24 @@ def test_cta_salience_formula():
     assert one(observations, "CCL.PRIMARY_CTA_COUNT", stage="pdp")["value"] == 1
 
 
+def test_the_buttons_of_product_cards_are_one_competing_cta():
+    """One action repeated on every item (a listing's per-card "Aggiungi al carrello") is no set of competing CTAs."""
+    card = {"label": "Aggiungi al carrello", "primary_like": True, "above_fold": True, "in_card": True}
+    listing = [card] * 12
+    plp = one(checks.observations(run_of([page("plp", audit={"ctas": listing})])), "CCL.PRIMARY_CTA_COUNT",
+              stage="plp")
+    assert plp["value"] == 1 and plp["evidence"] == {"labels": ["Aggiungi al carrello"], "card_buttons": 12}
+    own = {"label": "Aggiungi al carrello", "primary_like": True, "above_fold": True, "in_card": False}
+    cross = [own] + [{**card, "label": "Aggiungi"}] * 3  # a "Completa il look" row beside the product's own button
+    pdp = one(checks.observations(run_of([page("pdp", audit={"ctas": cross})])), "CCL.PRIMARY_CTA_COUNT",
+              stage="pdp")
+    assert pdp["value"] == 2 and pdp["evidence"]["labels"] == ["Aggiungi al carrello", "Aggiungi"]
+    control = {"present": True, "contrast": 4.5, "area": 10_000, "above_fold": True}
+    assert checks.cta_salience(control, cross, {}) == checks.cta_salience(control, cross[:2], {}) == 87.5
+    old = [{k: v for k, v in c.items() if k != "in_card"} for c in cross]  # a payload without the marks
+    assert len(checks.competing_ctas(old)) == 4
+
+
 def test_visual_complexity_composite():
     assert checks.visual_complexity({"colorfulness": 100, "edge_density": 0.25, "bytes_per_px": 0.4}) == 100.0
     assert checks.visual_complexity({"colorfulness": 40, "edge_density": 0.05, "bytes_per_px": 0.1}) == 26.8
@@ -706,6 +724,24 @@ def test_sneak_into_basket_needs_the_added_item_in_the_cart():
     assert sneak_into_basket(product, page("cart"))["unrequested"] == []
 
 
+@pytest.mark.parametrize("addon", ["Protezione Scarpa Aurora 2 anni", "Garanzia estesa Scarpa Aurora",
+                                   "Protection plan for Scarpa Aurora"])
+def test_an_add_on_named_after_the_product_is_sneaked_into_the_basket(addon):
+    """The canonical form of the pattern: the add-on's title contains every word of the product's."""
+    product = page("pdp", probes={"add_to_cart": {"executed": True, "title": "Scarpa Aurora", "price": 89.9}})
+    lines = [{"title": "Scarpa Aurora", "qty": 1, "price_value": 89.9},
+             {"title": addon, "qty": 1, "price_value": 9.9, "addon": True}]
+    test = sneak_into_basket(product, page("cart", audit={"cart": {"line_items": lines}}))
+    assert [line["title"] for line in test["unrequested"]] == [addon]
+    assert checks._sneak(test)[0] == 1.0
+    alone = sneak_into_basket(product, page("cart", audit={"cart": {"line_items": lines[1:]}}))
+    assert alone["assessed"] is False and alone["reason"] == "added_item_not_recognised"  # never the product itself
+    # a product named like an add-on is itself
+    sunscreen = page("pdp", probes={"add_to_cart": {"executed": True, "title": "Crema protezione solare SPF 50"}})
+    own = [{"title": "Crema protezione solare SPF 50", "qty": 1, "price_value": 19.9, "addon": True}]
+    assert sneak_into_basket(sunscreen, page("cart", audit={"cart": {"line_items": own}}))["unrequested"] == []
+
+
 # ---------------------------------------------------------------- empty cart, fees, taxes, strikethrough, counts
 
 
@@ -783,6 +819,21 @@ def test_strikethrough_statements_cover_cards_through_a_footnote(struck, said, v
     row = one(checks.observations(run_of([page("plp", audit=audit)])), "PTI.STRIKETHROUGH_LOWEST30", stage="plp")
     assert row["value"] is value and row["evidence"]["strikethrough_prices"] == len(struck)
     assert "statement_scope" not in row["evidence"]
+
+
+@pytest.mark.parametrize("tally, said, value, struck", [
+    ((48, 0), [(True, 40)], False, 48),  # a 48-card sale listing: `prices` kept 27 struck prices, the counts all 48
+    ((48, 0), [(True, 48)], True, 48),
+    ((48, 1), [(False, 1)], True, 49),  # a page footnote covers the cards
+    ((0, 1), [(True, 1)], False, 1),
+])
+def test_struck_prices_are_counted_past_the_payload_cut(tally, said, value, struck):
+    audit = {"prices": [{"strikethrough": True, "in_card": True}] * 27,
+             "price_counts": {"total": 136, "strikethrough_in_card": tally[0], "strikethrough_outside_cards": tally[1]},
+             "persuasion": {"lowest_price_30d": [{"text": "Prezzo più basso negli ultimi 30 giorni", "in_card": card,
+                                                  "count": count} for card, count in said]}}
+    row = one(checks.observations(run_of([page("plp", audit=audit)])), "PTI.STRIKETHROUGH_LOWEST30", stage="plp")
+    assert row["value"] is value and row["evidence"]["strikethrough_prices"] == struck
 
 
 # what audit.js sends today on a listing of six struck card prices (no in_card marks; equal statements merged)
@@ -1027,6 +1078,20 @@ def test_reciprocity_counts_benefits_not_their_wordings():
               "MPI.RECIPROCITY")
     assert row["value"] == 2 and row["evidence"]["texts"] == ["Reso gratuito", "Campione omaggio"]
     assert checks.benefit("Testo  libero", ()) == "testo libero"
+
+
+@pytest.mark.parametrize("bar, value", [
+    ("Spedizione gratuita sopra 49 € · Resi gratuiti entro 30 giorni", 1),
+    ("Free shipping over $50 · Free returns", 1),
+    ("Spedizione gratis sopra 49 €", 0),  # the threshold alone: PTI's, no benefit of its own
+])
+def test_a_benefit_beside_a_free_shipping_threshold_in_one_block_counts(bar, value):
+    """audit.js records the block twice, as the threshold and (its free-shipping wording left out) as a benefit."""
+    language = "en" if bar.startswith("Free") else "it"
+    audit = {"lexicon_lang": language, "persuasion": {"reciprocity": [{"text": bar}],
+                                                      "free_shipping_threshold": [{"text": bar, "value": 49}]}}
+    row = one(checks.observations(run_of([page("home", audit=audit)])), "MPI.RECIPROCITY")
+    assert row["value"] == value and row["evidence"]["texts"] == [bar][:value]
 
 
 def test_a_customs_charge_is_no_tax_and_other_locales_taxes_are():

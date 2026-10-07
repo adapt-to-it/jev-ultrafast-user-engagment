@@ -69,6 +69,13 @@ LEXICON: dict[str, dict[str, list[str]]] = {
             r"\d[\d.]*\s+(prodott[io]|articol[io]|risultat[io]|referenze)",
             r"(mostrat[io]|visualizzat[io])\s+\d+", r"\d+\s*[-–]\s*\d+\s+di\s+\d+",
         ],
+        # a search that found nothing (often above a "Ti potrebbero interessare" grid); never a cart counter
+        "no_results": [
+            r"nessun\s+risultat[oi]", r"\b0\s+risultat[io]\b",
+            r"nessun[oa]?\s+(prodott[oi]|articol[oi]|corrispondenz[ae])\s+(trovat|corrispond|per\b)",
+            r"ricerca\s+non\s+ha\s+(prodotto|restituito|dato|trovato)",
+            r"non\s+(abbiamo|è\s+stato\s+possibile|siamo\s+riusciti\s+a)\s+trova",
+        ],
         "load_more": [
             r"(carica|mostra|visualizza|vedi)\s+altr[io]", r"mostra\s+di\s+(più|piu)", r"carica\s+di\s+(più|piu)",
         ],
@@ -378,6 +385,11 @@ LEXICON: dict[str, dict[str, list[str]]] = {
         ],
         "result_count": [
             r"\d[\d,]*\s+(products?|items?|results?)\b", r"showing\s+\d+", r"\d+\s*[-–]\s*\d+\s+of\s+\d+",
+        ],
+        "no_results": [
+            r"\bno\s+results?\b", r"\b0\s+results?\b", r"\bno\s+(products?|items?|matches)\s+(were\s+)?(found|match)",
+            r"did\s+not\s+match\s+any", r"(couldn['’]t|could\s+not|didn['’]t|did\s+not)\s+find\s+any",
+            r"\bnothing\s+(was\s+)?found\b",
         ],
         "load_more": [r"load\s+more", r"show\s+more", r"view\s+more", r"see\s+more\s+products"],
         "pagination": [r"(next|previous)\s+page", r"^\s*(next|previous|prev)\s*[»›>]*\s*$", r"pagination"],

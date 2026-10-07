@@ -311,16 +311,6 @@ def _verification(verification):
     return brief
 
 
-def _number(value):
-    if isinstance(value, str):
-        try:
-            number = float(value.strip().replace(",", "."))
-        except ValueError:
-            return value
-        return int(number) if number.is_integer() else number
-    return value
-
-
 class EngagementService:
     """store: RunStore (default: $JEV_ENGAGEMENT_ARTIFACTS or ./artifacts/engagement); transport_factory: what
     audits and journeys open their browser with (see audit.audit_shop); clock: monotonic seconds for the idle
@@ -596,12 +586,9 @@ class EngagementService:
         journey_act and journey_finish. policy "typesafe" (TYPESAFE_API_KEY): TypeSafe chooses until the journey
         stops, in a background thread (poll wait_run), or in this thread with wait=True (the finish() result)."""
         from .journey import JourneyRunner
-        from .oracles import PARAMS
+        from .oracles import parse_params
 
-        params = dict(oracle_params or {})
-        for key, (_, kind) in PARAMS.get(oracle, {}).items():
-            if kind == "number" and key in params:
-                params[key] = _number(params[key])
+        params = parse_params(oracle, oracle_params)
         if profile not in DEVICE_PROFILES:
             raise ValueError(f"profile must be one of {list(DEVICE_PROFILES)}")
         settings = EngagementSettings(url=url, profiles=[profile], browser=browser, locale=locale, headless=headless,

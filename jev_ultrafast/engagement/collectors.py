@@ -7,9 +7,12 @@ or sent before the new document's request) and console output (before Runtime.ex
 window are left out. Cross-site iframes run in their own renderer: a background thread attaches them as they appear
 (paused until then), applies the profile's network, CPU and identity settings and resumes them, and their Network
 events and errors (console errors, uncaught exceptions: a same-site frame's reach the page session anyway) join the
-page's. A request or an error an old cross-site frame produces after the next click navigation started, before that
-frame is detached at the commit, may still count for the new page. A collect() on the document of an earlier record (a
-client-side route change, a back-forward cache restore) reports no load timings: they belong to that record.
+page's. Workers the page or its frames start are attached and resumed too (waitForDebuggerOnStart pauses them all):
+a dedicated worker's requests join the page's (its errors reach the page's Log anyway); shared and service workers
+serve other pages too and are only resumed. A request or an error an old cross-site frame produces after the next
+click navigation started, before that frame is detached at the commit, may still count for the new page. A collect()
+on the document of an earlier record (a client-side route change, a back-forward cache restore) reports no load
+timings: they belong to that record.
 Everything here is read-only; clicks and typing belong to the crawler and the journey runner.
 """
 
@@ -43,7 +46,9 @@ NAVIGATION_KEYS = ("ttfb", "fcp", "lcp", "lcp_element", "cls", "cls_post_input",
                    "loaf_count", "dcl_ms", "load_ms", "event_timing_max_ms")
 STREAMS = ("Network.webSocket", "Network.eventSource", "Network.reportingApi", "Network.trustTokenOperation")
 LONG_LIVED = ("EventSource", "WebSocket")  # request types that stay open by design: they never hold the settle
-FRAME_FILTER = [{"type": "iframe"}]  # Target.setAutoAttach: out-of-process iframes only (not workers, not popups)
+# Target.setAutoAttach: out-of-process iframes and workers, never popups. waitForDebuggerOnStart pauses every worker
+# the page starts, filtered out or not, so each must be attached to be resumed.
+FRAME_FILTER = [{"type": "iframe"}, {"type": "worker"}, {"type": "shared_worker"}, {"type": "service_worker"}]
 # What a cross-site frame adds to its page besides Network events: its errors, as a same-site frame's reach the page
 # session. Its execution-context events stay out (the page's commit is read from them).
 FRAME_RUNTIME = ("Runtime.consoleAPICalled", "Runtime.exceptionThrown")
@@ -74,6 +79,13 @@ def _document_request(params: dict, frame_id: str | None) -> bool:
     return (params.get("type") == "Document" and not params.get("redirectResponse")
             and params.get("requestId") == params.get("loaderId")
             and (frame_id is None or params.get("frameId") == frame_id))
+
+
+def _worker_script(params: dict) -> bool:
+    """A Network.requestWillBeSent for a worker's own script (no loader, its URL is its document's): its end is
+    reported on the worker's session, a shared worker's on none the collector reads."""
+    return (params.get("type") != "Document" and not params.get("loaderId")
+            and params.get("documentURL") == (params.get("request") or {}).get("url"))
 
 
 def _document_start(events: list[dict], frame_id: str | None) -> int | None:
@@ -323,10 +335,10 @@ class PageCollector:
     in flight, and 2 s without a new LCP candidate, capped at settle_timeout_s from the navigation. Post-load polling
     of one URL path is not activity; a request in flight holds the settle for at most inflight_max_age_s (a long-poll,
     a stream or a hung API must not cost the whole cap; the record then says so in notes), and EventSource and
-    WebSocket connections never hold it. A request whose response headers arrived and that then got no data for
-    net_quiet_s (a fetch whose body the page never reads, a keepalive ping) stops holding it silently. Requests of the
-    previous document (sent before the latest main-frame document request, or by its loader) never hold it: an old
-    renderer that goes away never reports their end.
+    WebSocket connections and a worker's own script never hold it. A request whose response headers arrived and that
+    then got no data for net_quiet_s (a fetch whose body the page never reads, a keepalive ping) stops holding it
+    silently. Requests of the previous document (sent before the latest main-frame document request, or by its
+    loader) never hold it: an old renderer that goes away never reports their end.
     Every page timing is a cold navigation: prerendering is disallowed, and a document the shop's speculation rules
     prefetched before a click gets no load timings (vitals.speculative, a "speculative_navigation" note).
     close(browser) closes a tab and forgets its frames at once.
@@ -638,7 +650,8 @@ class PageCollector:
         for at least poll_gap_s earlier (a heartbeat, an analytics ping); a burst of requests to one path is still
         activity. The previous document's requests never hold it, with the rules document_events() applies: sent
         before the latest main-frame document request, by another main-frame loader, or by another loader before
-        the commit (an old renderer that goes away reports no end for them).
+        the commit (an old renderer that goes away reports no end for them). Nor does a worker's own script
+        (_worker_script): its end is reported on the worker's session, a shared worker's on none read here.
         """
         deadline = started + self.settle_timeout_s
         holding: dict[str, float] = {}  # request -> monotonic time it was sent
@@ -710,7 +723,7 @@ class PageCollector:
                                 released.add(rid)
                                 continue
                         last_network = now
-                        if p.get("type") in LONG_LIVED:
+                        if p.get("type") in LONG_LIVED or _worker_script(p):
                             released.add(rid)
                             continue
                         age = latest - sent if isinstance(sent, (int, float)) and latest is not None else 0.0
@@ -824,17 +837,24 @@ class PageCollector:
                 root = parent if parent in self._roots else (self._children.get(parent) or {}).get("root")
                 self._children[child] = {"root": root, "target": info.get("targetId"), "events": [], "stale": False,
                                          "detached": False}
-            self._adopt(child, iframe=info.get("type") == "iframe")
+            self._adopt(child, kind=info.get("type"))
         elif event["method"] == "Target.detachedFromTarget":
             with self._frames:
                 if child in self._children:
                     self._children[child]["detached"] = True
 
-    def _adopt(self, child: str, *, iframe: bool) -> None:
-        """The profile's network, cache, CPU, touch and identity settings on a new frame session, then resume it."""
+    def _adopt(self, child: str, *, kind: str | None) -> None:
+        """Set up a new frame or worker session, then resume it. A cross-site iframe gets the profile's network,
+        cache, CPU, touch and identity settings, and its Network events and errors join the page's. A dedicated
+        worker already runs under the page's network emulation and identity, and its errors reach the page's Log:
+        only its Network events are added (its own requests). Shared and service workers serve other pages too:
+        they are only resumed (a paused service worker leaves domain calls unanswered)."""
         applied = self.applied_profile or {}
         calls: list[tuple[str, dict]] = []
-        if iframe:
+        if kind == "worker":
+            calls += [("Network.enable", {}),
+                      ("Network.setCacheDisabled", {"cacheDisabled": applied.get("cache_disabled", True)})]
+        elif kind == "iframe":
             named = DEVICE_PROFILES.get(self.profile) if isinstance(self.profile, str) else None
             calls += [("Network.enable", {}),
                       ("Network.setCacheDisabled", {"cacheDisabled": applied.get("cache_disabled", True)}),

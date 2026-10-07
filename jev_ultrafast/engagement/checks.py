@@ -337,15 +337,23 @@ def _strikethrough(page):
     """Rule f. Every struck price needs a lowest-30-days statement; inside and outside the product cards are compared
     only when audit.js marks every struck price and statement with in_card (a statement's "count" is how many times
     its text was shown, default 1). Without the marks, one statement on the page is enough: audit.js merges equal
-    texts, so per-card statements read as one, and a footnote cannot be told from a card's line."""
+    texts, so per-card statements read as one, and a footnote cannot be told from a card's line. The struck prices
+    are audit.js's price_counts, every price it read (`prices` keeps the first 80, statements included); a payload
+    without them counts `prices`."""
     audit = _dom(page)
-    struck = [p for p in audit.get("prices") or [] if p.get("strikethrough")]
+    tally = audit.get("price_counts") or {}
+    if all(isinstance(tally.get(key), int) for key in ("strikethrough_in_card", "strikethrough_outside_cards")):
+        struck = [{"in_card": card, "count": n} for card, n in ((False, tally["strikethrough_outside_cards"]),
+                                                                (True, tally["strikethrough_in_card"])) if n > 0]
+    else:
+        struck = [p for p in audit.get("prices") or [] if p.get("strikethrough")]
     if not struck and (audit.get("pdp") or {}).get("strike_price"):
         struck = [{"in_card": False}]  # pdp.strike_price is the product's own (outside the cards)
     if not struck:
         _na("not_applicable:no_strikethrough_price")
     said = (audit.get("persuasion") or {}).get("lowest_price_30d") or []
-    evidence = {"strikethrough_prices": len(struck), "lowest_30d_statements": len(said)}
+    evidence = {"strikethrough_prices": sum(max(1, int(item.get("count") or 1)) for item in struck),
+                "lowest_30d_statements": len(said)}
     if not said:
         return False, evidence
     if not all("in_card" in item for item in struck + said):
@@ -360,6 +368,13 @@ def _strikethrough(page):
 
 
 # ---------------------------------------------------------------- CCL
+def competing_ctas(ctas: list[dict]) -> list[dict]:
+    """Primary-looking CTAs above the fold. The buttons of product cards repeat one action on every item: together
+    they are one CTA (the first), not one per card."""
+    shown = [c for c in ctas if c.get("primary_like") and c.get("above_fold")]
+    return [c for c in shown if not c.get("in_card")] + [c for c in shown if c.get("in_card")][:1]
+
+
 def cta_salience(control: dict, ctas: list[dict], viewport: dict) -> float:
     """0-100 composite of the stage's primary CTA (provisional, anchors editorial):
 
@@ -367,7 +382,8 @@ def cta_salience(control: dict, ctas: list[dict], viewport: dict) -> float:
         C = clamp((contrast - 3) / 1.5)   text contrast: 3:1 (WCAG 1.4.11 minimum) 0, 4.5:1 (WCAG 1.4.3 AA) 1
         A = clamp(area / 10000 px²)       a control of about 225x44 CSS px or more is fully prominent (a fixed
                                           reference, so that a normal desktop CTA is not penalised by a wide viewport)
-        U = 1 / n                         n = primary-looking CTAs above the fold (at least 1): uniqueness
+        U = 1 / n                         n = primary-looking CTAs above the fold (at least 1; product cards'
+                                          buttons count once, competing_ctas): uniqueness
         fold = 1 above the fold, 0.5 below
     A unique above-fold AA button of 200x44 scores 97. A page without the CTA scores 0. viewport is kept for
     callers and evidence; the reference area does not depend on it.
@@ -377,7 +393,7 @@ def cta_salience(control: dict, ctas: list[dict], viewport: dict) -> float:
     contrast = control.get("contrast") or 1.0
     rect = control.get("rect") or {}
     area = control.get("area") or (rect.get("w") or 0) * (rect.get("h") or 0)
-    competing = sum(1 for c in ctas if c.get("primary_like") and c.get("above_fold"))
+    competing = len(competing_ctas(ctas))
     score = 0.5 * _clamp((contrast - 3) / 1.5) + 0.25 * _clamp(area / SALIENT_AREA) + 0.25 / max(1, competing)
     return round(100 * (1.0 if control.get("above_fold") else 0.5) * score, 1)
 
@@ -403,8 +419,11 @@ def _salience(page):
 
 
 def _primary_count(page):
-    labels = [c.get("label") for c in _dom(page).get("ctas") or [] if c.get("primary_like") and c.get("above_fold")]
-    return len(labels), {"labels": labels[:6]}
+    """Competing primary CTAs above the fold (competing_ctas: the buttons of product cards count once)."""
+    ctas = _dom(page).get("ctas") or []
+    labels = [c.get("label") for c in competing_ctas(ctas)]
+    cards = sum(1 for c in ctas if c.get("primary_like") and c.get("above_fold") and c.get("in_card"))
+    return len(labels), {"labels": labels[:6], **({"card_buttons": cards} if cards else {})}
 
 
 def _choice_support(page):
@@ -654,15 +673,16 @@ def benefit(text: str, patterns) -> str:
 
 def _reciprocity(pages, view, profile):
     """Distinct benefits offered for free (returns, gifts, samples, a first-order discount); the free-shipping
-    threshold lives in PTI."""
-    thresholds = {_norm(t["text"]) for p in pages for t in _persuasion(p, "free_shipping_threshold") if t.get("text")}
+    threshold lives in PTI. As in audit.js, a block's free-shipping wording is left out before its benefit is read:
+    "Spedizione gratuita sopra 49 € · Resi gratuiti" offers free returns, "Spedizione gratis sopra 49 €" nothing."""
     benefits: dict[str, str] = {}
     for page in pages:
-        patterns = _benefits(_language(page))
+        patterns, free_shipping = _benefits(_language(page)), _lx(page).get("free_shipping")
         for item in _persuasion(page, "reciprocity"):
             text = " ".join(str(item.get("text") or "").split())
-            if text and _norm(text) not in thresholds:
-                benefits.setdefault(benefit(text, patterns), text[:160])
+            rest = free_shipping.sub(" ", text, count=1) if free_shipping else text
+            if text and any(pattern.search(rest) for pattern in patterns):
+                benefits.setdefault(benefit(rest, patterns), text[:160])
     texts = list(benefits.values())
     return len(texts), {"texts": texts[:5]}
 

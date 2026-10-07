@@ -60,6 +60,28 @@ def test_settings_reject_invalid_values(change):
         EngagementSettings(**{"url": "https://shop.example/", **change})
 
 
+@pytest.mark.parametrize("url", ["http://stage:S3cret-pw@127.0.0.1:8080/", "https://stage@shop.example/",
+                                 "ftp://stage:S3cret-pw@shop.example/"])
+def test_settings_refuse_credentials_in_the_url_without_echoing_them(url):
+    """They would reach run.json, the progress messages and the shared report (AGENTS.md: credentials stay
+    server-side)."""
+    with pytest.raises(ValueError, match="carries credentials") as refused:
+        EngagementSettings(url)
+    assert "S3cret-pw" not in str(refused.value) and "stage" not in str(refused.value)
+
+
+def test_a_run_never_stores_the_credentials_of_its_start_url(tmp_path):
+    from jev_ultrafast.engagement import report
+
+    store = RunStore(tmp_path)
+    run_id = store.new_run("audit", "http://stage:S3cret-pw@127.0.0.1:8080/shop/?q=1", {}, now=NOW)
+    run = store.load(run_id)
+    assert run["site"] == {"host": "127.0.0.1", "start_url": "http://127.0.0.1:8080/shop/?q=1"}
+    data, html = report.build_report(run, {"overall": {}, "profiles": {}})
+    assert "S3cret-pw" not in json.dumps(data) and "S3cret-pw" not in html
+    assert not [f for f in tmp_path.rglob("*") if f.is_file() and b"S3cret-pw" in f.read_bytes()]
+
+
 def test_settings_accept_a_devtools_endpoint():
     for browser in ("cdp:ws://127.0.0.1:9222/devtools/browser/x", "cdp:http://127.0.0.1:9222"):
         assert EngagementSettings("https://shop.example/", browser=browser).browser == browser

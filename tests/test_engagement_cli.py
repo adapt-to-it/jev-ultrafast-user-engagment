@@ -64,11 +64,16 @@ def test_the_parser_reads_every_command():
     ["audit", SHOP, "--profiles", ","], ["audit", SHOP, "--repeats", "0"],
     ["audit", SHOP, "--judge", "cli", "--samples", "0"], ["judge", "r", "--samples", "9"], ["list", "--limit", "0"],
     ["journey", SHOP, "--goal", "g", "--oracle", "pdp_reached", "--max-steps", "x"],
-    ["audit", "ftp://shop.example/"], ["audit", "shop.example"],
+    ["audit", "ftp://shop.example/"], ["audit", "shop.example"], ["audit", "https://stage:S3cret-pw@shop.example/"],
     ["journey", "file:///etc/passwd", "--goal", "g", "--oracle", "cart_not_empty"],
     ["audit", SHOP, "--browser", "harness", "--chrome-arg=--proxy-server=x"],
     ["journey", SHOP, "--browser", "cdp:http://127.0.0.1:9222", "--chrome-arg=--proxy-server=x", "--goal", "g",
      "--oracle", "cart_not_empty"],
+    # oracle parameters are checked before the audit runs, whether TYPESAFE_API_KEY is set or not
+    ["audit", SHOP, "--goal", "g", "--oracle", "cart_contains_item_under_price"],
+    ["audit", SHOP, "--goal", "g", "--oracle", "cart_contains_item_under_price", "--oracle-param", "max_prize=50"],
+    ["journey", SHOP, "--goal", "g", "--oracle", "cart_contains_item_under_price", "--oracle-param", "max_price=x"],
+    ["journey", SHOP, "--goal", "g", "--oracle", "cart_not_empty", "--oracle-param", "query=scarpe"],
 ])
 def test_invalid_arguments_exit_with_2(argv, capsys, monkeypatch):
     monkeypatch.setattr(chrome, "sweep_stale_profiles", lambda root=None: pytest.fail("refused before any work"))
@@ -76,7 +81,8 @@ def test_invalid_arguments_exit_with_2(argv, capsys, monkeypatch):
         cli.main(argv)
     assert stop.value.code == 2
     if argv and argv[0] in cli.COMMANDS and "-h" not in argv:  # the command's own usage line, not the top level's
-        assert capsys.readouterr().err.startswith(f"usage: jev-engage {argv[0]} "), argv
+        err = capsys.readouterr().err
+        assert err.startswith(f"usage: jev-engage {argv[0]} ") and "S3cret-pw" not in err, argv
 
 
 def test_cli_journeys_need_typesafe_and_say_that_host_journeys_are_mcp_only(capsys):
@@ -85,6 +91,36 @@ def test_cli_journeys_need_typesafe_and_say_that_host_journeys_are_mcp_only(caps
     err = capsys.readouterr().err
     assert err.count("TYPESAFE_API_KEY") == 2 and "MCP" in err
     assert RunStore().list_runs() == []  # refused before any audit or browser
+
+
+def test_oracle_parameters_are_checked_before_the_audit_with_or_without_typesafe(capsys, monkeypatch):
+    monkeypatch.setenv("TYPESAFE_API_KEY", "not-used")
+    monkeypatch.setattr(chrome, "sweep_stale_profiles", lambda root=None: pytest.fail("refused before any work"))
+    with pytest.raises(SystemExit) as stop:
+        cli.main(["audit", SHOP, "--goal", "g", "--oracle", "cart_contains_item_under_price"])
+    assert stop.value.code == 2
+    assert "--oracle-param: Oracle cart_contains_item_under_price needs max_price" in capsys.readouterr().err
+
+
+def test_a_journey_that_cannot_start_leaves_the_audit_printed_and_scored(capsys, monkeypatch):
+    from jev_ultrafast.engagement import service
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "not-used")
+    monkeypatch.setattr(chrome, "sweep_stale_profiles", lambda root=None: [])
+    run_id = stored_audit()
+    monkeypatch.setattr(service.EngagementService, "audit_shop", lambda self, *a, **k: self.get_run(run_id))
+    started = []
+
+    def no_journey(self, url, **options):
+        started.append(options)
+        raise RuntimeError("the journey could not start: TimeoutError: the start page did not load")
+    monkeypatch.setattr(service.EngagementService, "run_journey", no_journey)
+    code = cli.main(["audit", SHOP, "--goal", "Trova scarpe", "--oracle", "cart_contains_item_under_price",
+                     "--oracle-param", "max_price=49,90"])
+    out = capsys.readouterr().out
+    assert code == 1 and started[0]["oracle_params"] == {"max_price": 49.9}
+    assert out.startswith(f"Run {run_id}: ") and "Journey non avviato: the journey could not start" in out
+    assert "Engagement readiness" in out and RunStore().load(run_id).get("scores")
 
 
 def test_a_closed_pipe_ends_the_command_quietly(tmp_path):

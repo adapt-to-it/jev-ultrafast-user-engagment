@@ -266,6 +266,7 @@ Claude Code does not support MCP sampling, so the plugin inverts the call: the s
 - Consent banners change the first page and can block clicks; the landing is measured as it is and the choice is recorded.
 - It is a synthetic agent: a host's choices vary between runs, one variant of any A/B test is seen from one place with a cold cache on an emulated device, and lab timings are not field data. The mobile profile approximates Lighthouse's preset and its scores are not comparable with Lighthouse or PageSpeed Insights.
 - Italian and English lexicons; first checkout step only; one audit at a time per server process.
+- A shop behind HTTP authentication cannot be audited: a start URL with `user:password@` is refused, since the credentials would reach the run, its progress messages and the shared report.
 - No accuracy, speed or predictive-validity claim is made without a committed artifact. The golden runs in `tests/fixtures/runs/` pin the data shapes and the scoring arithmetic, not a correlation with real outcomes. The catalogue lists what a calibration against GA4 and Clarity would need.
 
 ## Development

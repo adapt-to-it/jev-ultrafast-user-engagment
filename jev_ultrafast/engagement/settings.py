@@ -15,11 +15,19 @@ from .schemas import STAGES
 CONSENT_POLICIES = ("auto", "reject", "accept", "none")
 LANGS = {"it": "it-IT", "en": "en-US"}
 LOCALE_RE = r"[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*"  # "it", "en", "de-DE"
+# A URL with user:password@ would carry them into the run, its progress messages and the shared report.
+CREDENTIALS = ("the shop URL carries credentials (user:password@host): remove them, they would be stored in the run, "
+               "its progress and its report (a shop behind HTTP authentication cannot be audited)")
 TYPES = {
     "url": str, "profiles": (list, tuple), "stages": (list, tuple), "browser": str, "headless": bool, "locale": str,
     "consent": str, "repeats": int, "max_pages": int, "settle_timeout_s": (int, float),
     "artifacts_dir": (str, type(None)), "screenshots": bool,
 }
+
+
+def has_credentials(url: str) -> bool:
+    """True when the URL has a userinfo part (user:password@ or a bare @) before its host."""
+    return "@" in urlsplit(url).netloc
 
 
 @dataclass
@@ -44,6 +52,8 @@ class EngagementSettings:
                 raise ValueError(f"{name} has the wrong type: {value!r}")
         self.profiles, self.stages = list(self.profiles), list(self.stages)
         parts = urlsplit(self.url)
+        if has_credentials(self.url):  # before any message that would echo the URL
+            raise ValueError(CREDENTIALS)
         if parts.scheme not in ("http", "https") or not parts.hostname:
             raise ValueError(f"Expected an http(s) shop URL, got {self.url!r}")
         for name, values, allowed in (("profiles", self.profiles, DEVICE_PROFILES), ("stages", self.stages, STAGES)):
