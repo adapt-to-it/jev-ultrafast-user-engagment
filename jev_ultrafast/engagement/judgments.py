@@ -155,7 +155,7 @@ def skipped_rubrics(run, tasks=None, rubrics=None) -> list:
 def ensure_tasks(run, *, samples_required=3) -> list:
     """Create and store tasks once (with skipped rubrics and the rubrics version); later calls return them."""
     state = run.setdefault("judgments", {})
-    if "tasks" not in state:
+    if not prepared(run):
         rubrics = load_rubrics()
         state["tasks"] = make_tasks(run, samples_required=samples_required, rubrics=rubrics)
         state["skipped"] = skipped_rubrics(run, state["tasks"], rubrics)
@@ -166,9 +166,10 @@ def ensure_tasks(run, *, samples_required=3) -> list:
 
 
 def prepared(run) -> bool:
-    """True once judgments were requested for the run (ensure_tasks ran), even when no page had a snippet."""
+    """True once judgments were requested for the run (ensure_tasks ran), even when no page had a snippet. The empty
+    seed of RunStore.new_run ({"tasks": [], "verdicts": [], "final": []}, no rubrics_version) is no request."""
     state = run.get("judgments") or {}
-    return any(key in state for key in ("tasks", "rubrics_version", "skipped"))
+    return "rubrics_version" in state or "skipped" in state or bool(state.get("tasks"))
 
 
 # ---------------------------------------------------------------- verdicts

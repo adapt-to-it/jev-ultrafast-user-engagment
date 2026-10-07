@@ -385,9 +385,9 @@ def golden():
     return run, out
 
 
-# The hand-written golden run predates the producer: it counts 4 clicks for 5 CLICK steps, leaves the start page out
-# of Lostness and takes the median response over new documents too. Its observations must be regenerated from
-# friction.metrics (tests/fixtures/runs is WS4's); then the strict xfail below passes and must be removed.
+# The hand-written golden run predated the producer: it counted 4 clicks for 5 CLICK steps, left the start page out
+# of Lostness and took the median response over new documents too (25.0, 0.25 and 180). Its observations are now
+# friction.metrics output over its steps; these are the three values that changed.
 GOLDEN_STALE = {"FAI.DEAD_CLICK_RATE": 20.0, "FAI.LOSTNESS": 0.0, "PERF.ACTION_RESPONSE_MS": 120.0}
 
 
@@ -401,7 +401,6 @@ def test_golden_journey_steps_reproduce_the_golden_friction_observations():
     assert out["FAI.LOSTNESS"]["evidence"] == {"unique_pages": 5, "visits": 5, "optimal": 5}  # each page once
 
 
-@pytest.mark.xfail(strict=True, reason="golden journey_run.json observations are not friction.metrics output yet")
 def test_golden_journey_observations_are_the_producers():
     run, out = golden()
     assert {o["kpi_id"]: o["value"] for o in run["observations"]} == {k: out[k]["value"] for k in out}

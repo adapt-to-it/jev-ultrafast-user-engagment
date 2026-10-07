@@ -267,6 +267,30 @@ def test_worst_profile_ignores_unscorable_profiles_and_pools_risk():
     assert scoring.aggregate(nothing, "FAI.PLP_FILTERS") == (None, False, "invalid_value")
 
 
+def test_any_false_resting_on_an_unobserved_stage_is_not_conclusive():
+    """Ruling 5: an "any" False counts only when every stage of the KPI was observed in that profile."""
+    def delivery(profile, pdp, cart, reason="add_to_cart_failed"):
+        rows = [ob("TRI.DELIVERY_TIME_STATED", pdp, profile=profile, stage="pdp")]
+        return rows + [ob("TRI.DELIVERY_TIME_STATED", cart, profile=profile, stage="cart") if cart is not None else
+                       ob("TRI.DELIVERY_TIME_STATED", None, profile=profile, stage="cart", assessed=False,
+                          reason=reason)]
+
+    assert scoring.aggregate(delivery("mobile", False, None), "TRI.DELIVERY_TIME_STATED") == (
+        None, False, "add_to_cart_failed")  # never an assessed False from the product page alone
+    assert scoring.aggregate(delivery("mobile", True, None), "TRI.DELIVERY_TIME_STATED") == (True, True, None)
+    assert scoring.aggregate(delivery("mobile", False, None, "not_applicable: x"), "TRI.DELIVERY_TIME_STATED") == (
+        False, True, None)  # a stage that does not apply is no gap
+    mixed = delivery("mobile", False, None) + delivery("desktop", False, False)
+    assert scoring._aggregate(mixed, KPIS["TRI.DELIVERY_TIME_STATED"],
+                              spec=ANCHORS["kpis"]["TRI.DELIVERY_TIME_STATED"])[:3] == (False, True, None)
+    complete = delivery("mobile", True, None) + delivery("desktop", False, False)
+    assert scoring._aggregate(complete, KPIS["TRI.DELIVERY_TIME_STATED"], spec=ANCHORS["kpis"][
+        "TRI.DELIVERY_TIME_STATED"])[::4] == (False, "desktop")  # the observed desktop False is the worst profile
+    output = scoring.score(delivery("mobile", False, None) + delivery("desktop", False, None, "timeout"), ANCHORS)
+    row = kpi(output, "TRI.DELIVERY_TIME_STATED")
+    assert (row["assessed"], row["normalized"], row["reason"]) == (False, None, "add_to_cart_failed")
+
+
 def test_bools_are_numbers_only_for_risk_confidences():
     lcp = kpi(scoring.score([ob("PERF.LCP", True)], ANCHORS), "PERF.LCP")
     assert (lcp["value"], lcp["assessed"], lcp["reason"]) == (None, False, "invalid_value")
@@ -618,6 +642,17 @@ def judgment_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("JEV_ENGAGEMENT_CACHE", str(tmp_path / "cache"))
 
 
+def test_the_store_seed_is_no_judgment_request():
+    run = load("audit_complete")
+    run["judgments"] = {"tasks": [], "verdicts": [], "final": []}  # RunStore.new_run: judgments never requested
+    run["observations"] = [o for o in run["observations"] if KPIS[o["kpi_id"]].producer != "judgments"]
+    overall = scoring.score_run(run)["overall"]
+    assert overall["context"]["judged"] is False
+    returns = kpi(overall, "TRI.RETURNS_CLARITY")
+    assert (returns["applicable"], returns["assessed"], returns["reason"]) == (False, False, "not_judged")
+    assert overall["dpr"]["applicable"] == 6  # the judged risk signals do not apply without judgments
+
+
 def test_judged_site_kpis_do_not_depend_on_page_order():
     home = shop_page("mobile-home-1", "home", [("shipping_policy", "Spedizione gratuita sopra 49 euro"),
                                                ("testimonial", "4,6/5 su 1.284 recensioni")])
@@ -708,7 +743,8 @@ def test_score_run_merges_linked_journeys_per_profile():
     overall, mobile, desktop = linked["overall"], linked["profiles"]["mobile"], linked["profiles"]["desktop"]
     assert overall["context"] == {"journey": True, "judged": True, "journey_runs": [journey["run_id"]]}
     assert mobile["context"]["journey"] is True and desktop["context"]["journey"] is False
-    assert kpi(overall, "FAI.JOURNEY_SUCCESS")["value"] is True and kpi(mobile, "FAI.LOSTNESS")["normalized"] == 75
+    assert kpi(overall, "FAI.JOURNEY_SUCCESS")["value"] is True
+    assert kpi(mobile, "FAI.DEAD_CLICK_RATE")["normalized"] == 30
     assert kpi(desktop, "FAI.JOURNEY_SUCCESS")["applicable"] is False
     assert desktop["sub_indices"]["FAI"] == alone["profiles"]["desktop"]["sub_indices"]["FAI"]
     assert mobile["sub_indices"]["FAI"]["score"] != alone["profiles"]["mobile"]["sub_indices"]["FAI"]["score"]
@@ -735,7 +771,9 @@ def test_journey_fixture_scores():
     assert overall["ers"]["published"] is False and overall["ers"]["score"] is None
     assert "copertura complessiva" in overall["ers"]["reason"]
     assert kpi(overall, "FAI.JOURNEY_SUCCESS")["normalized"] == 100
-    assert kpi(overall, "FAI.LOSTNESS")["normalized"] == 75
+    assert kpi(overall, "FAI.LOSTNESS")["normalized"] == 100  # five pages, each visited once: no detour
+    dead = kpi(overall, "FAI.DEAD_CLICK_RATE")  # 1 dead click of 5 (friction.metrics over journey_steps.jsonl)
+    assert (dead["value"], dead["normalized"]) == (20.0, 30)
     info = kpi(overall, "FAI.ACTIONS_TO_GOAL")
     assert info["assessed"] and info["normalized"] is None and info["weight"] == 0
     assert kpi(overall, "TRI.RETURNS_CLARITY")["applicable"] is False

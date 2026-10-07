@@ -163,6 +163,31 @@ def _pooled(usable, kpi, stage_weights, spec) -> tuple:
     return _tidy(value), None
 
 
+def _complete_any(rows, usable) -> tuple:
+    """(usable rows, reason) of an "any" KPI without the profiles where its False is not conclusive.
+
+    True is conclusive from any reached page; False only when no page of the KPI went unobserved. A profile group
+    (its rows plus the rows without a profile) with no true row and an unassessed row whose reason is not
+    not_applicable is left out, like a profile the anchors cannot score; when every group is left out the KPI is not
+    assessed with the first such reason (a missing stage never makes a KPI score worse).
+    """
+    kept = {id(o) for o in usable}
+    names = list(dict.fromkeys(o["profile"] for o in rows if o.get("profile") is not None)) or [None]
+    dropped, first = set(), None
+    for name in names:
+        group = [o for o in rows if o.get("profile") in (None, name)]
+        if any(bool(o["value"]) for o in group if id(o) in kept):
+            continue
+        pending = [str(o.get("reason") or "not_assessable") for o in group if id(o) not in kept]
+        pending = [r for r in pending if not r.startswith(NOT_APPLICABLE)]
+        if pending:
+            dropped.add(name)
+            first = first or pending[0]
+    if len(dropped) == len(names):
+        return [], first
+    return [o for o in usable if o.get("profile") is None or o["profile"] not in dropped], first
+
+
 def _aggregate(observations, kpi, stage_weights=None, spec=None) -> tuple:
     """(value, assessed, reason, chosen observation or None, profile or None) for one KPI.
 
@@ -171,10 +196,15 @@ def _aggregate(observations, kpi, stage_weights=None, spec=None) -> tuple:
     Profiles the anchors cannot score are ignored unless none can be scored (then all rows are pooled); DPR
     confidences are always pooled (max is already the worst). profile names the chosen profile only when it scores
     strictly lower than every other scored profile; ties keep the first profile in observation order, unnamed.
+    An "any" KPI leaves out the profiles whose False rests on an unobserved page (_complete_any).
     """
     kpi = KPIS[kpi] if isinstance(kpi, str) else kpi
     rows = [o for o in observations if o.get("kpi_id", kpi.id) == kpi.id]
     usable = [o for o in rows if o.get("assessed", True) and o.get("value") is not None]
+    if usable and kpi.aggregate == "any":
+        usable, pending = _complete_any(rows, usable)
+        if not usable:
+            return None, False, pending, None, None
     if not usable:
         if not rows:
             return None, False, "no_observation", None, None

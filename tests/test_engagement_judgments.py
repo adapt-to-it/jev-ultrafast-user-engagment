@@ -151,6 +151,9 @@ def test_ensure_tasks_stores_once():
     assert judgments.prepared(empty) and len(empty["judgments"]["skipped"]) == 7
     empty["pages"].append(page("mobile-home-1", "home", [("authority", "Premio Netcomm 2024")]))
     assert judgments.ensure_tasks(empty) == []  # stored once, even when empty
+    seeded = {**mini_run(), "judgments": {"tasks": [], "verdicts": [], "final": []}}  # RunStore.new_run's seed
+    assert not judgments.prepared(seeded)
+    assert judgments.ensure_tasks(seeded) and judgments.prepared(seeded)  # the seed is no request: tasks are made
 
 
 # ---------------------------------------------------------------- verdict validation

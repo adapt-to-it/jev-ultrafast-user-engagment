@@ -99,9 +99,9 @@ LEXICON: dict[str, dict[str, list[str]]] = {
             r"prezzo\s+minimo\s+(degli|negli|nei)\s+ultimi\s+30", r"ultimi\s+30\s+giorni",
         ],
         "scarcity": [
-            r"(solo|soltanto|ancora)\s+\d+\s+(pezz[io]|disponibil[ie]|rimast[ie]|articol[io]|in\s+magazzino|unità)",
+            r"(solo|soltanto|ancora)\s+\d+\s+(pezz[io]|disponibil[ie]|rimast[oaie]|articol[io]|in\s+magazzino|unità)",
             r"(ultim[ie]|ultimo)\s+\d*\s*(pezz[io]|disponibil[ie]|taglie|articol[io])",
-            r"rimast[ie]\s+(solo|soltanto)\s+\d+", r"disponibilità\s+limitata", r"scorte\s+limitate",
+            r"rimast[oaie]\s+(solo|soltanto)\s+\d+", r"disponibilità\s+limitata", r"scorte\s+limitate",
             r"quasi\s+esaurit[oa]", r"edizione\s+limitata", r"pezzi\s+limitati", r"in\s+esaurimento",
         ],
         "urgency": [
@@ -158,13 +158,30 @@ LEXICON: dict[str, dict[str, list[str]]] = {
         "guest": [
             r"ospite", r"senza\s+(registrar|registrazione|account|iscrizione)",
             r"non\s+(ti\s+)?serve\s+(un\s+)?account",
-            r"continua\s+senza\s+(account|registr|accedere)",
+            r"continua\s+senza\s+(account|registr|accedere)", r"non\s+creare\s+(un\s+)?account",
         ],
         "login": [
             r"^\s*accedi\s*$", r"accedi\s+(al|con|a)\b", r"\baccesso\b", r"il\s+mio\s+account", r"^\s*login\s*$",
             r"hai\s+già\s+un\s+account", r"entra\s+nel\s+tuo\s+account",
+            # a login-or-register box ("Accedi o registrati") is a login box: its password is a current password
+            r"accedi\s*(o|oppure|/|\|)\s*(registrati|iscriviti|crea)",
+            r"(registrati|iscriviti)\s*(o|oppure|/|\|)\s*accedi",
         ],
-        "register": [r"registrati", r"registrazione", r"crea\s+(un|il\s+tuo|il)\s+(account|profilo)"],
+        "register": [  # "Utenti registrati" / "Clienti registrati" head a login box (a participle, not the imperative)
+            r"(?<!utenti\s)(?<!clienti\s)(?<!già\s)registrati", r"registrazione",
+            r"crea\s+(un\s+|il\s+tuo\s+|il\s+)?(account|profilo)", r"nuovo\s+cliente",
+        ],
+        # a password being created (account registration), not one being entered to log in ("Inserisci la password")
+        "password_new": [
+            r"(crea|scegli|imposta)\s+(una\s+|la\s+|la\s+tua\s+)?(nuova\s+)?password",
+            r"inserisci\s+(una\s+(nuova\s+)?|la\s+nuova\s+)password", r"conferma\s+(la\s+)?password",
+            r"nuova\s+password", r"ripeti\s+(la\s+)?password",
+        ],
+        # address fields of a delivery form (labels, names, ids): a form that holds one is a way to enter one's details
+        "address_field": [
+            r"^(?!.*(e-?mail|posta)).*indirizzo", r"\bcap\b", r"codice\s+postale", r"citt[àa]", r"provincia",
+            r"\bcivico\b", r"localit[àa]", r"\bcomune\b", r"^\s*via\b",
+        ],
         "login_gate": [
             r"(accedi|registrati)\s+per\s+(continuare|procedere|completare|acquistare|ordinare)",
             r"è\s+necessario\s+(accedere|registrarsi|creare\s+un\s+account)",
@@ -221,6 +238,8 @@ LEXICON: dict[str, dict[str, list[str]]] = {
             r"spedizione\s+immediata",
         ],
         "out_of_stock": [r"esaurit[oa]", r"non\s+disponibile", r"\bterminat[oa]\b"],
+        # the placeholder option of a variant select ("Scegli un'opzione...", "-- Seleziona --"), not a choice
+        "choose_option": [r"^\W*(scegli|seleziona|selezionare|scegliere)\b", r"^\W*$"],
         "quantity": [r"quantit[àa]", r"^\s*q\.?t[àa]", r"\bqta\b"],
         "coupon": [
             r"codice\s+(sconto|promozionale|promo|coupon|regalo)", r"\bcoupon\b", r"\bbuono\b", r"carta\s+regalo",
@@ -229,6 +248,8 @@ LEXICON: dict[str, dict[str, list[str]]] = {
         "remove": [r"rimuovi", r"\belimina", r"\bcancella\b", r"\btogli\b"],
         "subtotal": [r"subtotale", r"totale\s+parziale", r"totale\s+(prodotti|articoli|merce)"],
         "total": [r"^\s*totale", r"totale\s+(ordine|complessivo|da\s+pagare)", r"importo\s+totale", r"da\s+pagare"],
+        # a tax line of a cart summary ("IVA 22%", "Imposte"): never an unexplained fee (checks.py)
+        "tax_line": [r"\biva\b", r"\bimpost[ae]\b", r"\btasse\b"],
         "fee": [
             r"spedizion[ei]", r"\bconsegna\b", r"commission[ei]", r"supplement[oi]", r"protezione", r"assicurazion[ei]",
             r"garanzia", r"\bservizio\b", r"imballaggio", r"confezione\s+regalo", r"contributo", r"\bdiritti\b",
@@ -405,7 +426,15 @@ LEXICON: dict[str, dict[str, list[str]]] = {
             r"continue\s+without\s+(signing|registering|an\s+account)",
         ],
         "login": [r"sign\s*in", r"log\s*in", r"my\s+account", r"already\s+have\s+an\s+account"],
-        "register": [r"\bregister\b", r"sign\s*up", r"create\s+(an\s+|your\s+)?account"],
+        "register": [r"\bregister\b", r"sign\s*up", r"create\s+(an\s+|your\s+)?account", r"new\s+customer"],
+        "password_new": [
+            r"(create|choose|set)\s+(a\s+|your\s+)?(new\s+)?password", r"confirm\s+(your\s+)?password",
+            r"new\s+password", r"re-?\s?enter\s+(your\s+)?password", r"repeat\s+(your\s+)?password",
+        ],
+        "address_field": [
+            r"^(?!.*e-?mail).*address", r"street", r"city", r"\btown\b", r"zip", r"post\s*code", r"postal",
+            r"\bcounty\b",
+        ],
         "login_gate": [
             r"(sign\s*in|log\s*in|register)\s+to\s+(continue|check\s*out|proceed|purchase)",
             r"you\s+must\s+(sign\s*in|log\s*in|register|create\s+an\s+account)", r"account\s+(is\s+)?required",
@@ -452,11 +481,16 @@ LEXICON: dict[str, dict[str, list[str]]] = {
         "variant": [r"\bsize\b", r"\bcolou?r\b", r"\bvariant\b", r"\bcapacity\b"],
         "stock": [r"in\s+stock", r"out\s+of\s+stock", r"sold\s+out", r"\bavailable\b", r"\bunavailable\b"],
         "out_of_stock": [r"out\s+of\s+stock", r"sold\s+out", r"\bunavailable\b"],
+        "choose_option": [r"^\W*(choose|select|pick)\b", r"^\W*$"],
         "quantity": [r"quantity", r"\bqty\b"],
         "coupon": [r"coupon", r"promo(tional)?\s+code", r"discount\s+code", r"voucher", r"gift\s+card"],
         "remove": [r"\bremove\b", r"\bdelete\b"],
         "subtotal": [r"sub[-\s]?total", r"items\s+total"],
         "total": [r"^\s*total", r"order\s+total", r"grand\s+total", r"amount\s+due", r"total\s+to\s+pay"],
+        # English plus the tax names of other languages (MwSt, TVA, IVA...): every language's lexicon merges this list
+        "tax_line": [
+            r"\bvat\b", r"\btax(es)?\b", r"sales\s+tax", r"\b(iva|impost[ae]|tasse|mwst|ust|tva|btw|gst|hst)\b",
+        ],
         "fee": [
             r"shipping", r"\bdelivery\b", r"\bfee\b", r"surcharge", r"protection", r"insurance", r"warranty",
             r"\bservice\b", r"handling", r"packaging", r"gift\s+wrap", r"\btax\b",

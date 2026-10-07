@@ -53,8 +53,8 @@ EXTENSIONS = {"js": "Script", "mjs": "Script", "css": "Stylesheet", "woff": "Fon
               "avif": "Image", "svg": "Image", "ico": "Image"}
 INITIATORS = {"navigation": "Document", "script": "Script", "img": "Image", "image": "Image", "fetch": "Fetch",
               "xmlhttprequest": "XHR", "beacon": "Ping", "video": "Media", "audio": "Media", "track": "TextTrack"}
-EMPTY_SINCE: StepSince = {"first_response_ms": None, "mutations": 0, "mutations_total": 0, "navigations": 0,
-                          "requests": 0, "requests_total": 0, "errors": 0, "shifts_post_input": 0.0,
+EMPTY_SINCE: StepSince = {"first_response_ms": None, "first_request_ms": None, "mutations": 0, "mutations_total": 0,
+                          "navigations": 0, "requests": 0, "requests_total": 0, "errors": 0, "shifts_post_input": 0.0,
                           "event_timing_max_ms": None}
 
 

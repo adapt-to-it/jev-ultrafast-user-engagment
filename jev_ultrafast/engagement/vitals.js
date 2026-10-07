@@ -5,7 +5,10 @@
 //                        which includes DevTools network throttling and redirects
 //   mark()            -> high-resolution epoch ms (performance.timeOrigin + now), valid across documents
 //   since(mark)       -> schemas.StepSince for everything observed after the mark (a newer document counts as a
-//                        navigation, and all of it is after the mark; so does a back-forward cache restore)
+//                        navigation, and all of it is after the mark; so does a back-forward cache restore).
+//                        first_response_ms is the first visible response (a DOM mutation or a navigation; a new
+//                        document's start); first_request_ms is the first request, apart: a request alone (a
+//                        tracking beacon) shows the shopper nothing
 //   quiet(ms)         -> true when no resource, LCP, layout-shift entry or DOM mutation arrived in the last ms
 //   activity()        -> raw timestamps the collector's settle loop reads
 // activation_start (read and activity) is navigation.activationStart: above 0 for a prerendered document that was
@@ -170,13 +173,15 @@
     }
     const navTimes = s.navs.filter(after), errors = s.errors.filter(after);
     const fetched = s.resources.filter(r => after(r.start)), resources = fetched.filter(r => !r.poll);
-    times.push(...navTimes, ...resources.map(r => r.start));
+    times.push(...navTimes);
     let shifts = 0, eventMax = null;
     for (const [at, v, input] of s.shifts) if (after(at) && input) shifts += v;
     for (const [at, d] of s.events) if (after(at)) eventMax = Math.max(eventMax || 0, d);
-    const first = newDocument ? -t : times.length ? Math.min(...times) - t : null;
+    const earliest = list => newDocument ? -t : list.length ? Math.min(...list) - t : null;
+    const first = earliest(times), request = earliest(resources.map(r => r.start));
     return {
       first_response_ms: first === null ? null : Math.round(first),
+      first_request_ms: request === null ? null : Math.round(request),
       mutations, mutations_total: total, navigations: navTimes.length + (newDocument ? 1 : 0),
       requests: resources.length + (newDocument ? 1 : 0), requests_total: fetched.length + (newDocument ? 1 : 0),
       errors: errors.length,

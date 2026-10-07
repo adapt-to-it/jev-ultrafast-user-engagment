@@ -225,8 +225,8 @@
     null
    ],
    "FAI.DEAD_CLICK_RATE": [
-    25.0,
-    15.0,
+    20.0,
+    30.0,
     true,
     true,
     null,
@@ -257,8 +257,8 @@
     null
    ],
    "FAI.LOSTNESS": [
-    0.25,
-    75.0,
+    0.0,
+    100.0,
     true,
     true,
     null,
@@ -433,8 +433,8 @@
     null
    ],
    "PERF.ACTION_RESPONSE_MS": [
-    180,
-    96.44,
+    120,
+    99.11,
     true,
     true,
     null,
@@ -744,10 +744,10 @@
     "limiting_kpis": [
      "FAI.DEAD_CLICK_RATE",
      "FAI.ACTIONS_RATIO",
-     "FAI.LOSTNESS"
+     "FAI.TIME_ON_TASK_SITE"
     ],
     "llm_share": 0.0,
-    "score": 81.0
+    "score": 86.2
    },
    "MPI": {
     "coverage": 0.0,
@@ -763,7 +763,7 @@
      "PERF.ACTION_RESPONSE_MS"
     ],
     "llm_share": 0.0,
-    "score": 98.8
+    "score": 99.7
    },
    "PTI": {
     "coverage": 0.0,
@@ -1008,8 +1008,8 @@
      null
     ],
     "FAI.DEAD_CLICK_RATE": [
-     25.0,
-     15.0,
+     20.0,
+     30.0,
      true,
      true,
      null,
@@ -1040,8 +1040,8 @@
      null
     ],
     "FAI.LOSTNESS": [
-     0.25,
-     75.0,
+     0.0,
+     100.0,
      true,
      true,
      null,
@@ -1216,8 +1216,8 @@
      null
     ],
     "PERF.ACTION_RESPONSE_MS": [
-     180,
-     96.44,
+     120,
+     99.11,
      true,
      true,
      null,
@@ -1527,10 +1527,10 @@
      "limiting_kpis": [
       "FAI.DEAD_CLICK_RATE",
       "FAI.ACTIONS_RATIO",
-      "FAI.LOSTNESS"
+      "FAI.TIME_ON_TASK_SITE"
      ],
      "llm_share": 0.0,
-     "score": 81.0
+     "score": 86.2
     },
     "MPI": {
      "coverage": 0.0,
@@ -1546,7 +1546,7 @@
       "PERF.ACTION_RESPONSE_MS"
      ],
      "llm_share": 0.0,
-     "score": 98.8
+     "score": 99.7
     },
     "PTI": {
      "coverage": 0.0,

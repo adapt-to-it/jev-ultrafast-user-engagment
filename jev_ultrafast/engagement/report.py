@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import os
+import re
 from html import escape
 
 from .judgments import RUBRICS_VERSION, load_rubrics
@@ -30,23 +31,155 @@ NAMES = {
     "MPI": "Leve di persuasione genuine",
     "DPR": "Segnali di rischio dark pattern",
 }
+# Italian text of every reason code the producers emit (tests/test_engagement_report.py collects them from the
+# producers' source and fails on one without a label here or under REASON_PREFIXES).
 REASONS = {
+    # scoring and generic
     "no_observation": "nessuna osservazione",
     "not_assessable": "non valutabile",
+    "not_assessed": "non valutato",
     "not_applicable": "non applicabile",
     "invalid_value": "valore non interpretabile",
+    "unavailable": "dato non disponibile",
+    "error": "errore durante il test",
+    # funnel stages (crawler) and pages
     "bot_challenge": "pagina di verifica anti-bot",
     "not_found": "pagina non trovata",
+    "not_reached": "fase non raggiunta",
+    "not_requested": "fase non richiesta",
     "checkout_boundary": "oltre il limite di sicurezza del checkout",
     "background_tab": "pagina non visibile durante il caricamento",
     "timeout": "tempo scaduto",
+    "max_pages": "limite di pagine dell'audit raggiunto",
+    "renderer_crashed": "la scheda del browser si è chiusa per un errore (crash del renderer)",
+    "navigation_error": "pagina non caricata: errore di rete del browser",
+    "audit_unavailable": "pagina non letta dall'audit",
+    "guard_refused:url": "indirizzo escluso dalla guardia di sicurezza (altro sito o pagina di checkout)",
+    "pdp_not_found": "scheda prodotto non trovata",
+    "pdp_not_reached": "scheda prodotto non raggiunta",
+    "home_not_reached": "home non raggiunta",
+    "cart_not_found": "carrello non trovato",
+    "cart_not_reached": "carrello non raggiunto",
+    "no_cart_page": "carrello non raggiunto",
+    "out_of_stock": "prodotto esaurito",
+    "consent_blocking": "banner dei cookie bloccante: nessun click sotto il banner",
+    "add_to_cart_not_found": "pulsante di aggiunta al carrello non trovato",
+    "add_to_cart_failed": "aggiunta al carrello non riuscita",
+    "variant_required": "serve una variante (taglia, colore) che non è stato possibile scegliere",
+    "no_available_option": "nessuna variante disponibile",
+    "empty_cart": "carrello vuoto",
+    "checkout_cta_not_found": "pulsante per il checkout non riconosciuto",
+    "checkout_click_failed": "click verso il checkout non riuscito",
+    "no_navigation": "il click verso il checkout non ha aperto una nuova pagina",
+    # page data read by the checks
+    "vitals_unavailable": "metriche di caricamento non disponibili",
+    "network_unavailable": "dati di rete non disponibili",
+    "errors_unavailable": "errori della console non disponibili",
+    "no_screenshot": "screenshot non disponibile",
+    "unsupported_language": "lingua della pagina non supportata",
+    "review_count_unavailable": "numero di recensioni non leggibile",
+    "rating_scale_unknown": "scala del punteggio medio non riconosciuta",
+    "no_product_price": "prezzo del prodotto non letto",
+    "no_cart_total": "totale del carrello non letto",
+    "cart_lines_not_recognised": "righe del carrello non riconosciute",
+    "accept_not_recognised": "pulsante per accettare i cookie non riconosciuto",
+    "probe_not_run": "test della ricerca non eseguito",
+    "probe_failed": "test della ricerca non riuscito",
+    "speculative_navigation": "pagina caricata in anticipo dal browser (prefetch o prerender), tempi non misurabili",
+    "same_document": "cambio di pagina senza un nuovo documento",
+    "no_form_fields": "nessun campo da compilare",
+    "no_interactive_targets": "nessun elemento interattivo",
+    "no_rating": "nessun punteggio medio",
+    "no_structured_price": "nessun prezzo nei dati strutturati",
+    "no_visible_price": "nessun prezzo visibile",
+    "no_strikethrough_price": "nessun prezzo barrato",
+    "small_assortment": "assortimento troppo piccolo",
+    "little_prose": "testo troppo breve",
+    # risk tests (deception)
+    "deception_not_run": "test di rischio non eseguiti",
+    "context_unavailable": "seconda sessione del browser non disponibile",
+    "nothing_added": "nessun prodotto aggiunto al carrello",
+    "added_item_not_recognised": "prodotto aggiunto non riconosciuto tra le righe del carrello",
+    "single_page": "una sola pagina del percorso: nessun confronto tra pagine",
+    "no_pages": "nessuna pagina del percorso",
+    "product_page_not_visited": "scheda prodotto non rivisitata",
+    "product_page_not_visited_twice": "scheda prodotto non rivisitata due volte",
+    "ticking_not_verified": "conto alla rovescia non verificato: non è stato visto scorrere",
+    "countdown_not_seen_on_revisit": "conto alla rovescia non visto alle nuove visite",
+    "countdown_seen_once": "conto alla rovescia visto in una sola visita",
+    "countdown_not_paired": "conti alla rovescia delle due visite non abbinabili",
+    "stock_not_seen_on_revisit": "messaggio sulle scorte non visto alle nuove visite",
+    "close_had_no_effect": "la chiusura del popup non ha avuto effetto",
+    "close_not_verified": "chiusura del popup non verificata",
+    "manage_had_no_effect": "il pulsante per gestire le preferenze non ha avuto effetto",
+    "no_second_layer": "secondo livello del banner non letto",
+    # crawler controls: consent, overlays, search probe
+    "not_observed": "pagina non osservabile",
+    "control_not_found": "controllo non trovato",
+    "sent_earlier": "controllo già inviato a questa pagina: mai ripetuto",
+    "uncertain_earlier": "un click precedente può aver raggiunto la pagina: mai ripetuto",
+    "no_consent_banner": "nessun banner dei cookie",
+    "policy_none": "nessuna scelta sul consenso richiesta",
+    "not_blocking": "banner non bloccante, lasciato aperto",
+    "no_accept_control": "nessun pulsante per accettare",
+    "no_reject_control": "nessun pulsante per rifiutare",
+    "no_close_control": "nessun pulsante di chiusura",
+    "no_search_field": "nessun campo di ricerca",
+    "no_category_word": "nessuna parola di categoria da cercare",
+    "search_field_not_observed": "campo di ricerca non osservato",
+    "unreadable": "risultato non leggibile",
+    # journey and its independent verification
     "no_journey": "nessun percorso dell'agente in questa run",
+    "no_verification": "verifica indipendente non eseguita",
+    "journey_error": "percorso interrotto da un errore del sistema di prova, non del sito",
+    "page_unreadable": "controlli trattenuti: la pagina non è stata letta dall'audit",
+    "cart_unreadable": "pagina del carrello non leggibile dall'audit",
+    "final_page_unreadable": "pagina finale non leggibile dall'audit",
+    "cart_items_unreadable": "righe del carrello non leggibili",
+    "cart_price_unreadable": "prezzo del prodotto nel carrello non leggibile",
+    "cart_price_ambiguous": "prezzo nel carrello ambiguo tra prezzo unitario e totale di riga",
+    # LLM judgments
     "not_judged": "giudizi non richiesti",
     "no_snippets": "nessun testo da giudicare",
     "no_audit": "pagina senza dati di audit",
     "judgment_pending": "giudizio in attesa",
     "judgment_uncertain": "giudizio incerto: accordo insufficiente tra i valutatori",
     "judgment_unclear": "i valutatori non hanno potuto decidere",
+    "invalid_verdict": "verdetto non valido",
+    "unknown_task": "task di giudizio sconosciuto",
+    "samples_complete": "campioni del task già completi",
+    "task_already_final": "task di giudizio già concluso",
+    "duplicate_judge": "valutatore già registrato per il task",
+}
+# "<prefix><detail>" reasons: the prefix's text, then the detail's own label, or the detail as written when it is free
+# text (an Italian sentence from the producer, an exception message). An identifier detail needs its own label.
+REASON_PREFIXES = {
+    "not_applicable:": "non applicabile",
+    "no_measurement:": "non misurato",
+    "limite superiore:": "limite superiore",
+    "probe:": "test della ricerca non riuscito",
+    "revisit_": "nuova visita non riuscita",
+    "guard_refused:": "rifiutato dalla guardia di sicurezza",
+    "not_executed:": "azione non eseguita: la pagina era cambiata",
+    "failed:": "azione non riuscita",
+    "error:": "errore imprevisto del sistema di prova",
+}
+REASON_CODE = re.compile(r"[a-z][a-z0-9_]*(?::[a-z0-9_]+)?")
+STEP_FLAGS = {  # journey step flags (steps.jsonl) in the timeline
+    "dead_click": "click senza effetto",
+    "rage": "click ripetuti senza effetto",
+    "backtrack": "ritorno a una pagina già vista",
+    "guard_blocked": "bloccato dalla guardia di sicurezza",
+    "stale": "pagina cambiata prima dell'azione: nulla eseguito",
+    "external_nav": "navigazione verso un altro sito",
+    "new_tab": "nuova scheda aperta",
+    "new_document": "nuova pagina caricata",
+    "unexpected_nav": "navigazione inattesa",
+    "state_changed": "stato della pagina cambiato",
+    "uncertain": "esecuzione non confermata",
+    "navigation_error": "pagina non caricata",
+    "follows_timeout": "dopo un assestamento scaduto",
+    "session_gone": "scheda del browser persa",
 }
 TAGS = {
     "observed": ("Osservato", "tag-obs"),
@@ -180,8 +313,28 @@ def scope_line(output, kind="audit") -> str:
     return "Ambito: " + " · ".join(parts)
 
 
+def reason_label(reason) -> str | None:
+    """Italian text for a reason code (REASONS, REASON_PREFIXES), or None when the code has none."""
+    reason = "" if reason is None else str(reason)
+    if reason in REASONS:
+        return REASONS[reason]
+    if reason.startswith("credit_withheld:"):
+        return f"credito non assegnato: segnale di rischio {reason.split(':', 1)[1]}"
+    for prefix, label in REASON_PREFIXES.items():
+        if reason.startswith(prefix):
+            detail = reason[len(prefix):].strip(" :_")
+            if not detail:
+                return label
+            text = reason_label(detail)
+            if text is None and not REASON_CODE.fullmatch(detail):
+                text = detail  # free text: a sentence the producer wrote in Italian, an exception message
+            return None if text is None else f"{label}: {text}"
+    return None
+
+
 def reason_text(reason, assessed=False, absent=True) -> str:
-    """Italian text for a reason; absent=False: an assessed no_snippets value above the rubric's absent label."""
+    """Italian text for a reason (the code itself when it has no label); absent=False: an assessed no_snippets value
+    above the rubric's absent label."""
     if not reason:
         return ""
     reason = str(reason)
@@ -189,11 +342,22 @@ def reason_text(reason, assessed=False, absent=True) -> str:
         if not absent:
             return "nessun testo da giudicare: valore minimo ricavato da link, rating o badge (verifica senza LLM)"
         return "nessun testo pertinente sulle pagine raggiunte: vale come assenza (verifica senza LLM)"
-    if reason.startswith("credit_withheld:"):
-        return f"credito non assegnato: segnale di rischio {reason.split(':', 1)[1]}"
-    if reason.startswith("not_applicable") and reason != "not_applicable":
-        return "non applicabile: " + reason.split(":", 1)[-1].strip(" :_")
-    return REASONS.get(reason, reason)
+    return reason_label(reason) or reason
+
+
+STAGE_WARNING = re.compile(r"(?P<profile>[\w.-]+): (?P<stage>\w+) not assessable \((?P<reason>.+)\)")
+CODE_WARNING = re.compile(r"(?P<code>[a-z]+(?:_[a-z]+)+): (?P<detail>.+)")
+
+
+def warning_text(warning) -> str:
+    """A run warning for the Italian report: the stage and reason-code patterns of audit.py and journey.py in
+    Italian (the producer's detail kept as written), any other technical message as written."""
+    warning = str(warning)
+    if match := STAGE_WARNING.fullmatch(warning):
+        return f"{match['profile']}: fase {match['stage']} non valutabile: {reason_text(match['reason'])}"
+    if (match := CODE_WARNING.fullmatch(warning)) and match["code"] in REASONS:
+        return f"{REASONS[match['code']]} ({match['detail']})"
+    return warning
 
 
 def _is_absent(kpi_id, value) -> bool:
@@ -522,10 +686,12 @@ def _journey(journey, steps, *, linked=False) -> str:
         return ""
     verification = journey.get("verification") or {}
     passed = verification.get("passed")
-    outcome = "superata" if passed else "non superata" if passed is False else "non eseguita"
+    why = (verification.get("checks") or {}).get("not_assessable") if passed is None else None
+    outcome = "superata" if passed else "non superata" if passed is False else "non valutabile" if why else (
+        "non eseguita")
     items = []
     for step in steps:
-        flags = ", ".join(k for k, v in sorted((step.get("flags") or {}).items()) if v)
+        flags = ", ".join(STEP_FLAGS.get(k, k) for k, v in sorted((step.get("flags") or {}).items()) if v)
         target = f" [{step['target']}]" if step.get("target") not in (None, "") else ""
         changed, response = step.get("page_changed"), (step.get("since") or {}).get("first_response_ms")
         detail = [
@@ -547,6 +713,7 @@ def _journey(journey, steps, *, linked=False) -> str:
     if checks:
         text = json.dumps(checks, ensure_ascii=False, sort_keys=True, default=str)[:600]
         checks_html = f'<div class="muted"><code>{e(text)}</code></div>'
+    unverified = f'<p class="note warn">Verifica non valutabile: {e(reason_text(why))}.</p>' if why else ""
     heading = "Percorso dell'agente (run collegata)" if linked else "Percorso dell'agente"  # static, code-owned
     source = f'<p class="meta">Run journey <code>{e(journey.get("run_id"))}</code></p>' if linked else ""
     return (
@@ -555,7 +722,7 @@ def _journey(journey, steps, *, linked=False) -> str:
         f'<div class="facts"><span>Profilo <b>{e(journey.get("profile"))}</b></span>'
         f"<span>Politica <b>{e(journey.get('policy'))}</b></span><span>Stato <b>{e(journey.get('status'))}</b></span>"
         f"<span>Verifica indipendente ({e(journey.get('oracle'))}) <b>{e(outcome)}</b></span></div>"
-        f"{checks_html}{timeline}"
+        f"{unverified}{checks_html}{timeline}"
         '<p class="muted">Il tempo di decisione del modello è escluso dai tempi attribuiti al sito.</p></div></section>'
     )
 
@@ -678,7 +845,7 @@ def render_html(run, scores, report, steps, thumbs, linked_steps=()) -> str:
     overall = scores.get("overall") or {}
     site = report["site"]
     host = site.get("host") or site.get("start_url") or "negozio"
-    warnings = "".join(f"<li>{e(w)}</li>" for w in report["warnings"])
+    warnings = "".join(f"<li>{e(warning_text(w))}</li>" for w in report["warnings"])
     parts = [
         "<!doctype html>",
         '<html lang="it"><head><meta charset="utf-8">',
@@ -697,7 +864,8 @@ def render_html(run, scores, report, steps, thumbs, linked_steps=()) -> str:
         _kpi_table(overall, report.get("caveats") or {}, len(scores.get("profiles") or {}) > 1),
         _pages_html(report, thumbs),
         _missing(report),
-        f'<section><h2>Avvisi</h2><div class="card"><ul>{warnings}</ul></div></section>' if warnings else "",
+        f'<section><h2>Avvisi</h2><div class="card"><p class="muted">Messaggi della raccolta; quelli senza traduzione '
+        f'sono riportati come registrati.</p><ul>{warnings}</ul></div></section>' if warnings else "",
         _footer(report, overall),
         "</main></body></html>",
     ]

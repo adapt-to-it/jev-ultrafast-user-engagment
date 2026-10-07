@@ -1,3 +1,4 @@
+import ast
 import copy
 import json
 import re
@@ -11,6 +12,7 @@ from jev_ultrafast.engagement.kpis import KPI_LIST
 from jev_ultrafast.engagement.scoring import load_anchors, score_run
 
 RUNS = Path(__file__).parent / "fixtures" / "runs"
+PACKAGE = Path(report.__file__).parent
 ATTACK = '"><script>alert(1)</script><img src=x onerror=alert(2)>'
 
 
@@ -280,7 +282,8 @@ def test_journey_report_timeline_and_unpublished_index():
     assert data["headline"]["published"] is False and data["headline"]["ers"] is None
     assert "Percorso dell'agente" in html and run["journey"]["goal"] in html
     assert "superata" in html and "cart_contains_item_under_price" in html
-    assert html.count("<li><b>") == 7 and "dead_click" in html and "Prezzo crescente" in html
+    assert html.count("<li><b>") == 7 and "segnali: click senza effetto" in html and "Prezzo crescente" in html
+    assert "dead_click" not in html  # step flags are shown in Italian
     assert "Indice non pubblicato" in html and "copertura complessiva" in html
     assert data["headline"]["reason"].startswith(report.JOURNEY_ONLY)
     assert report.JOURNEY_ONLY.replace("'", "&#x27;") in html
@@ -385,3 +388,176 @@ def test_write_report_links_journeys_from_arguments_or_stored_scores(tmp_path):
     saved = json.loads(Path(report.write_report(missing, audit["run_id"], journey_run_ids=["gone"])["report_json"])
                        .read_text(encoding="utf-8"))
     assert saved["journeys"] == [] and any("gone" in w for w in saved["warnings"])
+
+
+# ---------------------------------------------------------------- reason labels
+
+PRODUCERS = ("checks.py", "deception.py", "crawler.py", "friction.py", "journey.py", "oracles.py", "judgments.py",
+             "audit.py", "collectors.py", "scoring.py")
+REASON_NAMES = {"reason", "then", "unverified"}  # keywords and variables that hold a reason
+REASON_KEYS = {"reason", "not_assessable", "unreadable"}  # dict keys and subscripts that hold one
+REASON_ARGS = {"_na": 0, "NotAssessed": 0, "Stop": 1, "_missing": 1, "mark": 1}  # call: index of the reason argument
+NOT_REASONS = {"quiet", "load_only"}  # settle outcomes (vitals.settled_reason, step settle_reason), never a reason
+NOT_TEMPLATES = {"personal_text:"}  # a guard refusal note the journey host reads, never a KPI or stage reason
+
+
+def reason_literals(source):
+    """(codes, f-string heads) a producer writes in a reason position: reason=/then=/unverified= keywords, the
+    "reason"/"not_assessable"/"unreadable" keys, variables of those names, self.last_error, _na()/NotAssessed()/
+    Stop()/_missing()/mark() arguments, the reason of an (executed, reason) return and what reason() methods return.
+    Conditional expressions, `or` chains, local variables and `{...}.get(key, default)` maps are followed."""
+    tree = ast.parse(source)
+    assigned = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    assigned.setdefault(target.id, []).append(node.value)
+    codes, heads, followed = set(), set(), set()
+
+    def collect(expr):
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+            codes.add(expr.value)
+        elif isinstance(expr, ast.JoinedStr) and expr.values and isinstance(expr.values[0], ast.Constant):
+            heads.add(expr.values[0].value)
+        elif isinstance(expr, ast.IfExp):
+            collect(expr.body)
+            collect(expr.orelse)
+        elif isinstance(expr, ast.BoolOp):
+            for value in expr.values:
+                collect(value)
+        elif isinstance(expr, ast.Name) and expr.id not in followed:
+            followed.add(expr.id)
+            for value in assigned.get(expr.id, []):
+                collect(value)
+        elif isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and expr.func.attr == "get":
+            for value in expr.func.value.values if isinstance(expr.func.value, ast.Dict) else []:
+                collect(value)
+            for value in expr.args[1:]:
+                collect(value)
+
+    def holds_reason(target):
+        return (isinstance(target, ast.Name) and target.id in REASON_NAMES) or (
+            isinstance(target, ast.Attribute) and target.attr == "last_error") or (
+            isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)
+            and target.slice.value in REASON_KEYS)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg in REASON_NAMES:
+            collect(node.value)
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and key.value in REASON_KEYS:
+                    collect(value)
+        elif isinstance(node, ast.Call):
+            name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", None)
+            if name in REASON_ARGS:
+                for value in node.args[REASON_ARGS[name]:][:2]:  # Stop(stage, reason, then)
+                    collect(value)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                pairs = [(target, node.value)]
+                if isinstance(target, ast.Tuple) and isinstance(node.value, ast.Tuple):
+                    pairs = list(zip(target.elts, node.value.elts))
+                for left, right in pairs:
+                    if holds_reason(left):
+                        collect(right)
+        elif isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple) and len(node.value.elts) == 2:
+            flag = node.value.elts[0]
+            if isinstance(flag, ast.Constant) and isinstance(flag.value, bool):
+                collect(node.value.elts[1])
+        elif isinstance(node, ast.FunctionDef) and node.name == "reason":
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Return) and inner.value is not None:
+                    collect(inner.value)
+    return codes, heads
+
+
+def producer_reasons():
+    codes, heads = {}, {}
+    for name in PRODUCERS:
+        found, templates = reason_literals((PACKAGE / name).read_text(encoding="utf-8"))
+        for code in found:
+            codes.setdefault(code, []).append(name)
+        for head in templates:
+            heads.setdefault(head, []).append(name)
+    return codes, heads
+
+
+def test_reason_collector_reads_every_reason_position():
+    source = '''
+def check(page, test, clicked):
+    _na("audit_unavailable")
+    row = _row(kpi, None, reason="no_rating" if page else "x_else")
+    out = {"assessed": False, "reason": test.get("reason") or "not_assessed"}
+    raise Stop("cart", "out_of_stock", then="cart_not_found")
+    raise Stop("checkout_entry", {"control_not_found": "checkout_cta_not_found"}.get(clicked, "click_failed"))
+    self.last_error = "navigation_error"
+    passed, checks["not_assessable"] = None, "cart_price_ambiguous"
+    reason = f"revisit_{failure}"
+    hint = "a_label_not_a_reason"
+    return False, "sent_earlier"
+'''
+    codes, heads = reason_literals(source)
+    assert codes == {"audit_unavailable", "no_rating", "x_else", "not_assessed", "out_of_stock", "cart_not_found",
+                     "checkout_cta_not_found", "click_failed", "navigation_error", "cart_price_ambiguous",
+                     "sent_earlier"}
+    assert heads == {"revisit_"}
+
+
+def test_every_producer_reason_has_an_italian_label():
+    codes, heads = producer_reasons()
+    assert {"navigation_error", "journey_error", "page_unreadable", "out_of_stock", "not_requested",
+            "countdown_not_paired", "sent_earlier"} <= set(codes)  # the collector still reads the producers
+    unlabelled = {code: files for code, files in codes.items()
+                  if code not in NOT_REASONS and report.reason_label(code) is None}
+    assert unlabelled == {}, "add these reasons to report.REASONS (or a REASON_PREFIXES rule)"
+    loose = {head: files for head, files in heads.items() if not head.startswith(tuple(NOT_TEMPLATES))
+             and report.reason_label(head + "Dettaglio dinamico") is None}
+    assert loose == {}, "add a report.REASON_PREFIXES rule for these f-string reasons"
+
+
+@pytest.mark.parametrize("reason, text", [
+    ("navigation_error", "pagina non caricata: errore di rete del browser"),
+    ("not_applicable:out_of_stock", "non applicabile: prodotto esaurito"),
+    ("not_applicable: nessuna azione eseguita", "non applicabile: nessuna azione eseguita"),
+    ("no_measurement: effetto non misurato", "non misurato: effetto non misurato"),
+    ("probe:no_category_word", "test della ricerca non riuscito: nessuna parola di categoria da cercare"),
+    ("probe:failed:TimeoutError", "test della ricerca non riuscito: azione non riuscita: TimeoutError"),
+    ("revisit_navigation_error", "nuova visita non riuscita: pagina non caricata: errore di rete del browser"),
+    ("error: KeyError: 'x'", "errore imprevisto del sistema di prova: KeyError: 'x'"),
+    ("credit_withheld:DPR.FAKE_LOW_STOCK", "credito non assegnato: segnale di rischio DPR.FAKE_LOW_STOCK"),
+])
+def test_reason_text_composes_prefixes(reason, text):
+    assert report.reason_text(reason) == text and report.reason_label(reason) == text
+
+
+def test_unknown_reason_codes_have_no_label_and_show_as_written():
+    for code in ("brand_new_reason", "not_applicable:brand_new", "probe:brand_new", "revisit_brand_new"):
+        assert report.reason_label(code) is None and report.reason_text(code) == code
+
+
+def test_journey_verification_reason_is_shown_in_italian():
+    run = load("journey_run")
+    run["journey"]["verification"] = {"passed": None, "checks": {"oracle": "cart_not_empty",
+                                                                 "not_assessable": "cart_price_ambiguous"}}
+    _, html = build(run, steps=steps())
+    assert "Verifica indipendente (cart_contains_item_under_price) <b>non valutabile</b>" in html
+    assert "Verifica non valutabile: prezzo nel carrello ambiguo tra prezzo unitario e totale di riga." in html
+
+
+@pytest.mark.parametrize("warning, text", [
+    ("mobile: checkout_entry not assessable (navigation_error)",
+     "mobile: fase checkout_entry non valutabile: pagina non caricata: errore di rete del browser"),
+    ("desktop: cart not assessable (error: KeyError: 'x')",
+     "desktop: fase cart non valutabile: errore imprevisto del sistema di prova: KeyError: 'x'"),
+    ("bot_challenge: an anti-bot page interrupted the journey (no evasion is attempted)",
+     "pagina di verifica anti-bot (an anti-bot page interrupted the journey (no evasion is attempted))"),
+    ("finished by the host without DONE/BLOCKED", "finished by the host without DONE/BLOCKED"),
+    ("left_shop: https://pay.example/", "left_shop: https://pay.example/"),
+])
+def test_known_warning_patterns_are_shown_in_italian(warning, text):
+    assert report.warning_text(warning) == text
+    run = load("audit_complete")
+    run["warnings"] = [warning]
+    assert report.e(text) in build(run)[1]

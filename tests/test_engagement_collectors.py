@@ -84,6 +84,23 @@ def test_lexicon_patterns_are_portable_between_python_and_javascript():
     ("place_order", "Conferma l'ordine", True), ("place_order", "Riepilogo ordine", False),
     ("returns", "Prezzi sorpresi", False), ("returns", "Resi e rimborsi", True), ("vat", "attiva inclusa", False),
     ("legal_id", "P.IVA 01234567897", True), ("scarcity", "Solo 2 rimasti!", True), ("scarcity", "Disponibile", False),
+    ("scarcity", "Solo 1 rimasto!", True), ("scarcity", "Rimasta solo 1 taglia", True),
+    # account gate words (Fable ruling on rule d): creating a password, not entering one; a new customer registers
+    ("password_new", "Crea una password", True), ("password_new", "Conferma password", True),
+    ("password_new", "Inserisci la password", False), ("password_new", "Password", False),
+    ("password_new", "Create a password", True), ("password_new", "Re-enter password", True),
+    ("register", "Nuovo cliente?", True), ("register", "New customer", True), ("register", "Già registrato?", False),
+    ("password_new", "Inserisci la tua password", False), ("password_new", "Inserisci la tua nuova password", True),
+    # "Utenti registrati" heads a login box; a login-or-register box is a login box (Fable ruling 6)
+    ("register", "Utenti registrati", False), ("register", "Clienti già registrati", False),
+    ("register", "Registrati", True), ("register", "Crea account", True), ("login", "Accedi o registrati", True),
+    ("login", "Accedi / Registrati", True), ("login", "Registrati oppure accedi", True), ("login", "Accedi ora", False),
+    ("guest", "Non creare un account cliente", True), ("register", "Non creare un account cliente", False),
+    ("tax_line", "IVA 22%", True), ("tax_line", "MwSt.", True), ("tax_line", "Contributo imballo", False),
+    ("address_field", "Indirizzo", True), ("address_field", "Indirizzo email", False), ("address_field", "CAP", True),
+    ("address_field", "Email address", False), ("address_field", "Street address", True),
+    ("choose_option", "Scegli un'opzione...", True), ("choose_option", "-- Seleziona --", True),
+    ("choose_option", "Nero", False), ("choose_option", "Choose a size", True),
     ("generic_link", "Scopri di più", True), ("generic_link", "Scopri la collezione", False),
     ("guest", "Continua come ospite", True), ("guest", "Hai già un account? Accedi", False),
     ("delivery", "Spedizione in 24 ore", True), ("delivery", "Spedizione in 24/48h", True),
@@ -514,8 +531,13 @@ def test_product_audit(run, mobile):
                                  "availability": "InStock"}
     assert pdp["reviews"]["rating"] == 4.5 and pdp["reviews"]["count"] == 128
     assert pdp["variant_selector"] == "buttons" and pdp["variants"] == 5
+    sizes = pdp["variant_groups"][0]  # 42 is pressed: nothing for the crawler to pick
+    assert (sizes["label"], sizes["selected"], sizes["first_available"]) == ("Taglia", True, "40") and sizes["rect"]
     assert pdp["delivery_text"] and pdp["shipping_text"] and pdp["returns_text"] and pdp["stock_text"]
     assert audit["persuasion"]["lowest_price_30d"][0]["value"] == 59.9
+    assert audit["persuasion"]["lowest_price_30d"][0] == {**audit["persuasion"]["lowest_price_30d"][0],
+                                                          "in_card": False, "overlay": False, "count": 1}
+    assert {p["in_card"] for p in audit["prices"]} == {False}
     assert audit["targets"]["lt24"] == 0 and audit["images"]["oversized_count"] == 0
     assert audit["a11y"]["img_missing_alt"] == 0 and [o["kind"] for o in audit["overlays"]] == ["consent"]
     phone = mobile["records"]["product.html"]["audit"]
@@ -617,6 +639,7 @@ def test_mark_and_since_follow_actions_and_navigations(lab, shop_server):
     collector.load_page(browser, shop_server.url("shop/product.html"), stage="pdp", page_id="p2")
     moved = collector.since(browser, mark)
     assert moved["navigations"] >= 1 and moved["requests"] >= 1 and moved["first_response_ms"] > 0
+    assert moved["first_request_ms"] == moved["first_response_ms"]  # the new document's own request
 
 
 def test_repeated_actions_and_late_toasts_are_responses_not_tickers(lab, shop_server):
@@ -929,10 +952,24 @@ def test_a_pages_own_polling_is_not_a_response(lab, shop_server):
     time.sleep(1.5)  # an action that changed nothing
     idle = collector.since(browser, mark)
     assert idle["requests"] == 0 and idle["first_response_ms"] is None and idle["requests_total"] >= 1
+    assert idle["first_request_ms"] is None
     mark = collector.mark(browser)
     browser.evaluate("fetch('img/shoe-b.svg?add=1').then(r => r.text())")  # what an action fetches still counts
     assert wait_for(lambda: collector.since(browser, mark)["requests"] == 1)
-    assert collector.since(browser, mark)["first_response_ms"] is not None
+    fetched = collector.since(browser, mark)  # ruling 8: a request alone is no visible response
+    assert fetched["first_request_ms"] is not None and fetched["first_response_ms"] is None
+
+
+def test_a_request_before_the_visible_change_is_reported_apart(lab, shop_server):
+    """Ruling 8: first_response_ms is the first mutation or navigation; the click's beacon is first_request_ms."""
+    collector, browser = lab
+    collector.load_page(browser, shop_server.url("shop/contatti.html"), stage="x", page_id="p1")
+    mark = collector.mark(browser)
+    browser.evaluate("fetch('img/shoe-a.svg?beacon=1').then(r => r.text()); setTimeout(() => document.body.append("
+                     "Object.assign(document.createElement('p'), {textContent: 'Fatto'})), 400)")
+    assert wait_for(lambda: (lambda s: s["mutations"] >= 1 and s["requests"] >= 1)(collector.since(browser, mark)))
+    since = collector.since(browser, mark)
+    assert since["first_request_ms"] < 300 and since["first_response_ms"] >= 380, since
 
 
 class PlainServer:
@@ -1355,6 +1392,7 @@ def test_only_necessary_cookie_buttons_are_rejections(lab, accept, reject, manag
     assert (consent["accept_labels"], consent["reject_labels"], consent["manage_labels"]) == ([accept], [reject],
                                                                                               [manage])
     assert consent["accept_area"] > consent["reject_area"]
+    assert all(b["rect"]["w"] > 0 and b["rect"]["y"] > 0 for b in consent["buttons"])  # deception scrolls to manage
 
 
 GUEST_CHECKOUT = """<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Checkout</title></head>
@@ -1452,11 +1490,101 @@ def test_a_microdata_product_page_with_related_products_is_a_product_page(lab):
     assert pdp["add_to_cart_count"] == 1 and pdp["add_to_cart_all"] == 13 and pdp["add_to_cart"]["above_fold"]
     assert audit["meta"]["microdata_products"] == audit["meta"]["microdata_main"] == 1
     assert audit["products"]["main_group"] == 12
-    assert pdp["variant_groups"] == [{"label": "Colore", "kind": "select",
-                                      "options": ["Scegli un'opzione...", "Nero", "Cuoio"]}]
+    group = pdp["variant_groups"][0]
+    assert {k: v for k, v in group.items() if k != "rect"} == {
+        "label": "Colore", "kind": "select", "options": ["Scegli un'opzione...", "Nero", "Cuoio"], "selected": False,
+        "first_available": "Nero"}
     assert audit["forms"]["fields"][0]["label"] == "Colore"  # not the options of the select inside the label
     result = classify(audit, audit["url"])
     assert result["type"] == "pdp" and "pdp:microdata Product" in result["signals"]
+
+
+VARIANT_PAGE = """<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Maglia Onda</title>
+<style>.gone{text-decoration:line-through}.sr{position:absolute;opacity:0;width:1px;height:1px}</style></head>
+<body><main><h1>Maglia Onda</h1><p><span>29,90 €</span></p>GROUP
+<button style="background:#000;color:#fff;padding:14px 30px">Aggiungi al carrello</button></main></body></html>"""
+
+
+@pytest.mark.parametrize("group, selected, first", [
+    ('<label>Taglia <select><option value="">Scegli una taglia</option><option disabled>S</option>'
+     "<option>M - Esaurito</option><option>L</option></select></label>", False, "L"),
+    ('<label>Taglia <select><option disabled selected>Taglia</option><option>M</option></select></label>', False, "M"),
+    ("<label>Taglia <select><option>M</option><option>L</option></select></label>", True, "M"),
+    ('<fieldset><legend>Taglia</legend><button disabled>40</button><button class="gone">41</button>'
+     "<button>42</button></fieldset>", False, "42"),  # no state anywhere: nothing chosen
+    ('<fieldset><legend>Taglia</legend><button class="size is-selected">40</button><button class="size">41</button>'
+     "</fieldset>", True, "40"),
+    ('<fieldset><legend>Colore</legend><input type="radio" name="c" id="c1"><label for="c1">Nero</label>'
+     '<input type="radio" name="c" id="c2" checked><label for="c2">Rosso</label></fieldset>', True, "Nero"),
+    ('<div aria-label="Colore"><input class="sr" type="radio" name="c" id="c1" disabled><label for="c1">Nero</label>'
+     '<input class="sr" type="radio" name="c" id="c2"><label for="c2">Rosso</label></div>', False, "Rosso"),
+    # the placeholder repeats the label without its colon; a sold-out default is no choice while another is free
+    ('<label for="t">Taglia:</label> <select id="t"><option value="0">Taglia</option><option value="1">M</option>'
+     "</select>", False, "M"),
+    ("<label>Taglia <select><option>S - Esaurito</option><option>M</option></select></label>", False, "M"),
+    ("<label>Taglia <select><option>S - Esaurito</option><option>M - Esaurito</option></select></label>", True, None),
+    ('<fieldset><legend>Taglia</legend><button><s>S</s></button><button>M</button></fieldset>', False, "M"),
+    # Magento 2 swatches: options with aria-checked, a disabled one marked by its class
+    ('<div><span>Taglia</span><div role="listbox"><div class="swatch-option disabled" role="option" '
+     'aria-checked="false" aria-label="S">S</div><div class="swatch-option" role="option" aria-checked="false" '
+     'aria-label="M">M</div></div></div>', False, "M"),
+])
+def test_variant_groups_say_whether_an_option_is_chosen_and_which_one_is_free(lab, group, selected, first):
+    """crawler.select_variant picks first_available once when selected is False (a placeholder, no pressed, checked
+    or selected option); disabled, struck-through and out-of-stock options are never offered."""
+    groups = page_audit(lab, VARIANT_PAGE.replace("GROUP", group), "/maglia-onda")["pdp"]["variant_groups"]
+    assert len(groups) == 1 and (groups[0]["selected"], groups[0]["first_available"]) == (selected, first), groups
+    assert groups[0]["rect"]["w"] > 0
+
+
+def omnibus_listing(per_card: bool, footnote: bool) -> str:
+    cards = "".join(
+        f'<li><a href="/p/{n}.html"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width=150 height=150 '
+        f'alt="Articolo {n}"><h3>Articolo {n}</h3></a><p><span>4{n},90 €</span> <del>6{n},90 €</del></p>'
+        + ('<p>Prezzo più basso negli ultimi 30 giorni</p>' if per_card else "")
+        + ('<p>Solo 3 rimasti</p>' if n == 0 else "") + "<button>Aggiungi al carrello</button></li>" for n in range(6))
+    note = "<p>Il prezzo barrato è il prezzo più basso negli ultimi 30 giorni.</p>" if footnote else ""
+    return (f'<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Scarpe</title></head><body><main>'
+            f"<h1>Scarpe da corsa</h1><p>Solo 2 rimasti nel nostro magazzino centrale.</p><ul>{cards}</ul>{note}"
+            f'</main><div role="dialog" aria-modal="true" style="position:fixed;inset:20%;background:#fff">'
+            f"<p>Offerta valida solo oggi: solo 4 rimasti!</p><button>Chiudi</button></div></body></html>")
+
+
+def test_persuasion_items_and_prices_say_whether_a_product_card_or_an_overlay_shows_them(lab):
+    """Producer-dependent scope (checks rule f, deception low_stock): each statement and price carries in_card and
+    overlay; a statement shown on every card is one item with count, and a page footnote with the same words is
+    another."""
+    audit = page_audit(lab, omnibus_listing(True, True), "/scarpe")
+    said = audit["persuasion"]["lowest_price_30d"]
+    assert [(i["text"], i["in_card"], i["overlay"], i["count"]) for i in said] == [
+        ("Prezzo più basso negli ultimi 30 giorni", True, False, 6),
+        ("Il prezzo barrato è il prezzo più basso negli ultimi 30 giorni.", False, False, 1)]
+    struck = [p for p in audit["prices"] if p["strikethrough"]]
+    assert len(struck) == 6 and all(p["in_card"] and not p["overlay"] for p in struck)
+    scarce = {i["text"]: (i["in_card"], i["overlay"], i["number"]) for i in audit["persuasion"]["scarcity"]}
+    assert scarce == {"Solo 2 rimasti nel nostro magazzino centrale.": (False, False, 2),
+                      "Solo 3 rimasti": (True, False, 3), "Offerta valida solo oggi: solo 4 rimasti!": (False, True, 4)}
+    footnote_only = page_audit(lab, omnibus_listing(False, True), "/scarpe")["persuasion"]["lowest_price_30d"]
+    assert [(i["in_card"], i["count"]) for i in footnote_only] == [(False, 1)]
+
+
+def test_per_card_statements_past_the_item_cap_still_count_and_keep_the_footnote(lab):
+    """Each place (cards, page, overlay) keeps 10 items; the place's last item counts the rest, so 12 cards whose
+    Omnibus lines each quote their own price add up to 12 and the footnote after them is still read (checks rule f)."""
+    cards = "".join(
+        f'<li><a href="/p/{n}.html"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width=150 height=150 '
+        f'alt="Articolo {n}"><h3>Articolo {n}</h3></a><p><span>{40 + n},90 €</span> <del>{60 + n},90 €</del></p>'
+        f"<p>Prezzo più basso negli ultimi 30 giorni: {45 + n},90 €</p><button>Aggiungi al carrello</button></li>"
+        for n in range(12))
+    audit = page_audit(lab, f"""<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Scarpe</title></head>
+      <body><main><h1>Scarpe da corsa</h1><ul>{cards}</ul>
+      <p>Il prezzo barrato è il prezzo più basso negli ultimi 30 giorni.</p></main></body></html>""", "/scarpe")
+    said = audit["persuasion"]["lowest_price_30d"]
+    in_cards = [i for i in said if i["in_card"]]
+    assert len(in_cards) == 10 and sum(i["count"] for i in in_cards) == 12
+    assert [(i["text"], i["count"]) for i in said if not i["in_card"]] == [
+        ("Il prezzo barrato è il prezzo più basso negli ultimi 30 giorni.", 1)]
+    assert sum(1 for p in audit["prices"] if p["strikethrough"] and p["in_card"]) == 12
 
 
 def test_footer_trust_details_survive_a_truncated_text_walk(lab):
@@ -1485,6 +1613,23 @@ def test_a_prechecked_add_on_priced_in_another_table_cell(lab):
                       "/cart")["cart"]
     assert cart["prechecked_paid"] == [{"label": "Shipping protection", "price_text": "$2.98", "price_value": 2.98,
                                         "checked": True, "addon": True}]
+
+
+def test_a_single_offers_inventory_level_is_read(lab):
+    """Owed to WS2 (deception.stock_contradictions): Offer.inventoryLevel, a QuantitativeValue or a number, of a
+    product with a single offer; with several offers (variants) no level is the page's."""
+    def product(offers) -> str:
+        ld = json.dumps({"@context": "https://schema.org", "@type": "Product", "name": "Borsa Luna", "offers": offers})
+        return (f'<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Borsa Luna</title><script '
+                f'type="application/ld+json">{ld}</script></head><body><main><h1>Borsa Luna</h1><p>129,00 €</p>'
+                "<p>Solo 3 rimasti</p></main></body></html>")
+
+    offer = {"@type": "Offer", "price": "129.00", "priceCurrency": "EUR",
+             "inventoryLevel": {"@type": "QuantitativeValue", "value": 3}}
+    levels = [page_audit(lab, product(o), "/borsa")["pdp"]["structured"]["inventory_level"] for o in (
+        offer, {**offer, "inventoryLevel": "7"}, [offer, {**offer, "price": "139.00"}],
+        {k: v for k, v in offer.items() if k != "inventoryLevel"})]
+    assert levels == [3, 7, None, None]
 
 
 def test_json_ld_in_the_payload_is_bounded_but_keeps_types_and_keys(lab):
@@ -1709,6 +1854,68 @@ def test_delivery_cost_rows_and_checkout_labels_of_a_basket(lab):
     assert page_audit(lab, italian, "/basket")["cart"]["shipping_value"] == 4.9
 
 
+LABEL_VALUE_CART = """<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Carrello</title></head>
+<body><header><a href="/">Negozio</a></header><main><h1>Carrello</h1>
+<div class="line"><a href="/p/aurora">Scarpa da corsa Aurora</a> <label>Quantità <input type="number" value="1"></label>
+<span>44,90 €</span> <button>Rimuovi</button></div>
+<section><h2>Riepilogo</h2>TOTALS</section>
+<a href="/checkout" style="display:inline-block;background:#063;color:#fff;padding:14px 40px">Procedi al checkout</a>
+</main></body></html>"""
+
+
+@pytest.mark.parametrize("totals", [
+    "<dl><dt>Subtotale</dt><dd>44,90 €</dd><dt>Spedizione</dt><dd>4,90 €</dd><dt>Totale</dt><dd>49,80 €</dd></dl>",
+    '<dl><dt>Subtotale</dt><dd><span class="amount">44,90 €</span></dd><dt>Spedizione</dt><dd><span class="amount">'
+    '4,90 €</span></dd><dt>Totale</dt><dd><strong class="amount">49,80 €</strong></dd></dl>',
+    '<div style="display:grid;grid-template-columns:1fr auto"><span>Subtotale</span><span>44,90 €</span>'
+    "<span>Spedizione</span><span>4,90 €</span><span>Totale</span><span>49,80 €</span></div>",
+    "<table><thead><tr><th>Subtotale</th><th>Spedizione</th><th>Totale</th></tr></thead>"
+    "<tbody><tr><td>44,90 €</td><td>4,90 €</td><td>49,80 €</td></tr></tbody></table>",
+    "<table><tr><th>Subtotale</th><td>44,90 €</td></tr><tr><th>Spedizione</th><td>4,90 €</td></tr>"
+    "<tr><th>Totale</th><td>49,80 €</td></tr></table>",
+    # WooCommerce's totals table: the total's cell also holds the included tax
+    '<table class="shop_table"><tr><th>Subtotale</th><td><span class="amount"><bdi>44,90&nbsp;<span>€</span></bdi>'
+    '</span></td></tr><tr><th>Spedizione</th><td>Tariffa unica: <span class="amount">4,90&nbsp;€</span><p>Spedizione a '
+    '<strong>Milano</strong>.</p></td></tr><tr><th>Totale</th><td><strong><span class="amount">49,80&nbsp;€</span>'
+    '</strong> <small>(include <span class="amount">8,98&nbsp;€</span> IVA)</small></td></tr></table>',
+    "<dl><dt>Subtotale</dt><dd>44,90 €</dd><dt>Spedizione</dt><dd>4,90 €</dd><dt>Totale</dt><dd><span>49,80 €</span> "
+    "<small>(IVA inclusa: 8,98 €)</small></dd></dl>",
+    # inline labels with no space before their amounts: quoted as shown ("Spedizione:4,90 €")
+    "<p><span>Subtotale:</span><span>44,90 €</span><br><span>Spedizione:</span><span>4,90 €</span><br>"
+    "<span>Totale:</span><span>49,80 €</span></p>",
+])
+def test_cart_totals_in_label_value_layouts(lab, totals):
+    """A definition list, a grid of label and value boxes or a table: each amount takes its own label (the r4 review's
+    <dl> read subtotal 49.8 and no total); a value cell that also holds a tax note keeps the label before it. Every
+    fee line is quoted verbatim (page_audit checks each snippet against the page's text)."""
+    cart = page_audit(lab, LABEL_VALUE_CART.replace("TOTALS", totals), "/carrello")["cart"]
+    assert (cart["subtotal_value"], cart["shipping_value"], cart["total_value"]) == (44.9, 4.9, 49.8)
+    assert [line["price_value"] for line in cart["line_items"]] == [44.9]
+    assert "Spedizione" in cart["shipping_text"] and [f["value"] for f in cart["fees"]] == [4.9]
+    assert cart["total_text"].startswith("Totale")
+    if totals.startswith("<dl><dt>Subtotale</dt><dd>44,90 €</dd>") and "IVA" not in totals:
+        assert (cart["subtotal_text"], cart["total_text"]) == ("Subtotale 44,90 €", "Totale 49,80 €")
+    if "IVA" in totals:
+        assert "8,98" in cart["total_text"]  # the cell as shown, note included
+    if "<p><span>" in totals:
+        assert cart["fees"][0]["row_text"] == "Spedizione:4,90 €"
+
+
+def test_a_product_line_beside_label_value_totals_keeps_its_own_kind(lab):
+    """Architect ruling 5, negative pin: a product line of boxes (unit price, quantity "2", line total) pairs its line
+    total with "2", which names no total, so the line is never read as the summary total."""
+    line = ('<div class="line"><a href="/p/aurora">Scarpa da corsa Aurora</a> <span>22,45 €</span> <span>2</span> '
+            "<span>44,90 €</span></div>")
+    html = re.sub(r'<div class="line">.*?</div>', line, LABEL_VALUE_CART, flags=re.S).replace(
+        "TOTALS", "<dl><dt>Subtotale</dt><dd>44,90 €</dd><dt>Spedizione</dt><dd>4,90 €</dd><dt>Totale</dt>"
+        "<dd>49,80 €</dd></dl>")
+    audit = page_audit(lab, html, "/carrello")
+    assert [p["kind"] for p in audit["prices"] if p["value"] in (22.45, 44.9)][:2] == ["price", "price"]
+    cart = audit["cart"]
+    assert (cart["subtotal_value"], cart["shipping_value"], cart["total_value"]) == (44.9, 4.9, 49.8)
+    assert cart["total_text"] == "Totale 49,80 €"
+
+
 LOGIN_MODAL = """<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Checkout</title></head>
 <body><main><h1>Checkout</h1><p>Il tuo ordine: Borsa Luna, 129,00 €</p></main>
 <div role="dialog" aria-modal="true" style="position:fixed;inset:10%;background:#fff;padding:20px">
@@ -1734,18 +1941,114 @@ def test_a_login_dialog_with_its_own_guest_exit_is_no_gate(lab):
 
 
 def test_a_registration_split_over_two_forms_and_an_optional_password(lab):
-    """Rule d of docs/engagement-kpi.md reads checkout_entry as guest_option || (!password_present && !login_required):
-    a registration whose email sits in another form than its password reads login_required false, yet
-    password_present keeps FAI.FORCED_ACCOUNT true; password_required tells an optional password apart."""
+    """Rule d reads the checkout entry as guest_option || !login_required (Fable ruling, gate B): a required
+    registration password is a gate even when the email sits in another form; password_required tells an optional
+    password apart, and an optional one is no gate."""
     split = page_audit(lab, """<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Checkout</title></head>
       <body><main><h1>Checkout</h1><form><label>Email <input type="email" name="email" required></label></form>
       <form><label>Crea una password <input type="password" name="password" required></label>
       <button>Continua</button></form></main></body></html>""", "/checkout/")["forms"]
-    assert split["password_present"] and split["password_required"] and not split["login_required"]
+    assert split["password_present"] and split["password_required"] and split["login_required"]
     optional = page_audit(lab, GUEST_CHECKOUT.replace(
         '<button type="submit">', '<label>Crea una password (facoltativo) <input type="password" name="pw"></label>'
         '<button type="submit">'), "/checkout/")["forms"]
     assert optional["password_present"] and not optional["password_required"] and not optional["login_required"]
+
+
+@pytest.mark.parametrize("password, gate", [
+    ('<label>Crea una password <input type="password" name="pw" required></label>', True),  # wording
+    ('<label>Password <input type="password" name="pw" autocomplete="new-password" required></label>', True),
+    ('<label>Password <input type="password" name="pw" required></label>'  # a second password in its form
+     '<label>Ripeti <input type="password" name="pw2" required></label>', True),
+    ('<label>Password <input type="password" name="pw" autocomplete="current-password" required></label>', False),
+    ('<label>Password <input type="password" name="pw" required></label>', False),  # unknown: an entry path is beside
+])
+def test_a_registration_password_beside_a_delivery_form_is_a_gate(lab, password, gate):
+    """Gate B: a registration password outside overlays is a gate whatever the entry path; current-password never
+    is, and a password of unknown purpose beside an address form falls to gate C (no gate)."""
+    form = '<form method="post" action="/checkout/save">'
+    forms = page_audit(lab, GUEST_CHECKOUT.replace(form, f"<form>{password}<button>Continua</button></form>{form}"),
+                       "/checkout/")["forms"]
+    assert forms["password_required"] and not forms["guest_option"] and forms["login_required"] is gate
+
+
+@pytest.mark.parametrize("fixture, gate", [("checkout-accedi.html", False), ("autenticazione.html", True)])
+def test_a_login_box_beside_a_delivery_form_is_no_gate_and_beside_a_registration_form_is(lab, fixture, gate):
+    """Fable ruling on rule d. site2: a returning-customer login box beside the delivery form (login_required False,
+    password_required True). S2: an email-only "Crea un account" beside a login box and no guest option: the email
+    starts a registration, so no way in without an account (gate C)."""
+    forms = page_audit(lab, (FIXTURES / "shop" / fixture).read_text(encoding="utf-8"), "/checkout/")["forms"]
+    assert forms["password_present"] and forms["password_required"] and not forms["guest_option"]
+    assert forms["login_required"] is gate
+    if not gate:  # "Nuovo cliente" above the delivery form names no registration form: its address fields are a way in
+        html = (FIXTURES / "shop" / fixture).read_text(encoding="utf-8").replace("Dati di spedizione", "Nuovo cliente")
+        assert not page_audit(lab, html, "/checkout/")["forms"]["login_required"]
+
+
+S2_CREATE = ('<form method="post" action="/autenticazione?create" id="create-account_form">\n'
+             "        <h3>Crea un account</h3>")
+
+
+@pytest.mark.parametrize("before, after, gate, guest", [
+    # Fable ruling 3: the heading alone in a title box right above the form names it
+    (S2_CREATE, '<div class="box-title"><h3>Crea un account</h3></div><form method="post" action="/autenticazione">',
+     True, False),
+    # the email-only form named by its submit alone ("Crea account", Shopify's Italian wording)
+    (S2_CREATE, '<form method="post" action="/autenticazione">', True, False),
+    # a guest choice inside the registration form (Shopware 6) is a way in without an account
+    ('<button class="btn btn-primary" type="submit" name="SubmitCreate">',
+     '<label><input type="checkbox" name="guest"> Non creare un account cliente</label>'
+     '<button class="btn btn-primary" type="submit" name="SubmitCreate">', False, True),
+])
+def test_how_an_email_only_registration_start_is_named(lab, before, after, gate, guest):
+    """S2 variants: the email-only form is a registration start (no way in, gate C) when a title box above it or its
+    own submit says so; a guest checkbox is a guest option."""
+    html = (FIXTURES / "shop" / "autenticazione.html").read_text(encoding="utf-8")
+    assert before in html
+    html = html.replace(before, after)
+    if after.startswith('<div class="box-title">'):
+        html = html.replace('name="SubmitCreate">Crea un account', 'name="SubmitCreate">Invia')
+    elif after.startswith("<form"):
+        html = html.replace('name="SubmitCreate">Crea un account', 'name="SubmitCreate">Crea account')
+    forms = page_audit(lab, html, "/checkout/")["forms"]
+    assert (forms["login_required"], forms["guest_option"]) == (gate, guest)
+
+
+@pytest.mark.parametrize("box", [
+    '<form method="post" action="/login"><h2>Utenti registrati</h2><label>Email <input type="email" name="le" '
+    'required></label><label>Password <input type="password" name="lp" required></label><button type="submit">Entra'
+    "</button></form>",
+    '<form method="post" action="/login"><h2>Clienti registrati</h2><label>Email <input type="email" name="le" '
+    'required></label><label>Password <input type="password" name="lp" required></label><button type="submit">'
+    "Accedi ora</button></form>",
+])
+def test_a_registered_customers_login_box_beside_a_delivery_form_is_no_gate(lab, box):
+    """Review finding (gate B): "Utenti registrati" and "Clienti registrati" (a participle) head a login box, not a
+    registration, whatever its submit says; beside the delivery form it is no gate, in the main column or an aside."""
+    form = '<form method="post" action="/checkout/save">'
+    aside = GUEST_CHECKOUT.replace("</main>", f"</main><aside>{box}</aside>")
+    for html in (GUEST_CHECKOUT.replace(form, box + form), aside):
+        forms = page_audit(lab, html, "/checkout/")["forms"]
+        assert forms["password_required"] and not forms["guest_option"] and not forms["login_required"]
+
+
+def test_a_login_or_register_box_is_a_login_box(lab):
+    """Fable ruling 6 (fixture c20): an "Accedi o registrati" box asks a returning customer for a current password,
+    so beside the delivery form it is no gate; alone, with no other way in, it is one (gate C); with "Continua come
+    ospite" it offers a guest path. A new-password token still makes it a registration (gate B)."""
+    html = (FIXTURES / "shop" / "checkout-accedi-registrati.html").read_text(encoding="utf-8")
+    forms = page_audit(lab, html, "/checkout/")["forms"]
+    assert forms["password_required"] and not forms["guest_option"] and not forms["login_required"]
+    alone = re.sub(r'<section class="delivery">.*?</section>', "", html, flags=re.S)
+    assert page_audit(lab, alone, "/checkout/")["forms"]["login_required"]
+    guest = page_audit(lab, alone.replace("</form>", "</form><button>Continua come ospite</button>"), "/checkout/")
+    assert guest["forms"]["guest_option"] and not guest["forms"]["login_required"]
+    placeholder = html.replace("<h2>Accedi o registrati</h2>", "").replace(
+        '<input type="password" name="login_password" required>',
+        '<input type="password" name="login_password" placeholder="Password (accedi o registrati)" required>')
+    assert not page_audit(lab, placeholder, "/checkout/")["forms"]["login_required"]
+    new = html.replace('name="login_password" required', 'name="login_password" autocomplete="new-password" required')
+    assert page_audit(lab, new, "/checkout/")["forms"]["login_required"]
 
 
 def test_each_page_is_audited_in_its_declared_language_and_long_metadata_is_cut(lab):

@@ -329,7 +329,7 @@
     const offers = [].concat(product.offers || [], ...(product.hasVariant ? [].concat(product.hasVariant).map(v => v.offers || []) : []));
     const offer = offers.find(o => o && (o.price !== undefined || o.lowPrice !== undefined || o.priceSpecification)) || offers[0] || {};
     const spec = first(offer.priceSpecification) || {};
-    const rating = product.aggregateRating || {};
+    const rating = product.aggregateRating || {}, stock = first(offer.inventoryLevel);
     structured = {
       name: cut(first(product.name), 160), sku: cut(first(product.sku), 60),
       price: num(offer.price ?? offer.lowPrice ?? spec.price), currency: offer.priceCurrency || spec.priceCurrency || null,
@@ -338,6 +338,8 @@
       review_count: num(rating.reviewCount ?? rating.ratingCount) ?? (product.review ? [].concat(product.review).length : null),
       has_return_policy: !!(product.hasMerchantReturnPolicy || offers.some(o => o && o.hasMerchantReturnPolicy)),
       has_shipping: !!(offers.some(o => o && o.shippingDetails) || product.shippingDetails), offers: offers.length,
+      // Offer.inventoryLevel (a QuantitativeValue or a number) of a single offer: with variants it is not the page's
+      inventory_level: offers.length === 1 && stock !== undefined ? num(stock && typeof stock === 'object' ? stock.value : stock) : null,
     };
   }
   const itemList = ofType('ItemList')[0];
@@ -415,7 +417,7 @@
     // kind from the visible text first (the accessible name of "No grazie, preferisco pagare di più" may be "Chiudi")
     const buttons = controls.slice(0, 12).map(b => {
       const label = cut(name(b), 80), shown = shownText(b), byText = kindOf(shown);
-      return {label, text: shown, kind: byText !== 'other' ? byText : kindOf(label), area: area(b), ...paint(b)};
+      return {label, text: shown, kind: byText !== 'other' ? byText : kindOf(label), area: area(b), rect: box(b), ...paint(b)};
     });
     const consentLike = hit('consent_banner', t) && buttons.some(b => ['accept', 'reject', 'manage'].includes(b.kind));
     if (!(c.dialog || c.coverage >= 0.15 || (consentLike && c.coverage >= 0.01)) || (c.sticky && !consentLike)) continue;
@@ -519,20 +521,54 @@
     }
     return row;
   });
+  // A label-value list (<dl><dt>Subtotale</dt><dd>44,90 €</dd>..., a grid of label and value boxes, a totals row
+  // under a header row) is one box that holds every amount: when the row found above holds other prices, this
+  // price's label is the box just before its own (not an amount, short, no link), or in a table row of amounts only
+  // its column's header cell; an amount that opens a value cell holding a note with another amount ("Totale | 94,70 €
+  // (include 17,08 € IVA)", a <dd> with "(IVA inclusa: 8,98 €)") takes the cell just before. Table rows that list a
+  // product keep the whole row. The pair is quoted as the page shows it (no space where it has none: "Spedizione:4,90 €").
+  const others = (e, row) => [...row.querySelectorAll('*')].some(o => o !== e && priceText.has(o) && !o.contains(e) && !e.contains(o));
+  const linked = x => x.matches('a[href]') || !!x.querySelector('a[href]') || !!closest(x, 'a[href]');
+  const labelOk = (n, t) => t && t.length <= 60 && !PRICE.test(t) && !linked(n);
+  const pairOf = (el, item, box) => {
+    const a = text(el), b = text(item), all = text(box);
+    return {el, item, row_text: [a + ' ' + b, a + b].find(s => all.includes(s)) || all};
+  };
+  const headerCell = (item, row) => {
+    if (!/^(TD|TH)$/.test(item.tagName) || !row.cells || ![...row.cells].every(c => !text(c) || PRICE.test(text(c)))) return null;
+    const table = closest(row, 'table'), head = table && ((table.tHead && table.tHead.rows[0]) || table.rows[0]);
+    const cell = head && head !== row ? head.cells[item.cellIndex] : null;
+    return cell && text(cell) && !PRICE.test(text(cell)) ? cell : null;
+  };
+  const labelBox = (e, row) => {
+    if (row === e || !others(e, row)) return null;
+    let item = e;
+    while (parentOf(item) && parentOf(item) !== row) item = parentOf(item);
+    if (row.tagName === 'TR') { const cell = headerCell(item, row); return cell && {el: cell, item, row_text: text(row)}; }
+    for (let n = item.previousElementSibling; n; n = n.previousElementSibling) {
+      const t = text(n);
+      if (t) return labelOk(n, t) && !linked(item) ? pairOf(n, item, row) : null;
+    }
+    const n = /^(TD|DD)$/.test(row.tagName) && item === row.firstElementChild ? row.previousElementSibling : null;
+    return n && parentOf(row) && labelOk(n, text(n)) && !linked(row) ? pairOf(n, row, parentOf(row)) : null;
+  };
   const prices = [];
   for (const e of leafPrices.slice(0, 600)) {
     const t = priceText.get(e), p = parsePrice(t);
     if (!p || p.value === null) continue;
-    const row = rowOf(e), rowText = row === e ? t : text(row), label = cut(rowText.replace(p.match, ' '), 100);
-    const summaryRow = rowText.length <= 100 && !(row.querySelector && row.querySelector('a[href]'));
-    const strike = struck(e), option = !!(closest(e, 'label') || (row.querySelector && row.querySelector('input[type="checkbox"],input[type="radio"]')));
+    const row = rowOf(e), pair = labelBox(e, row);
+    const rowText = pair ? text(pair.el) + ' ' + t : row === e ? t : text(row);
+    const label = cut(pair ? text(pair.el) : rowText.replace(p.match, ' '), 100), scope = pair ? [pair.el, pair.item] : [row];
+    const summaryRow = rowText.length <= 100 && !scope.some(x => x.querySelector && x.querySelector('a[href]'));
+    const strike = struck(e), option = !!(closest(e, 'label') || scope.some(x => x.querySelector && x.querySelector('input[type="checkbox"],input[type="radio"]')));
     const kind = strike ? 'strike' : option ? 'option' : hit('free_shipping', label) ? 'threshold' : hit('installments', label + ' ' + t) ? 'installment'
       : hit('unit_price', t + ' ' + label) ? 'unit' : hit('lowest_price_30d', label) ? 'lowest30'
       : summaryRow && hit('subtotal', label) ? 'subtotal' : summaryRow && hit('total', label) ? 'total'
       : summaryRow && hit('shipping', label) ? 'shipping' : summaryRow && hit('fee', label) ? 'fee' : 'price';
-    prices.push({el: e, row, text: cut(t, 60), value: p.value, currency: p.currency, strikethrough: strike, kind, label,
-      rect: box(e), above_fold: fold(e), near_text: cut(text(blockOf(parentOf(e) || e)), 200),
-      itemprop: !!closest(e, '[itemprop="price"]'), overlay: inOverlay(e), area: areaOf(e)});
+    // row_text: the row as the page shows it (quotable, verbatim); line: the amount beside its own label
+    prices.push({el: e, row, row_text: pair ? pair.row_text : text(row), line: pair ? text(pair.el) + ' ' + text(pair.item) : text(row),
+      text: cut(t, 60), value: p.value, currency: p.currency, strikethrough: strike, kind, label, rect: box(e), above_fold: fold(e),
+      near_text: cut(text(blockOf(parentOf(e) || e)), 200), itemprop: !!closest(e, '[itemprop="price"]'), overlay: inOverlay(e), area: areaOf(e)});
   }
 
   // ------------------------------------------------------------------ calls to action
@@ -690,16 +726,62 @@
     blocks.some(b => b.overlay && b.text.length <= 200 && inLogin(b.el) && hit('guest', b.text));
   const gatePasswords = passwords.filter(e => !e.disabled && (e.required || e.getAttribute('aria-required') === 'true' ||
     !hit('optional', fieldLabel(e) + ' ' + clean(e.getAttribute('placeholder')))));
-  // A gate: a required password in a blocking dialog, or a required password / gate wording on a page that offers no
-  // other way to enter one's details (a personal-data field outside the form that holds the password). Invitations
-  // to log in for speed ("Accedi per completare l'acquisto più velocemente", "Log in to check out faster"), link
-  // texts and "Hai già un account?" prompts are not gate wording.
-  const passwordForm = e => { const f = e.form || closest(e, 'form'); return !!(f && f.querySelector('input[type="password"]')); };
-  const entryPath = pageFields.some(e => !passwordForm(e) && (e.type === 'email' || tokens(e).some(t => PERSONAL.test(t)) ||
-    hit('personal_field', fieldLabel(e))));
+  // The account gate (login_required, when no guest exit is offered): A, a gate password in a blocking dialog; B, a
+  // registration password outside overlays, beside an address form or not (autocomplete new-password, a second
+  // password in its form, or registration wording without login wording in its label or in its form's headings,
+  // legend or submit; current-password never); C, a gate password or gate wording on a page that offers no other way
+  // to enter one's details: a personal-data field outside every password form and every registration form (one headed
+  // or submitted with registration wording, and no login wording, that holds no address field). A login box beside a
+  // delivery form is no gate, and a login-or-register box ("Accedi o registrati") is a login box. Invitations to log
+  // in for speed ("Accedi per completare l'acquisto più velocemente", "Log in to check out faster"), link texts and
+  // "Hai già un account?" prompts are not gate wording.
+  const formOf = e => e.form || closest(e, 'form');
+  const passwordForm = e => { const f = formOf(e); return !!(f && f.querySelector('input[type="password"]')); };
+  // A form's own wording: its headings, legend and submit controls, else the heading right above it ("Nuovo cliente"
+  // as a sibling, or alone in a title box: <div class="box-title"><h3>Crea un account</h3></div>), else the nearest
+  // heading before it inside an ancestor (at most 3 levels up) that holds no other form.
+  const HEADING = 'h1,h2,h3,h4,h5,h6,[role="heading"]';
+  const headingAbove = n => {
+    if (n.matches(HEADING)) return visible(n) ? n : null;
+    if (n.querySelector('form,input,select,textarea,button')) return null;
+    const inside = [...n.querySelectorAll(HEADING)].filter(visible);
+    return inside.length === 1 ? inside[0] : null;
+  };
+  const formWords = memo(f => {
+    const heads = [...f.querySelectorAll(HEADING + ',legend')].filter(visible);
+    for (let n = f.previousElementSibling, i = 0; !heads.length && n && i < 3; n = n.previousElementSibling, i++) {
+      const h = headingAbove(n);
+      if (h) heads.push(h);
+    }
+    for (let a = parentOf(f), i = 0; !heads.length && a && a !== document.body && i < 3 && a.querySelectorAll('form').length === 1; a = parentOf(a), i++) {
+      const before = [...a.querySelectorAll(HEADING)].filter(h => visible(h) && (h.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING));
+      if (before.length) heads.push(before[before.length - 1]);
+    }
+    const submits = [...f.querySelectorAll('button,input[type="submit"],input[type="image"]')]
+      .filter(b => visible(b) && !(b.tagName === 'BUTTON' && ['button', 'reset'].includes(b.type)));
+    const words = [...heads, ...submits].map(name).filter(Boolean);
+    return {register: words.some(t => hit('register', t)), login: words.some(t => hit('login', t))};
+  });
+  const registerForm = f => !!f && formWords(f).register && !formWords(f).login;
+  const ADDRESS = /^(street-address|address-line[123]|postal-code|address-level[1-4])$/;
+  const addressField = e => tokens(e).some(t => ADDRESS.test(t)) || hit('address_field', fieldLabel(e)) ||
+    hit('address_field', clean(e.name)) || hit('address_field', clean(e.id));
+  const registrationForm = memo(f => registerForm(f) &&
+    ![...(f.elements || [])].some(e => e.matches && e.matches(FIELD) && visible(e) && addressField(e)));
+  const newPassword = e => {
+    const t = tokens(e), f = formOf(e);
+    if (t.includes('current-password')) return false;
+    if (t.includes('new-password') || (f && passwords.filter(p => formOf(p) === f).length >= 2)) return true;
+    const label = fieldLabel(e) + ' ' + clean(e.getAttribute('placeholder'));
+    return hit('password_new', label) || (hit('register', label) && !hit('login', label)) || registerForm(f);
+  };
+  const entryPath = pageFields.some(e => !passwordForm(e) && !(formOf(e) && registrationForm(formOf(e))) &&
+    (e.type === 'email' || tokens(e).some(t => PERSONAL.test(t)) || hit('personal_field', fieldLabel(e))));
   const gateText = shortTexts.some(b => hit('login_gate', b.text) && !hit('login_optional', b.text) &&
     !b.holders.every(h => closest(h, 'a[href],button')));
-  const loginGate = gatePasswords.some(inOverlay) || ((gatePasswords.some(e => !inOverlay(e)) || gateText) && !entryPath);
+  const pagePasswords = gatePasswords.filter(e => !inOverlay(e));
+  const loginGate = gatePasswords.some(inOverlay) || pagePasswords.some(newPassword) ||
+    ((pagePasswords.length > 0 || gateText) && !entryPath);
   const forms = {
     fields_total: allFields.length, visible: counted.length, visible_all: visibleFields.length,
     required: counted.filter(e => e.required || e.getAttribute('aria-required') === 'true').length,
@@ -794,16 +876,35 @@
     const b = pick.find(x => x.area === 'main') || pick[0];
     return b ? cut(b.text, 200) : null;
   };
-  const optionLike = e => e.matches('input[type="radio"],[role="radio"],button,[role="button"],[aria-pressed],label') && name(e).length <= 14;
+  const optionLike = e => e.matches('input[type="radio"],[role="radio"],[role="option"],button,[role="button"],[aria-pressed],label') && name(e).length <= 14;
+  // A variant group's state, for the crawler's one code-owned pick: selected (the select shows a real option, not a
+  // "Scegli un'opzione..." placeholder; a button, radio or swatch is pressed, checked or selected, else marked chosen
+  // by its class when the group has no such state at all; a chosen option that is gone while another is free is no
+  // choice) and first_available (the label of the first option that is not disabled, struck through or out of
+  // stock, as the control names it), with that option's rect. Limit: a group with no state and a chosen-class the
+  // pattern does not know reads unchosen, and the pick then clicks its first free option, which on a toggle-off
+  // picker (a second click clears the choice) can undo a choice made by the page.
+  const classOf = e => typeof e.className === 'string' ? e.className : '';
+  const CHOSEN = /(^|[\s_-])(selected|active|checked|current|chosen)([\s_-]|$)/i;
+  const GONE = /(^|[\s_-])(disabled|unavailable|sold-?out|out-?of-?stock)([\s_-]|$)/i;
+  const bare = s => clean(s).replace(/[\s:*]+$/, '').toLowerCase();  // "Taglia:" and "Taglia *" name the option "Taglia"
+  const placeholder = (o, sel) => !o || o.disabled || o.value === '' || hit('choose_option', o.label) ||
+    bare(o.label) === bare(fieldLabel(sel));
   const variantGroups = [];
   for (const sel of visibleFields.filter(e => e.tagName === 'SELECT' && !e.disabled && !isSearch(e) && e !== sortSelect)) {
     const label = fieldLabel(sel) + ' ' + clean(parentOf(sel)?.firstElementChild?.textContent || '');
-    if (hit('variant', label) && sel.options.length >= 2) variantGroups.push({label: cut(fieldLabel(sel), 60), kind: 'select',
-      options: [...sel.options].map(o => cut(o.text, 30)).filter(Boolean).slice(0, 12)});
+    if (!hit('variant', label) || sel.options.length < 2) continue;
+    const real = o => !placeholder(o, sel) && !o.closest('optgroup[disabled]');
+    const free = [...sel.options].find(o => real(o) && !hit('out_of_stock', o.label)), shown = sel.options[sel.selectedIndex];
+    variantGroups.push({label: cut(fieldLabel(sel), 60), kind: 'select',
+      options: [...sel.options].map(o => cut(o.text, 30)).filter(Boolean).slice(0, 12),
+      selected: real(shown) && (!free || !hit('out_of_stock', shown.label)), first_available: free ? cut(free.label, 80) : null,
+      rect: box(sel)});
   }
   const hiddenRadioLabels = ALL.filter(e => e.matches('input[type="radio"]') && !visible(e) && e.labels).map(e => [...e.labels].find(visible)).filter(Boolean);
   const byParent = new Map();
-  for (const e of [...visibleFields, ...allButtons, ...hiddenRadioLabels].filter(e => optionLike(e) && !inCard(e) && !inOverlay(e) && areaOf(e) === 'main')) {
+  const swatches = ALL.filter(e => e.matches('[role="option"]') && visible(e));  // Magento: div role="option" aria-checked
+  for (const e of [...visibleFields, ...allButtons, ...hiddenRadioLabels, ...swatches].filter(e => optionLike(e) && !inCard(e) && !inOverlay(e) && areaOf(e) === 'main')) {
     const p = parentOf(e);
     if (!byParent.has(p)) byParent.set(p, []);
     if (!byParent.get(p).includes(e)) byParent.get(p).push(e);
@@ -814,7 +915,22 @@
     const label = [clean(p.getAttribute('aria-label')), p.tagName === 'FIELDSET' ? clean(p.querySelector('legend')?.textContent) : '',
       cut(p.previousElementSibling?.textContent, 40), g && g.firstElementChild !== p ? cut(g.firstElementChild?.textContent, 40) : '']
       .find(t => t && hit('variant', t));
-    if (label) variantGroups.push({label: cut(label, 60), kind: 'buttons', options: items.map(e => cut(name(e), 20)).slice(0, 12)});
+    if (!label) continue;
+    const control = e => e.tagName === 'LABEL' ? e.control : null;  // a swatch: the label of a hidden radio
+    const states = x => !!x && (x.type === 'radio' || x.getAttribute('role') === 'radio' ||
+      ['aria-pressed', 'aria-checked', 'aria-selected'].some(a => x.hasAttribute(a)));
+    const on = x => !!x && (x.checked === true || ['true', 'mixed'].includes(x.getAttribute('aria-pressed')) ||
+      x.getAttribute('aria-checked') === 'true' || x.getAttribute('aria-selected') === 'true');
+    const marked = items.some(e => states(e) || states(control(e)));
+    const strike = x => /^(DEL|S|STRIKE)$/.test(x.tagName) || /line-through/.test(style(x).textDecorationLine || '');
+    const gone = e => [e, control(e)].some(x => x && (x.disabled || x.getAttribute('aria-disabled') === 'true')) ||
+      hit('out_of_stock', name(e) + ' ' + clean(e.getAttribute('title'))) || GONE.test(classOf(e)) || strike(e) ||
+      [...e.querySelectorAll('*')].some(x => strike(x) && text(x) && text(x) === text(e));  // <button><s>S</s></button>
+    const free = items.find(e => !gone(e));
+    const chosen = items.filter(e => marked ? on(e) || on(control(e)) : CHOSEN.test(classOf(e)));
+    variantGroups.push({label: cut(label, 60), kind: 'buttons', options: items.map(e => cut(name(e), 20)).slice(0, 12),
+      selected: chosen.length > 0 && (!free || chosen.some(e => !gone(e))),
+      first_available: free ? cut(name(free), 80) : null, rect: box(free || items[0])});
   }
   let rating = null, reviewCount = null, ratingText = null, countText = null;
   for (const b of blocks.filter(x => !x.overlay && !inCard(x.el) && x.text.length <= 200 && hit('review', x.text) && /\d/.test(x.text))) {
@@ -899,12 +1015,12 @@
   };
   const options = checkboxes.map(paidOption).filter(o => o.price_value !== null && o.price_value > 0);
   const fees = summaryPrices.filter(p => ['shipping', 'fee'].includes(p.kind)).slice(0, 10)
-    .map(p => ({label: p.label, price_text: p.text, value: p.value, row_text: cut(text(p.row), 200)}));
+    .map(p => ({label: p.label, price_text: p.text, value: p.value, row_text: cut(p.row_text, 200)}));
   const cart = {
-    line_items: lineItems, subtotal_text: subtotal ? cut(text(subtotal.row), 120) : null, subtotal_value: subtotal ? subtotal.value : null,
-    shipping_text: shipRow ? cut(text(shipRow.row), 120) : freeShip ? cut(freeShip.text, 120) : null,
+    line_items: lineItems, subtotal_text: subtotal ? cut(subtotal.line, 120) : null, subtotal_value: subtotal ? subtotal.value : null,
+    shipping_text: shipRow ? cut(shipRow.line, 120) : freeShip ? cut(freeShip.text, 120) : null,
     shipping_value: shipRow ? shipRow.value : freeShip ? 0 : null,
-    total_text: total ? cut(text(total.row), 120) : null, total_value: total ? total.value : null,
+    total_text: total ? cut(total.line, 120) : null, total_value: total ? total.value : null,
     checkout_cta: ctaSummary(best(ctaPool.filter(c => c.lexicon_hit === 'checkout'))),
     editable: lineItems.some(i => i.qty_editable || i.removable),
     prechecked_paid: options.filter(o => o.checked).slice(0, 10), paid_options: options.filter(o => !o.checked).slice(0, 10),
@@ -977,19 +1093,30 @@
   const containerText = e => { let c = e; for (let n = parentOf(e), i = 0; n && i < 3; n = parentOf(n), i++) { if (text(n).length > 220) break; c = n; } return cut(text(c), 200); };
   const DATE = /\b\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?\b|\b\d{1,2}[:.]\d{2}\b/;
   const persuasion = {scarcity: [], urgency: [], reciprocity: [], authority: [], free_shipping_threshold: [], lowest_price_30d: [], vat_statement: []};
-  const seen = new Set();
-  const add = (key, item) => { const k = key + ':' + item.text; if (persuasion[key].length < 10 && !seen.has(k)) { seen.add(k); persuasion[key].push(item); } };
-  for (const c of countdowns.slice(0, 5)) add('urgency', {text: containerText(c.el), countdown: true, remaining_s: c.remaining_s, deadline: true});
+  // Every item says where it is shown: inside a product card (in_card: a listing's or a related product's) or an
+  // overlay. Equal texts in the same place are one item, count the times it is shown (one per card); the same words
+  // outside the cards (a footnote) are another item. Each place keeps 10 items: past them, the place's last item counts
+  // the rest (per-card lines that each quote their own price), so a place's counts add up to the statements it shows.
+  const seen = new Map();
+  const add = (key, el, item) => {
+    const where = {in_card: inCard(el), overlay: inOverlay(el)}, k = [key, where.in_card, where.overlay, item.text].join('\n');
+    if (seen.has(k)) { seen.get(k).count++; return; }
+    const place = persuasion[key].filter(i => i.in_card === where.in_card && i.overlay === where.overlay);
+    if (place.length >= 10) { place[place.length - 1].count++; return; }
+    seen.set(k, Object.assign(item, where, {count: 1}));
+    persuasion[key].push(item);
+  };
+  for (const c of countdowns.slice(0, 5)) add('urgency', c.el, {text: containerText(c.el), countdown: true, remaining_s: c.remaining_s, deadline: true});
   for (const b of blocks) {
     if (b.text.length > 400) continue;
     const t = cut(b.text, 200), scarce = found('scarcity', b.text), fs = found('free_shipping', b.text);
-    if (scarce) { const n = (scarce[0].match(/\d+/) || [])[0]; add('scarcity', {text: t, number: n ? parseInt(n, 10) : null}); }
-    if (hit('urgency', b.text) && !countdowns.some(c => within(c.el, b.el))) add('urgency', {text: t, countdown: false, remaining_s: null, deadline: DATE.test(b.text)});
-    if (hit('reciprocity', fs ? b.text.replace(fs[0], ' ') : b.text)) add('reciprocity', {text: t});
-    if (hit('authority', b.text)) add('authority', {text: t});
-    if (fs) { const p = parsePrice(b.text.slice(fs.index)); add('free_shipping_threshold', {text: t, value: p ? p.value : null}); }
-    if (hit('lowest_price_30d', b.text)) { const p = parsePrice(b.text); add('lowest_price_30d', {text: t, value: p ? p.value : null}); }
-    if (hit('vat', b.text)) add('vat_statement', {text: t});
+    if (scarce) { const n = (scarce[0].match(/\d+/) || [])[0]; add('scarcity', b.el, {text: t, number: n ? parseInt(n, 10) : null}); }
+    if (hit('urgency', b.text) && !countdowns.some(c => within(c.el, b.el))) add('urgency', b.el, {text: t, countdown: false, remaining_s: null, deadline: DATE.test(b.text)});
+    if (hit('reciprocity', fs ? b.text.replace(fs[0], ' ') : b.text)) add('reciprocity', b.el, {text: t});
+    if (hit('authority', b.text)) add('authority', b.el, {text: t});
+    if (fs) { const p = parsePrice(b.text.slice(fs.index)); add('free_shipping_threshold', b.el, {text: t, value: p ? p.value : null}); }
+    if (hit('lowest_price_30d', b.text)) { const p = parsePrice(b.text); add('lowest_price_30d', b.el, {text: t, value: p ? p.value : null}); }
+    if (hit('vat', b.text)) add('vat_statement', b.el, {text: t});
   }
 
   // ------------------------------------------------------------------ images, targets, accessibility
@@ -1125,7 +1252,8 @@
   const strip = list => list.map(({el, row, overlay, area: a, ...rest}) => rest);
   return {
     ...base, doc, jsonld, meta,
-    prices: strip(prices).slice(0, 80), ctas: strip(ctas), search, nav, products, filters, pdp, cart, forms,
+    prices: prices.slice(0, 80).map(({el, row, row_text, line, area: a, ...rest}) => ({...rest, in_card: inCard(el)})),
+    ctas: strip(ctas), search, nav, products, filters, pdp, cart, forms,
     overlays: overlays.slice(0, 8).map(({el, ...o}) => ({...o, coverage: Math.round(o.coverage * 1000) / 1000,
       interrupting: interrupting(o)})),
     trust, persuasion, images, targets: targetSizes, a11y, snippets, truncated, audit_ms: Math.round(performance.now() - T0),

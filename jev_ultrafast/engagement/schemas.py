@@ -123,7 +123,8 @@ class AuditPayload(TypedDict, total=False):
     #                     past ~30 KB only {@type, other keys: None}
     meta: dict  # {og_type, canonical, og_price_amount, og_price_currency, jsonld_types, microdata_products,
     #             microdata_main (schema.org Product itemscopes outside product cards), speculation_rules (bool)}
-    prices: list[dict]  # [{text, value, currency, strikethrough, rect, above_fold, near_text}]
+    prices: list[dict]  # [{text, value, currency, strikethrough, kind, label, rect, above_fold, near_text, itemprop,
+    #                       overlay, in_card (inside a product card)}]
     ctas: list[dict]  # [{label, lexicon_hit, rect, above_fold, fg, bg, contrast, area, primary_like}]
     search: dict  # {present, above_fold, width, has_autocomplete_attr, rect}
     nav: dict  # {links, categories:[{label, href}], breadcrumbs, generic_label_share, cart_link}
@@ -131,6 +132,7 @@ class AuditPayload(TypedDict, total=False):
     filters: dict  # {controls, sort, result_count_text, chips, pagination}
     pdp: dict  # {add_to_cart, add_to_cart_count (outside product cards), add_to_cart_all, stock_text, delivery_text,
     #            shipping_text, returns_text, images, zoom, variants, variant_selector,
+    #            variant_groups:[{label, kind, options, selected, first_available, rect}],
     #            reviews:{count_text, rating_text}}
     cart: dict  # {line_items:[{title, qty, price}], subtotal_text, shipping_text, total_text, checkout_cta,
     #             editable, prechecked_paid:[{label, price_text}]}
@@ -143,7 +145,8 @@ class AuditPayload(TypedDict, total=False):
     trust: dict  # {https, contact:{email, phone, address}, vat_id, policy_links:{returns, shipping, privacy, terms,
     #              contact}, payment_logos, badges}
     persuasion: dict  # {scarcity:[{text, number}], urgency:[{text, countdown, remaining_s}], reciprocity:[...],
-    #                   authority:[...], free_shipping_threshold:[...], lowest_price_30d:[...], vat_statement:[...]}
+    #                   authority:[...], free_shipping_threshold:[...], lowest_price_30d:[...], vat_statement:[...]};
+    #                   every item also has in_card, overlay and count (equal texts in one place are one item)
     images: dict  # {count, oversized:[{src, natural_w, display_w}], lazy_share, missing_alt}
     targets: dict  # {interactive, lt24, lt44, lt48}
     a11y: dict  # {img_missing_alt, inputs_missing_label, lang_missing, iframes, shadow_roots_open, shadow_roots_closed}
@@ -254,7 +257,8 @@ class JudgmentState(TypedDict, total=False):
 class StepSince(TypedDict, total=False):
     """window.__jevVitals.since(mark) read after an action; all counts are since the mark."""
 
-    first_response_ms: float | None  # first mutation / navigation / request after the action
+    first_response_ms: float | None  # first visible response after the action: a mutation or a navigation
+    first_request_ms: NotRequired[float | None]  # first request after the action (a request alone shows nothing)
     mutations: int  # records of non-ticker nodes (see vitals.js)
     mutations_total: NotRequired[int]  # every record, self-updating (ticker) nodes included; evidence only
     navigations: int  # history pushState/replaceState/popstate + document navigations + back-forward cache restores
