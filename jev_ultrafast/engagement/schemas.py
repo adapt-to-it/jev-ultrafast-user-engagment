@@ -305,8 +305,11 @@ class JourneyRecord(TypedDict, total=False):
     max_steps: int
     status: str  # running | done | blocked | stopped_at_checkout_boundary | budget_exhausted | error
     verification: dict | None  # {"passed": bool | None, "checks": {...}}; None only with checks["not_assessable"]
-    #                            ("bot_challenge", "journey_error", "cart_price_ambiguous", "cart_items_unreadable",
-    #                            "cart_price_unreadable") or checks["error"]
+    #                            ("bot_challenge", "journey_error", "navigation_error", "page_unreadable",
+    #                            "cart_unreadable", "final_page_unreadable", "cart_price_ambiguous",
+    #                            "cart_items_unreadable", "cart_price_unreadable") or checks["error"];
+    #                            checks["navigation_error"] = {url, error}: the journey ended on a page that did
+    #                            not load
     steps_path: str  # "steps.jsonl"
     optimal_steps: int | None  # R for Lostness / actions ratio, when known
     started_at: str
