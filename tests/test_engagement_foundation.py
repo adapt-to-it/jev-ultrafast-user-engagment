@@ -1173,11 +1173,12 @@ def test_mobile_profile_reaches_the_page_and_the_server(shop_server, transport):
     b = Browser("about:blank", transport=transport, browser_context_id=context, background=False,
                 prepare=lambda browser: apply_profile(transport, browser.session, "mobile"))
     url = shop_server.url("basic.html?profile=mobile")
+    since = len(shop_server.requests)
     b.navigate(url)
     state = b.evaluate("[innerWidth, devicePixelRatio, navigator.userAgent, navigator.language,"
                        " navigator.maxTouchPoints, document.visibilityState]")
     assert state[:2] == [390, 3] and "Headless" not in state[2] and state[3:] == ["it-IT", 5, "visible"]
-    headers = next(r["headers"] for r in reversed(shop_server.requests) if r["path"].endswith("profile=mobile"))
+    headers = next(r["headers"] for r in shop_server.requests[since:] if r["path"].endswith("profile=mobile"))
     assert "Headless" not in headers["User-Agent"] and "Headless" not in headers.get("sec-ch-ua", "")
     assert headers["Accept-Language"].startswith("it-IT,it;q=0.9")
     timed_fetch = f"(async t => {{ await fetch({json.dumps(url)}); return performance.now() - t; }})(performance.now())"

@@ -470,15 +470,17 @@ def scripted_host(observation):
     return "BLOCKED", None
 
 
-def assert_never_offered_a_pay_control(observations, shop_server):
+def assert_never_offered_a_pay_control(observations, requests):
+    """requests: the shop_server requests of this test only (the log is session-wide)."""
     labels = [e["label"] for o in observations for e in o["elements"]]
     assert labels and not [label for label in labels if PAY.forbidden(label)]
-    assert not [r for r in shop_server.requests if r["method"] != "GET" or r["path"].startswith("/pay")]
+    assert not [r for r in requests if r["method"] != "GET" or r["path"].startswith("/pay")]
 
 
 def test_host_journey_adds_a_product_under_50_eur_and_the_oracle_confirms_it(journey, shop_server, chromium):
     make, store = journey
     runner = make()
+    since = len(shop_server.requests)
     started = runner.start(shop_server.url("shop/index.html"),
                            "Aggiungi al carrello un paio di scarpe da corsa che costi meno di 50 euro",
                            oracle="cart_contains_item_under_price", oracle_params={"max_price": 50},
@@ -548,7 +550,7 @@ def test_host_journey_adds_a_product_under_50_eur_and_the_oracle_confirms_it(jou
     assert time_on_task["value"] == round(sum(s["execution_ms"] + s["settle_ms"] for s in executed))
     assert {p["page_id"] for p in run["pages"]} == {"mobile-journey-start", "mobile-verify-cart"}
     assert run["settings"]["device_profile"]["name"] == "mobile"
-    assert_never_offered_a_pay_control(seen, shop_server)
+    assert_never_offered_a_pay_control(seen, shop_server.requests[since:])
 
     probe = DirectTransport(chromium.ws_url)
     try:  # nothing of the journey's isolated context is left in the browser
@@ -562,6 +564,7 @@ def test_host_journey_adds_a_product_under_50_eur_and_the_oracle_confirms_it(jou
 def test_journey_stops_at_the_checkout_boundary_and_the_oracle_ignores_done(journey, shop_server):
     make, store = journey
     runner = make()
+    since = len(shop_server.requests)
     started = runner.start(shop_server.url("shop/product.html?id=3"), "Metti nel carrello la Brezza",
                            oracle="cart_not_empty", profile="desktop")
     observation, seen = started["observation"], [started["observation"]]
@@ -580,7 +583,7 @@ def test_journey_stops_at_the_checkout_boundary_and_the_oracle_ignores_done(jour
     # The agent never chose DONE; the cart is checked on its own page all the same.
     assert finished["status"] == "stopped_at_checkout_boundary" and finished["verification"]["passed"] is True
     assert finished["verification"]["checks"]["cart_source"] == "visited_cart_page"
-    assert_never_offered_a_pay_control(seen, shop_server)
+    assert_never_offered_a_pay_control(seen, shop_server.requests[since:])
     assert store.load(started["run_id"])["journey"]["status"] == "stopped_at_checkout_boundary"
 
 
@@ -602,6 +605,7 @@ def test_a_done_choice_is_not_success_when_the_oracle_disagrees(journey, shop_se
 def test_another_site_ends_the_journey_and_opened_tabs_are_closed(journey, shop_server):
     make, store = journey
     runner = make()
+    since = len(shop_server.requests)
     # The query stands for a GET with a side effect: the runner never requests a page by itself, so it runs once.
     started = runner.start(shop_server.url("shop/resi.html?add-to-cart=7"), "Leggi la politica di resi",
                            oracle="pdp_reached", profile="desktop")
@@ -639,13 +643,14 @@ def test_another_site_ends_the_journey_and_opened_tabs_are_closed(journey, shop_
     assert steps[0]["execution_ms"] == 0.0  # the harness's WAIT pause is not site time
     assert steps[2]["url_after"] == elsewhere and steps[2]["flags"]["external_nav"]
     assert steps[1]["flags"]["unexpected_nav"] and not steps[2]["flags"]["unexpected_nav"]
-    assert len([r for r in shop_server.requests if "add-to-cart=7" in r["path"]]) == 1
+    assert len([r for r in shop_server.requests[since:] if "add-to-cart=7" in r["path"]]) == 1
     assert any(w.startswith("left_shop: http://localhost:") for w in store.load(started["run_id"])["warnings"])
 
 
 def test_a_checkout_on_another_site_is_still_the_checkout_boundary(journey, shop_server):
     make, store = journey
     runner = make()
+    since = len(shop_server.requests)
     runner.start(shop_server.url("shop/resi.html"), "Vai alla cassa", oracle="cart_not_empty", profile="desktop")
     elsewhere = shop_server.url("shop/checkout.html").replace("127.0.0.1", "localhost")
     runner.tab.evaluate(f"document.body.prepend(Object.assign(document.createElement('a'), "
@@ -655,7 +660,7 @@ def test_a_checkout_on_another_site_is_still_the_checkout_boundary(journey, shop
     assert result["executed"] and result["status"] == "stopped_at_checkout_boundary"
     assert result["observation"]["url"] == elsewhere and result["observation"]["controls"] == []
     assert runner.finish()["status"] == "stopped_at_checkout_boundary"
-    assert not [r for r in shop_server.requests if r["method"] != "GET" or r["path"].startswith("/pay")]
+    assert not [r for r in shop_server.requests[since:] if r["method"] != "GET" or r["path"].startswith("/pay")]
 
 
 REDIRECT_TO_CHECKOUT = "setTimeout(() => { location.href = 'checkout.html'; }, 1200), true"
@@ -1140,6 +1145,7 @@ def test_a_beacon_does_not_cut_the_dead_click_window_short(journey, shop_server)
     """A click-tracking request is no answer: the settle still waits for the toast that comes 700 ms later."""
     make, store = journey
     runner = make()
+    since = len(shop_server.requests)
     started = runner.start(shop_server.url("shop/resi.html"), "Premi il pulsante", oracle="cart_not_empty",
                            profile="desktop")
     runner.tab.evaluate(BEACON_THEN_TOAST)
@@ -1148,7 +1154,7 @@ def test_a_beacon_does_not_cut_the_dead_click_window_short(journey, shop_server)
     metrics = result["step_metrics"]
     assert result["executed"] and metrics["mutations"] >= 1 and "dead_click" not in metrics["flags"], metrics
     assert "Fatto: avviso" in result["observation"]["text_excerpt"]
-    assert any(r["path"] == "/api/beacon" for r in shop_server.requests)
+    assert any(r["path"] == "/api/beacon" for r in shop_server.requests[since:])
     step = store.read_steps(started["run_id"])[-1]
     assert not step["flags"]["dead_click"] and step["since"]["mutations"] >= 1
 

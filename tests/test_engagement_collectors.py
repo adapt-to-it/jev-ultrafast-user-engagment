@@ -1257,11 +1257,12 @@ def test_a_click_into_a_prefetched_document_reports_no_load_timings(chromium, sh
     and load_page() of the same URL, a browser navigation, is a cold load."""
     transport, context, collector = frame_collector(chromium, profile="mobile")
     target = "/shop/resi.html?speculation=1"
+    since = len(shop_server.requests)  # the log is session-wide: only this test's prefetch counts
     browser = collector.open(shop_server.url("shop/speculation.html"))
     try:
         assert collector.applied_profile["prerendering"] == "disallowed"
         first = collector.collect(browser, stage="pdp", page_id="p1")
-        assert wait_for(lambda: any(r["path"] == target for r in shop_server.requests))  # the prefetch
+        assert wait_for(lambda: any(r["path"] == target for r in shop_server.requests[since:]))  # the prefetch
         time.sleep(0.5)  # its response reaches the prefetch cache
         before = len(shop_server.requests)
         for kind in ("mousePressed", "mouseReleased"):

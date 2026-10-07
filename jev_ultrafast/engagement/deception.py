@@ -2,11 +2,17 @@
 
 Raw results with their evidence; checks.py turns them into DPR confidences. Nothing is ever typed or bought: the only
 actions are consent-banner controls (one "manage" click for the consent test, then the run's consent policy, which
-never presses "manage" again) and the close control of an interrupting overlay, all observed elements that pass
-CheckoutGuard, executed once and logged to steps.jsonl with source "deception". Pages loaded here are not funnel pages:
-their snapshots are stored as "<profile>-deception-<n>" and they never enter run["pages"]. A visit that meets a bot
-challenge, Chrome's error page or no audit is no evidence: it is left out and named in result["errors"], and a test it
-leaves without its base is not assessed (never a clean 0).
+never presses "manage" again on that document) and the close control of an interrupting overlay, all observed elements
+that pass CheckoutGuard, executed once and logged to steps.jsonl with source "deception". Pages loaded here are not
+funnel pages: their snapshots are stored as "<profile>-deception-<n>" and they never enter run["pages"]. A visit that
+meets a bot challenge, Chrome's error page or no audit is no evidence: it is left out and named in result["errors"],
+and a test it leaves without its base is not assessed (never a clean 0).
+
+Consent state: product pages are compared with the funnel's in the consent state the funnel's tab ended with (its
+accept or reject, funnel_choice). A context that has not made that choice before its product visits (context 2 always
+starts without one; context 1 when the run's policy found no control for it on the layer "manage" opened) gets the
+run's policy on a fresh landing on settings.url first: a new document, so nothing is sent twice. result
+["consent_contexts"] records each context's choice and its landing.
 
 Scope: persuasion items audit.js marks as inside a product card (in_card: a related-products or recently-viewed card)
 or inside an overlay (overlay) are not the product's own and are left out. Without those flags, on a page that lists
@@ -148,6 +154,15 @@ def _funnel(pages: list[PageRecord], profile: str) -> dict[str, PageRecord]:
 
 def _pages(pages: list[PageRecord], profile: str) -> list[PageRecord]:
     return [p for p in pages if p.get("profile") == profile and p.get("stage") in STAGES and not p.get("repeat_of")]
+
+
+def funnel_choice(funnel: dict[str, PageRecord]) -> str | None:
+    """The consent choice the funnel's tab made (accept or reject, on the first page that recorded one); None."""
+    for stage in STAGES:
+        choice = ((funnel.get(stage) or {}).get("consent") or {}).get("choice")
+        if choice in ("accept", "reject"):
+            return choice
+    return None
 
 
 def _layer(audit: dict) -> dict | None:
@@ -513,7 +528,7 @@ def run_deception_tests(transport, settings, pages: list[PageRecord], *, profile
         "version": DECEPTION_VERSION, "profile": profile, "errors": [],
         "sneak_into_basket": sneak_into_basket(product, funnel.get("cart")),
         "prechecked_paid": prechecked_paid(funnel.get("cart"), funnel.get("checkout_entry")),
-        "nagging": nagging,
+        "nagging": nagging, "consent_contexts": [],
         "consent": _missing("home", "home_not_reached"),
         "countdown": _missing("pdp", "pdp_not_reached"),
         "low_stock": _missing("pdp", "pdp_not_reached"),
@@ -558,6 +573,9 @@ def _live_tests(live: _Live, result: dict, funnel: dict[str, PageRecord]) -> Non
             tab.lost()
     if not product_url:
         return
+    choice, contexts = funnel_choice(funnel), result["consent_contexts"]
+    made = ((result["consent"].get("applied") or {}).get("choice")) if home is not None else None
+    contexts.append(_aligned(live, tab, context=1, choice=choice, made=made))
     page_id, failures, others = product.get("page_id"), [], []
     first, record, failure = live.visit(tab, product_url, context=1, label="product visit 1", tick=True)
     failures.append(failure)
@@ -574,6 +592,7 @@ def _live_tests(live: _Live, result: dict, funnel: dict[str, PageRecord]) -> Non
         live.errors.append(f"context 2: {type(exc).__name__}: {str(exc)[:160]}")
         failures.append("context_unavailable")
     else:
+        contexts.append(_aligned(live, tab, context=2, choice=choice, made=None))
         if first is not None:
             time.sleep(max(0.0, MIN_GAP_S - (time.monotonic() - first["t"])))
         second, _, failure = live.visit(tab, product_url, context=2, label="product visit 2", tick=True)
@@ -632,9 +651,36 @@ def _consent(live: _Live, tab: Tab, home: PageRecord) -> dict:
     # is never pressed twice (the layer shown is what it opened, or it had no effect)
     current = tab.fresh_audit()
     if current and not failure:
-        tab.consent({**record, "audit": current}, live.settings.consent, stage="home",
-                    after_manage=bool((result.get("manage_click") or {}).get("executed")))
+        applied = tab.consent({**record, "audit": current}, live.settings.consent, stage="home",
+                              after_manage=bool((result.get("manage_click") or {}).get("executed")))
+        result["applied"] = {"choice": applied.get("choice"), "reason": applied.get("reason")}
     return result
+
+
+def _aligned(live: _Live, tab: Tab, *, context: int, choice: str | None, made: str | None) -> dict:
+    """Bring a context to the funnel's consent choice before its product visits (module docstring): when the funnel
+    chose accept or reject and the context has not (made: the choice its consent test ended with), a fresh landing on
+    settings.url gets the run's policy. {context, funnel_choice, choice[, landing, reason]}."""
+    out = {"context": context, "funnel_choice": choice, "choice": made or "none"}
+    if choice is None or made == choice:
+        return out
+    try:
+        record = live.load(tab, live.settings.url)
+    except FAILURES as exc:
+        live.errors.append(f"consent landing {context}: {type(exc).__name__}: {str(exc)[:160]}")
+        tab.lost()
+        return {**out, "reason": "error"}
+    out["landing"] = record.get("page_id")
+    if failure := visit_failure(record):
+        live.errors.append(f"consent landing {context}: {failure} ({record.get('page_id')})")
+        return {**out, "reason": f"revisit_{failure}"}
+    try:
+        applied = tab.consent(record, live.settings.consent, stage="home")
+    except FAILURES as exc:
+        live.errors.append(f"consent landing {context}: {type(exc).__name__}: {str(exc)[:160]}")
+        tab.lost()
+        return {**out, "reason": "error"}
+    return {**out, "choice": applied.get("choice"), "reason": applied.get("reason")}
 
 
 def _reappears(live: _Live, tab: Tab, record: PageRecord, url: str) -> dict:

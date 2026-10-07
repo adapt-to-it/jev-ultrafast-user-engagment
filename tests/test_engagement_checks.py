@@ -221,7 +221,7 @@ def test_paint_metrics_of_a_hidden_tab_and_other_documents_are_not_assessable_ne
     observations = checks.observations(run_of([hidden, soft, failed]))
     assert one(observations, "PERF.FCP", stage="home")["reason"] == "background_tab"
     assert one(observations, "PERF.TTFB", stage="home")["value"] == 400.0
-    assert one(observations, "PERF.LCP", stage="plp")["reason"] == "same_document"
+    assert one(observations, "PERF.LCP", stage="plp")["reason"] == "not_applicable:same_document"
     for kpi_id in ("PERF.LCP", "PERF.REQUESTS", "PTI.PRICE_VISIBLE_PDP", "FAI.PDP_CTA_ABOVE_FOLD"):
         row = one(observations, kpi_id, stage="pdp")
         assert not row["assessed"] and row["value"] is None and row["reason"] == "navigation_error"
@@ -229,6 +229,26 @@ def test_paint_metrics_of_a_hidden_tab_and_other_documents_are_not_assessable_ne
     observations = checks.observations(run_of([empty]))
     assert one(observations, "PERF.LCP", stage="home")["reason"] == "vitals_unavailable"
     assert one(observations, "CCL.HEADINGS", stage="home")["reason"] == "audit_unavailable"
+
+
+def test_timings_of_a_document_that_was_not_a_cold_navigation_are_not_applicable():
+    """Coordinator decision (b): a document the shop's speculation rules fetched before the click, or the document of
+    an earlier record, has no load timings; its network still counts, and the KPI stays assessed on the other pages."""
+    nulled = dict.fromkeys(("ttfb", "fcp", "lcp", "cls", "tbt_approx", "loaf_count"))
+    prefetched = page("cart", vitals={**nulled, "speculative": "prefetch"})
+    same = page("checkout_entry", vitals={**nulled, "soft_navigation": True})
+    observations = checks.observations(run_of([page("home"), page("plp"), page("pdp"), prefetched, same]))
+    for kpi_id in ("PERF.TTFB", "PERF.FCP", "PERF.LCP", "PERF.CLS", "PERF.TBT_APPROX", "PERF.LOAF_COUNT"):
+        for stage, reason in (("cart", "speculative_navigation"), ("checkout_entry", "same_document")):
+            row = one(observations, kpi_id, stage=stage)
+            assert (row["assessed"], row["value"], row["reason"]) == (False, None, f"not_applicable:{reason}"), row
+    assert one(observations, "PERF.BYTES_TOTAL", stage="cart")["value"] == 1234.6
+    lcp = scoring.aggregate(rows(observations, "PERF.LCP"), KPIS["PERF.LCP"])
+    assert lcp[:2] == (2000, True)
+    run = run_of([page(stage, vitals={**nulled, "speculative": "prerender"}) for stage in STAGES])
+    run["observations"] = checks.observations(run)
+    kpi = next(k for k in scoring.score_run(run)["overall"]["kpis"] if k["id"] == "PERF.LCP")
+    assert not kpi["applicable"] and not kpi["assessed"]  # no coverage lost, and never a fast page
 
 
 def test_unreached_stages_get_one_unassessed_row_with_the_recorded_reason():
@@ -287,12 +307,26 @@ def test_checkout_entry_decides_guest_and_forced_account_by_its_login_gate():
                                   "password_present": True}
     plain = checks.observations(run_of([page("cart", audit=no_guest_cart), page("checkout_entry")]))  # no gate
     assert one(plain, "FAI.GUEST_CHECKOUT")["value"] is True and one(plain, "FAI.FORCED_ACCOUNT")["value"] is False
-    # an optional password or a returning-customer login box beside the guest form is no gate (login_required false)
+    # an optional password ("Crea una password (facoltativo)") forces no account
     optional = {"forms": {"password_present": True, "password_required": False, "login_required": False,
                           "guest_option": False}}
     rows_ = checks.observations(run_of([page("checkout_entry", audit=optional)]))
     assert one(rows_, "FAI.GUEST_CHECKOUT", stage="checkout_entry")["value"] is True
     assert one(rows_, "FAI.FORCED_ACCOUNT", stage="checkout_entry")["value"] is False
+    # rule d reads the gate audit.js judges, never a password flag: a returning-customer login box beside the shipping
+    # form (a required current-password, login_required false) is no gate; a required registration password is one
+    # (audit.js sets login_required, even beside an address form); a guest option still wins
+    split = {"password_present": True, "password_required": True, "login_required": False, "guest_option": False}
+    registration = {**split, "login_required": True}
+    for forms, forced in ((split, False), (registration, True), ({**registration, "guest_option": True}, False),
+                          ({"password_present": True, "login_required": False}, False),
+                          ({"password_present": False, "login_required": False}, False)):
+        rows_ = checks.observations(run_of([page("checkout_entry", audit={"forms": forms})]))
+        row = one(rows_, "FAI.FORCED_ACCOUNT", stage="checkout_entry")
+        assert row["value"] is forced, forms
+        assert one(rows_, "FAI.GUEST_CHECKOUT", stage="checkout_entry")["value"] is not forced, forms
+        base = {"guest_option": False, "password_present": False, "login_required": False}  # STAGE_AUDIT's forms
+        assert row["evidence"] == {**base, **forms}  # the flags audit.js read; an older audit has fewer
 
 
 def test_the_checkout_entry_prevails_and_the_cart_guest_control_counts_only_without_it():
@@ -1132,7 +1166,15 @@ def test_a_cart_row_decided_because_the_checkout_was_unreadable_says_why():
         assert rows_[0]["evidence"] == {"guest_option": True, "checkout_entry": {
             "page_id": "mobile-checkout_entry-1", "reason": "navigation_error"}}
     plain = rows(checks.observations(run_of([page("cart")])), "FAI.GUEST_CHECKOUT")
-    assert plain[0]["evidence"] == {"guest_option": True}
+    assert plain[0]["evidence"] == {"guest_option": True, "checkout_entry": {"page_id": None, "reason": "not_reached"}}
+    # a checkout click that ended on Chrome's error page keeps that page as "extra": the stage's reason says why
+    error = page("checkout_entry", classification={"type": "other", "signals": ["navigation_error"]}, audit={})
+    error["stage"] = "extra"
+    missing = [{"stage": "checkout_entry", "profile": "mobile", "reason": "navigation_error"}]
+    for kpi_id, value in (("FAI.GUEST_CHECKOUT", True), ("FAI.FORCED_ACCOUNT", False)):
+        rows_ = rows(checks.observations(run_of([page("cart"), error], not_assessable=missing)), kpi_id)
+        assert [(o["stage"], o["value"]) for o in rows_] == [("cart", value)]
+        assert rows_[0]["evidence"]["checkout_entry"] == {"page_id": None, "reason": "navigation_error"}
 
 
 @pytest.mark.parametrize("pdp, value, reason, gated", [

@@ -719,6 +719,56 @@ def test_only_a_ticking_countdown_is_compared_between_visits(monkeypatch, no_wai
                                    "static": ["Termina tra 00:14:58"]}
 
 
+class ConsentVisits(ScriptedVisits):
+    """Scripted visits whose tabs record each application of the consent policy: (page_id, policy)."""
+
+    def __init__(self, loads, outcome):
+        super().__init__(loads)
+        self.outcome, self.applied = outcome, []
+
+    def live(self):
+        script = self
+
+        class ConsentTab(ScriptedVisitTab):
+            def consent(self, record, policy, *, stage, after_manage=False):
+                script.applied.append((record["page_id"], policy))
+                return script.outcome
+
+        class Live(deception._Live):
+            def tab(self):
+                tab = ConsentTab(script)
+                self.tabs.append(tab)
+                return tab
+        return Live
+
+
+@pytest.mark.parametrize("made, landings", [({"choice": "accept", "via": "first_layer"}, [2, 4]),
+                                            ({"choice": "none", "reason": "not_blocking"}, [])])
+def test_revisits_are_made_in_the_consent_state_of_the_funnel(monkeypatch, no_waits, made, landings):
+    """The funnel accepted the banner: context 1 (whose consent test made no choice) and context 2 (which starts with
+    none) get the run's policy on a fresh landing before their product visits. A funnel that made no choice: none."""
+    script = ConsentVisits([pdp_record("v1", stock=2), pdp_record("v2", stock=2)],
+                           {"choice": "accept", "reason": "policy accept"})
+    monkeypatch.setattr(deception, "_Live", script.live())
+    funnel = [{"page_id": "mobile-home-1", "profile": "mobile", "stage": "home", "url": SHOP, "consent": made,
+               "audit": {"doc": {"word_count": 30}}}, pdp_record("mobile-pdp-1", stock=2)]
+    result = deception.run_deception_tests(None, EngagementSettings(url=SHOP, consent="accept"), funnel,
+                                           profile="mobile", guard=GUARD)
+    assert script.applied == [(f"mobile-deception-{n}", "accept") for n in landings]
+    choice = "accept" if landings else None
+    assert result["consent_contexts"] == [
+        {"context": n, "funnel_choice": choice, "choice": choice or "none",
+         **({"landing": f"mobile-deception-{landing}", "reason": "policy accept"} if landings else {})}
+        for n, landing in zip((1, 2), landings or (None, None))]
+    assert result["errors"] == [] and [v["context"] for v in result["low_stock"]["visits"]] == [1, 2]
+    # a context whose consent test already made the funnel's choice loads nothing more
+    live = deception._Live(None, EngagementSettings(url=SHOP), GUARD, profile="mobile", store=None, run_id=None,
+                           say=print, errors=[])
+    live.load = None  # never called
+    assert deception._aligned(live, None, context=1, choice="reject", made="reject") == {
+        "context": 1, "funnel_choice": "reject", "choice": "reject"}
+
+
 # ---------------------------------------------------------------- phase B: uncertain clicks, consent gating, status
 
 
@@ -1005,6 +1055,42 @@ def test_a_close_without_effect_is_not_sent_again_by_a_later_clear_way(scripted)
     assert closes == [(True, None, False), (False, "sent_earlier", None)]
 
 
+class OriginTransport(FakeTransport):
+    """The document's performance.timeOrigin, except the reads numbered in failing: a busy main thread (the mobile
+    profile's 4x CPU throttle) times Runtime.evaluate out, so Tab.value reads None."""
+
+    def __init__(self, failing):
+        super().__init__()
+        self.failing, self.reads = set(failing), 0
+
+    def call(self, method, session_id=None, *, timeout=30.0, **params):
+        if params.get("expression") != "performance.timeOrigin":
+            return super().call(method, session_id, timeout=timeout, **params)
+        self.reads += 1
+        if self.reads in self.failing:
+            raise TimeoutError("Runtime.evaluate timed out")
+        return {"result": {"value": 1700000000123.4}}
+
+
+@pytest.mark.parametrize("failing", [(), (1,), (3,)])
+def test_a_document_whose_origin_could_not_be_read_never_gets_a_control_twice(scripted, failing):
+    """The newsletter's "Chiudi" executes without effect and the add-to-cart is covered: the stale re-observe's
+    clear_way pass reads the origin again. An origin read that timed out, on either click, is no new document."""
+    pdp = {"add_to_cart": {"present": True, "label": "Aggiungi al carrello"}}
+    shop = StuckShop([NEWSLETTER], controls=["Aggiungi al carrello"], pdp=pdp, stuck={"Chiudi"})
+    crawl = covered_crawl(shop, covered={"Aggiungi al carrello": "newsletter"})
+    crawl.tab.transport = OriginTransport(failing)
+    product = pdp_of(shop)
+    with pytest.raises(Stop, match="add_to_cart_failed"):
+        crawl.add_to_cart(product)
+    assert crawl.tab.transport.reads == 4 and crawl.tab.browser.sent == ["Chiudi"]  # read 3: the second "Chiudi"
+    closes = [(o["executed"], o["reason"]) for o in product["probes"]["add_to_cart"]["overlays"]]
+    assert closes == [(True, None), (False, "sent_earlier")]
+    # another known origin at the same URL is another document, unless the stored one was never read
+    assert crawl.tab.was_sent(SHOP, 1.0, "chiudi") is (1 in failing)
+    assert crawl.tab.was_sent(SHOP, None, "chiudi") and not crawl.tab.was_sent(SHOP, None, "iscriviti")
+
+
 def test_home_closes_again_only_the_overlays_whose_close_was_never_sent(scripted):
     """A promo whose close executes without effect and a newsletter covered by the consent banner: after the consent
     click only the newsletter's decline is tried again; the promo's "Chiudi" is never sent twice."""
@@ -1076,6 +1162,33 @@ def test_a_click_that_ends_on_an_error_page_never_counts_as_its_stage(monkeypatc
     assert "checkout_entry" not in deception._funnel(run["pages"], "mobile")  # no funnel page for the DPR tests
 
 
+def test_an_add_to_cart_that_ends_on_an_error_page_is_no_empty_cart(monkeypatch):
+    """The cart was never reached: the cart DPR tests carry the stage's navigation_error, never "empty_cart"."""
+    monkeypatch.setattr(Tab, "await_effect", lambda self, origin, **kw: "navigated")
+    pdp = {"add_to_cart": {"present": True, "label": "Aggiungi al carrello"}, "price": {"value": 49.9}}
+    shop = ScriptedShop(controls=["Aggiungi al carrello"], pdp=pdp)
+    collector = ErrorPageCollector(shop)
+    crawl = Crawl(collector, EngagementSettings(url=SHOP, profiles=["mobile"]), profile="mobile", guard=GUARD)
+    crawl.tab.browser = collector.browser
+    product = {**pdp_of(shop), "profile": "mobile", "stage": "pdp"}
+    with pytest.raises(Stop) as stop:
+        crawl.cart(product)
+    crawl.stop(stop.value)
+    error = "cart: the click led to Chrome's error page"
+    assert [(p["stage"], p["notes"]) for p in crawl.pages] == [("extra", [error])]
+    assert {m["stage"]: m["reason"] for m in crawl.missing} == {"cart": "navigation_error",
+                                                                "checkout_entry": "navigation_error"}
+    pages = [product, *crawl.pages]
+    funnel = deception._funnel(pages, "mobile")
+    tests = {"sneak_into_basket": deception.sneak_into_basket(product, funnel.get("cart")),
+             "prechecked_paid": deception.prechecked_paid(funnel.get("cart"), funnel.get("checkout_entry"))}
+    run = {"settings": {"profiles": ["mobile"]}, "pages": pages, "not_assessable": crawl.missing,
+           "deception": {"mobile": tests}}
+    rows = [o for o in checks.observations(run)
+            if o["kpi_id"] in ("DPR.SNEAK_INTO_BASKET", "DPR.PRECHECKED_PAID_ADDONS")]
+    assert [(o["assessed"], o["stage"], o["reason"]) for o in rows] == [(False, "cart", "navigation_error")] * 2
+
+
 class CartLinkShop(ScriptedShop):
     def __init__(self, href, **kwargs):
         super().__init__(controls=["Aggiungi al carrello"], pdp={"add_to_cart": {"present": True,
@@ -1105,6 +1218,40 @@ def test_the_cart_stage_needs_a_cart(monkeypatch, href, pages):
         crawl.cart(pdp_of(shop))
     assert (stop.value.stage, stop.value.reason, stop.value.then) == ("cart", "not_found", "cart_not_found")
     assert [(p["page_id"], p["stage"]) for p in crawl.pages] == pages
+
+
+class LandingCollector(ScriptedCollector):
+    """The add-to-cart click navigates to a page the classifier calls "other", with the audit given."""
+
+    def __init__(self, shop, landed):
+        super().__init__(shop)
+        self.landed = landed
+
+    def collect(self, browser, *, stage, page_id):
+        url = f"{SHOP}ordine/riepilogo"
+        return {"page_id": page_id, "profile": "mobile", "stage": stage, "url": url, "final_url": url,
+                "classification": {"type": "other", "signals": []}, "audit": self.landed}
+
+
+@pytest.mark.parametrize("landed, stage", [(CartShop().audit(), "cart"), ({"doc": {"word_count": 20}}, "extra")])
+def test_a_cart_opened_by_the_add_to_cart_is_accepted_on_its_evidence(monkeypatch, landed, stage):
+    """The navigated branch accepts the page as the URL branch does (is_cart: lines and a total make a cart whatever
+    its classification); a page without cart evidence is kept as "extra" and the cart link is looked for."""
+    monkeypatch.setattr(Tab, "await_effect", lambda self, origin, **kw: "navigated")
+    shop = CartLinkShop("#")  # a mini-cart toggle: no cart URL to fall back on
+    collector = LandingCollector(shop, landed)
+    crawl = Crawl(collector, EngagementSettings(url=SHOP), profile="mobile", guard=GUARD)
+    crawl.tab.browser = collector.browser
+    product = pdp_of(shop)
+    if stage == "cart":
+        assert crawl.cart(product)["stage"] == "cart"
+        assert (product["probes"]["add_to_cart"]["cart_lines"], product["probes"]["add_to_cart"]["cart_empty"]) == (
+            1, False)
+    else:
+        with pytest.raises(Stop, match="not_found"):
+            crawl.cart(product)
+    assert [(p["page_id"], p["stage"]) for p in crawl.pages] == [("mobile-cart-1", stage)]
+    assert collector.browser.acted == ["Aggiungi al carrello"]
 
 
 def test_a_small_bar_gets_no_second_click_after_a_reject_that_may_have_landed(scripted):

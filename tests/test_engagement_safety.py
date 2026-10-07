@@ -338,6 +338,7 @@ def observe(transport, url):
 
 
 def test_guard_on_the_fixture_checkout(shop_server, transport):
+    since = len(shop_server.requests)  # the log is session-wide: earlier tests' requests (a beacon POST) are not ours
     url = shop_server.url("shop/checkout.html")
     guard = CheckoutGuard(shop_server.url("shop/index.html"), lexicon_for("it"))
     browser, state = observe(transport, url)
@@ -360,7 +361,7 @@ def test_guard_on_the_fixture_checkout(shop_server, transport):
         assert guard.should_stop("checkout")
     finally:
         browser.close()
-    assert not [r for r in shop_server.requests if r["method"] == "POST"]
+    assert not [r for r in shop_server.requests[since:] if r["method"] == "POST"]
 
 
 def test_guard_on_the_fixture_cart_allows_only_the_quantity_field(shop_server, transport):

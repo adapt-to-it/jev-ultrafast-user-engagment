@@ -13,20 +13,23 @@ b. Site KPIs: one row per profile, page_id None, from the reached pages of their
 c. Comparisons need their base: PTI.FUNNEL_PRICE_DELTA and PTI.UNEXPLAINED_FEES need the product page and the cart;
    the checkout entry only extends the chain (a checkout page that cannot be read is skipped, evidence
    steps_skipped). An empty cart (crawler.cart_empty: no line and no total above zero, or the page says so) is no
-   base, and neither
-   are the cart KPIs that depend on its contents (CTA salience, delivery time, fees, shipping shown, editable lines):
-   not assessed, "empty_cart". A cart with a total but no line audit.js could parse is not empty: its editable
-   controls count when seen ("cart_lines_not_recognised" when not), and a checkout CTA audit.js did not recognise is
-   "checkout_cta_not_found", never a salience of 0.
+   base, and neither are the cart KPIs that depend on its contents (CTA salience, delivery time, fees, shipping shown,
+   editable lines): not assessed, "empty_cart". A cart with a total but no line audit.js could parse is not empty: its
+   editable controls count when seen ("cart_lines_not_recognised" when not), and a checkout CTA audit.js did not
+   recognise is "checkout_cta_not_found", never a salience of 0.
 d. FAI.GUEST_CHECKOUT and FAI.FORCED_ACCOUNT (CONTRACTS "Checkout evidence"): when the checkout entry was reached and
-   assessable it is the only evidence (guest = forms.guest_option or not forms.login_required: a blocking login gate);
-   otherwise a cart with a guest control gives a row (guest true, forced false); neither: not assessed with the
-   checkout stage's reason. Both aggregate with "any" (kpis.py): the checkout prevails and the two never both read true.
+   assessable it is the only evidence (guest = forms.guest_option or not forms.login_required, the account gate
+   audit.js judges: a login box beside an address form is not a gate, a required registration password is; the
+   password flags are evidence only); otherwise a cart with a guest control gives a row (guest true, forced false);
+   neither: not assessed with the checkout stage's reason. Both aggregate with "any" (kpis.py): the checkout prevails
+   and the two never both read true.
 e. "not_applicable:*" only for what exists and does not apply (no variants, no strikethrough price, no form fields, a
    product that cannot be bought: crawler.unavailable() gives FAI.PDP_CTA_ABOVE_FOLD and the product-page
-   CCL.CTA_SALIENCE "not_applicable:out_of_stock"). An add-to-cart disabled only until a variant is picked counts as
-   enabled for FAI.PDP_CTA_ABOVE_FOLD (evidence disabled_until_variant): the KPI is about reaching it without
-   scrolling.
+   CCL.CTA_SALIENCE "not_applicable:out_of_stock"; the load timings of a document that was not a cold navigation:
+   "not_applicable:speculative_navigation" for one the shop's speculation rules fetched before the click,
+   "not_applicable:same_document" for the document of an earlier record). An add-to-cart disabled only until a
+   variant is picked counts as enabled for FAI.PDP_CTA_ABOVE_FOLD (evidence disabled_until_variant): the KPI is about
+   reaching it without scrolling.
 f. Producer-dependent scope: PTI.STRIKETHROUGH_LOWEST30 compares struck prices and lowest-30-days statements inside
    and outside product cards only when audit.js marks both (in_card); without the marks one statement on the page
    is enough (evidence statement_scope "unknown"), since a card statement and a page footnote cannot be told apart.
@@ -124,14 +127,17 @@ def _norm(text) -> str:
 
 # ---------------------------------------------------------------- PERF (vitals, network, errors)
 def _vital(key: str, digits: int = 1):
+    """A load timing of the page's document. A document that was not a cold navigation has none to report: one the
+    shop's speculation rules fetched before the click (vitals.speculative) or the document of an earlier record
+    (vitals.soft_navigation) is "not_applicable", never a fast page."""
     def check(page):
         vitals = page.get("vitals") or {}
+        if vitals.get("speculative"):
+            _na("not_applicable:speculative_navigation")
+        if vitals.get("soft_navigation"):
+            _na("not_applicable:same_document")
         value = vitals.get(key)
         if value is None:
-            if vitals.get("soft_navigation"):
-                _na("same_document")
-            if vitals.get("speculative"):
-                _na("speculative_navigation")
             if key in PAINT and vitals.get("visibility_state_at_load") not in (None, "visible"):
                 _na("background_tab")
             _na("unavailable" if vitals else "vitals_unavailable")
@@ -976,12 +982,15 @@ def _page_rows(kpi: Kpi, profile: str, view: _View) -> list[Observation]:
 
 
 def _account_rows(kpi: Kpi, profile: str, view: _View) -> list[Observation]:
-    """Rule d. A reached, assessable checkout entry is the only evidence: guest unless audit.js saw a blocking login
-    gate there (login_required; an optional password or a returning-customer box is no gate). Otherwise a cart with a
-    guest control gives a row (guest true, forced false), conclusive on its own. Neither: not assessed with the checkout
-    stage's reason (a checkout page that could not be read keeps its own), plus the cart's when it was not reached.
-    A cart row decided because the checkout page could not be read carries that page and its reason in evidence
-    (checkout_entry). Both KPIs aggregate with "any" (kpis.py): the checkout prevails, so they never both read true."""
+    """Rule d. A reached, assessable checkout entry is the only evidence: guest when it offers a guest option or has no
+    account gate (forms.login_required; audit.js judges it: a login box beside an address form is not a gate, a
+    required registration password is). The password flags it read are evidence, not part of the decision; a flag an
+    older audit lacks is left out of evidence. Otherwise a cart with a guest control gives a row (guest true, forced
+    false), conclusive on its own. Neither: not assessed with the checkout stage's reason (a checkout page that could
+    not be read keeps its own), plus the cart's when it was not reached. A cart row decided without a readable
+    checkout page says why in evidence.checkout_entry: the page that could not be read and its reason, or page_id None
+    and the stage's reason when no checkout page was kept. Both KPIs aggregate with "any" (kpis.py): the checkout
+    prevails, so they never both read true."""
     forced = kpi.id == "FAI.FORCED_ACCOUNT"
     rows, failed = [], []
     for page in (g[0] for g in view.groups(profile, ("checkout_entry",))):
@@ -992,14 +1001,15 @@ def _account_rows(kpi: Kpi, profile: str, view: _View) -> list[Observation]:
             continue
         guest = bool(forms.get("guest_option")) or not forms.get("login_required")
         rows.append(_row(kpi, (not guest) if forced else guest, profile=profile, page=page, evidence={
-            k: bool(forms.get(k)) for k in ("guest_option", "login_required", "password_required",
-                                            "password_present")}))
+            k: bool(forms[k]) for k in ("guest_option", "login_required", "password_required", "password_present")
+            if k in forms}))
     if rows:
         return rows + failed
     carts = [g[0] for g in view.groups(profile, ("cart",))]
-    evidence = {"guest_option": True}
-    if failed:  # the checkout page was reached but could not be read: why the cart decides
-        evidence["checkout_entry"] = {"page_id": failed[0]["page_id"], "reason": failed[0]["reason"]}
+    # why the cart decides: the checkout page that could not be read, or the reason no checkout page was kept
+    checkout = {"page_id": failed[0]["page_id"], "reason": failed[0]["reason"]} if failed else {
+        "page_id": None, "reason": view.reason("checkout_entry", profile)}
+    evidence = {"guest_option": True, "checkout_entry": checkout}
     rows = [_row(kpi, not forced, profile=profile, page=page, evidence=dict(evidence)) for page in carts
             if (_audit(page).get("forms") or {}).get("guest_option")]
     if rows:

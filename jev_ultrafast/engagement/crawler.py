@@ -7,10 +7,11 @@ else is Browser.act() on one observed element, consulted with CheckoutGuard firs
 and logged to steps.jsonl before its result is observed. A StalePage means nothing was sent: the page is cleared of
 late overlays, observed again and the action is tried once more (stale_reobserved in the probe); a second StalePage is
 a failure. Every control sent is remembered by the tab and never sent again on the same document (its URL,
-performance.timeOrigin and label; reason "sent_earlier"), so a click without a visible effect is not repeated by a
-later clear-the-way pass (a close whose overlay went away frees its label: the same label elsewhere is another
-control); a click whose Browser.act() failed after it may have reached the page (CDP timeout or error)
-is never sent again on that page URL (reason "uncertain_earlier"). Nothing is ever typed but the search probe's word,
+performance.timeOrigin and label; an origin that could not be read matches every document at that URL; reason
+"sent_earlier"), so a click without a visible effect is not repeated by a later clear-the-way pass (a close whose
+overlay went away frees its label: the same label elsewhere is another control); a click whose Browser.act() failed
+after it may have reached the page (CDP timeout or error) is never sent again on that page URL (reason
+"uncertain_earlier"). Nothing is ever typed but the search probe's word,
 and the run stops at the first checkout page without filling or submitting anything there. A click that ends on
 Chrome's error page keeps that page as "extra" evidence and stops the funnel ("navigation_error"); a cart URL that
 does not lead to a cart (a "#" mini-cart link, a login redirect) is "extra" too and stops it ("not_found").
@@ -286,9 +287,10 @@ class Tab:
     """One tab of a profile's browser context: page loads through the collector, and observed actions that pass
     CheckoutGuard, executed once and logged to steps.jsonl before their result is observed. The deception tests use
     their own Tab in their own context (source "deception" in steps.jsonl). policy is the consent policy clear_way()
-    applies (settings.consent). sent holds (url, timeOrigin, label) of every control sent to a document, uncertain
-    (url, label) of clicks that may have reached the page although Browser.act() failed: neither is sent again there.
-    opened counts the browser tabs opened (a lost tab is replaced by a new one)."""
+    applies (settings.consent). sent holds (url, timeOrigin, label) of every control sent to a document (timeOrigin
+    None when it could not be read: was_sent), uncertain (url, label) of clicks that may have reached the page although
+    Browser.act() failed: neither is sent again there. opened counts the browser tabs opened (a lost tab is replaced
+    by a new one)."""
 
     def __init__(self, collector, guard, *, profile: str, policy: str = "auto", source: str = "crawler"):
         self.collector, self.guard, self.profile, self.policy = collector, guard, profile, policy
@@ -426,19 +428,24 @@ class Tab:
             "t_wall": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         })
 
+    def was_sent(self, url: str, origin, label: str) -> bool:
+        """label was sent to this document, or may have been: an origin that could not be read (None: a busy page's
+        Runtime.evaluate timed out) matches every document at url, on either side."""
+        return any(u == url and lb == label and (o == origin or o is None or origin is None) for u, o, lb in self.sent)
+
     def act(self, action: dict, page: dict, page_type: str | None, *, purpose: str, stage: str,
             text: str | None = None, origin=_READ) -> tuple[bool, str | None]:
         """Guard, then one Browser.act(). (executed, reason). A StalePage means nothing was sent: not executed. A
         control sent to a document (page URL, origin = its performance.timeOrigin, label) is never sent to it again:
-        "sent_earlier"; an act that failed after it may have reached the page is never sent again on that page URL:
-        "uncertain_earlier"."""
+        "sent_earlier" (an unknown origin counts as the same document: was_sent); an act that failed after it may
+        have reached the page is never sent again on that page URL: "uncertain_earlier"."""
         url, label = str(page.get("url") or ""), _norm(action.get("label"))
         if (url, label) in self.uncertain:
             return False, "uncertain_earlier"
         if origin is _READ:
             origin = self.value("performance.timeOrigin")
         sent = (url, origin, label)
-        if sent in self.sent:
+        if self.was_sent(url, origin, label):
             return False, "sent_earlier"
         ok, why = self.guard.allowed_action(action, page, page_type)
         if ok and action.get("kind") == "fill":
@@ -908,7 +915,7 @@ class Crawl:
     def cart(self, product: PageRecord) -> PageRecord:
         if self.add_to_cart(product) == "navigated":  # e.g. a shop that opens the cart after adding
             record = self.after_click("cart")
-            if _type(record) == "cart":
+            if is_cart(record):  # the same acceptance as a cart URL's page: its cart link is that page again
                 return self.contents(product, record)
             self.demote(record, "cart")
         url = self.cart_url(product)
