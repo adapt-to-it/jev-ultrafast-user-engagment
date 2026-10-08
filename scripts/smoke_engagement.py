@@ -20,9 +20,13 @@ answer through model.validate_choice), so the printed counts, latencies and toke
 the runs record, and the two are compared. --dump-requests writes each request with its answer (never the key).
 --repeat N judges copies of the audit N more times (cache off, nothing stored) and prints the label agreement per task.
 
-Exit 0 when every check of the mode passed, 1 when one failed, 2 without TYPESAFE_API_KEY. Timings are printed, never
-asserted. smoke_summary.json (requests, tokens, p50/p95 latencies, per-rubric probabilities, checks) is written into
-the audit run's directory (the journey's when the audit was skipped).
+Once TypeSafe refuses the key (HTTP 401 or 403: wrong, revoked or expired) the later TypeSafe phases (judge, repeat,
+journey) are skipped and the check typesafe_key_accepted fails: they would only be refused again.
+
+Exit 0 when every check of the mode passed, 1 when one failed, 2 without TYPESAFE_API_KEY or with an --audit-run that
+is no audit under --artifacts. Timings are printed, never asserted. smoke_summary.json (requests, tokens, p50/p95
+latencies, per-rubric probabilities, checks) is written into the audit run's directory (the journey's when the audit
+was skipped, the artifacts directory when there is no run).
 """
 
 import argparse
@@ -30,6 +34,7 @@ import copy
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -53,6 +58,7 @@ SYSTEMONE = judges.SYSTEMONE
 FIXTURE_GOAL = "Aggiungi al carrello un prodotto"
 SLOW_MS, BIG_TOKENS = 1500, 20_000  # a warning, never a failure
 PHASES = ("audit", "judge", "repeat", "journey")
+ASKS_TYPESAFE = ("judge", "repeat", "journey")  # skipped once TypeSafe refused the key (the audit asks only on a miss)
 
 
 # ---------------------------------------------------------------- the fixture shop (as tests/conftest.py serves it)
@@ -390,6 +396,10 @@ def checks(summary: dict, recorder: Recorder, shop: ShopServer | None, fixture: 
         check("journey_calls_match_the_run", sent == recorded and texts == calls.get("text"), True,
               f"sent {sent} TypeSafe + {texts} text, run records {calls.get('choose')} decisions + "
               f"{calls.get('failed') or 0} failed + {calls.get('text')} text")
+    refused = key_refused(recorder)
+    check("typesafe_key_accepted", refused is None, True,
+          f"{refused['error']} at request {refused['n']} ({refused['phase']}): check TYPESAFE_API_KEY; the later "
+          "TypeSafe phases were skipped" if refused else "")
     failed = [c for c in recorder.calls if c["error"] and c["kind"] == "typesafe" and c["phase"] != "repeat"]
     check("typesafe_answers_valid", not recorder.invalid and not failed, True,
           f"{len(recorder.invalid)} invalid answers, {len(failed)} failed requests")
@@ -421,8 +431,33 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+def audit_run_error(args) -> str | None:
+    """Why --audit-run cannot be judged and scored (None when it can): the run must be an audit stored under
+    --artifacts, as the default artifacts directory is a new empty one."""
+    if not args.audit_run:
+        return None
+    if not args.artifacts:
+        return "--audit-run needs --artifacts (the directory that holds that run)"
+    try:
+        run = RunStore(Path(args.artifacts).resolve()).load(args.audit_run)
+    except (OSError, ValueError) as exc:
+        return f"--audit-run: {exc} in --artifacts {args.artifacts}"
+    if run.get("kind") != "audit":
+        return f"--audit-run: {args.audit_run} is a {run.get('kind')} run, not an audit"
+    return None
+
+
+def key_refused(recorder: Recorder) -> dict | None:
+    """The first TypeSafe request refused with HTTP 401 or 403 (a wrong, revoked or expired key), else None."""
+    return next((c for c in recorder.calls if c["kind"] == "typesafe" and c["error"]
+                 and re.search(r"HTTP 40[13]\b", c["error"])), None)
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if problem := audit_run_error(args):
+        print(problem, file=sys.stderr)
+        return 2
     cli.load_environment()  # ./.env, then the plugin's env file when JEV_ENGAGEMENT_ENV names one
     keys = mcp_server.load_keys()
     if not keys["typesafe_key"]:
@@ -451,10 +486,14 @@ def main(argv=None) -> int:
     service = EngagementService(RunStore(artifacts))
     summary = {"mode": "fixture" if fixture else "url", "url": url, "started_at": datetime.now(UTC).isoformat(),
                "typesafe_model": os.environ.get("TYPESAFE_MODEL") or "jev-latest", "text_helper": keys["text_helper"],
-               "artifacts": str(artifacts), "errors": {}}
+               "artifacts": str(artifacts), "errors": {}, "skipped": {}}
     audit_id, journey_id = args.audit_run, None
 
     def phase(name, fn):
+        if name in ASKS_TYPESAFE and (refused := key_refused(recorder)):  # every request would be refused too
+            summary["skipped"][name] = f"TypeSafe refused the key ({refused['error']}) at request {refused['n']}"
+            print(f"  {name} skipped: {summary['skipped'][name]}", file=sys.stderr)
+            return None
         recorder.phase = name
         try:
             return fn()
@@ -516,10 +555,11 @@ def main(argv=None) -> int:
     store = RunStore(artifacts)
     target = audit_id or journey_id
     summary = json.loads(json.dumps(summary, ensure_ascii=False, default=str))
-    if target:
+    if target and store.path(target).is_dir():
         store.write_json(target, "smoke_summary.json", summary)
         where = store.path(target) / "smoke_summary.json"
-    else:
+    else:  # no run, or one that is not under --artifacts
+        artifacts.mkdir(parents=True, exist_ok=True)
         where = artifacts / "smoke_summary.json"
         where.write_text(json.dumps(summary, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
     print(f"\n{'PASSED' if summary['passed'] else 'FAILED'}; summary: {where}")

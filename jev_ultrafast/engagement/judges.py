@@ -22,6 +22,7 @@ import httpx
 
 from .. import model as typesafe  # post_json and validate_choice are looked up at call time (tests patch post_json)
 from .judgments import (
+    JEV_BACKEND,
     JEV_JUDGE_ID,
     MAX_QUOTES,
     MIN_QUOTE_CHARS,
@@ -126,8 +127,8 @@ def prompt_id(judge) -> str:
     """Cache namespace of a judge: its backend id and the instructions it receives (host verdicts use HOST_PROMPT).
 
     The backend id is a stable attribute, so renaming a class never drops the cache; samples of different backends
-    are never shared, because each backend wraps the instructions differently. A judge with its own instructions
-    (JevJudge) names their hash in prompt_version.
+    are never shared, because each backend wraps the instructions differently. A judge with its own request
+    (JevJudge) names its fingerprint in prompt_version (jev_prompt_version).
     """
     backend = getattr(judge, "backend", None) or type(judge).__name__
     return f"{backend}:{getattr(judge, 'prompt_version', None) or PROMPT_VERSION}"
@@ -440,8 +441,11 @@ JEV_EVIDENCE_RULES = (
 JEV_PREMISE = "Assume the answer is '{label}': {description}"
 JEV_EVIDENCE_QUESTION = "Which snippet of {path} states it literally?"
 JEV_NONE = "No listed snippet states it."
-JEV_PROMPT = "\n".join([JEV_JUDGE_RULES, JEV_EVIDENCE_RULES, JEV_PREMISE, JEV_EVIDENCE_QUESTION, JEV_NONE])
-JEV_PROMPT_VERSION = hashlib.sha256(JEV_PROMPT.encode("utf-8")).hexdigest()[:16]  # cache namespace "jev:<hash>"
+JEV_FINGERPRINT_TASKS = (  # a fixed synthetic page for jev_prompt_version: two labels (one without a quote), 2 snippets
+    {"task_id": "r:p", "rubric_id": "r", "question": "q", "labels": {"a": "A", "b": "B"}, "no_quote_labels": ["b"],
+     "snippets": [{"snippet_id": "s1", "kind": "k", "text": "t1"}, {"snippet_id": "s2", "kind": "k", "text": "t2"}],
+     "context": {"page_type": "pdp", "stage": "pdp", "locale": "it"}},
+)
 
 
 def jev_min_probability(value=None) -> float:
@@ -484,12 +488,15 @@ class JevJudge:
     snippet states it?). Code reads only the evidence head of the chosen label and copies that snippet's own text, so
     Jev never writes text and every quote is verbatim by construction. A task is accepted when the label's probability
     is at least min_probability, the reversed head agrees and the evidence head did not choose "none"; otherwise it is
-    escalated to Claude (self.escalations). judge() returns the accepted verdicts; self.calls lists the requests and
-    self.errors the pages and tasks Jev could not answer (also escalated, so Claude judges them).
+    escalated to Claude (self.escalations). A label the rubric maps to no value (unclear) is accepted like any other:
+    it is the rubric's insufficient-evidence outcome ("non valutato"), not Jev's uncertainty, which the floor, the
+    reversed head and the evidence head already cover. judge() returns the accepted verdicts; self.calls lists the
+    requests and self.errors the pages and tasks Jev could not answer (also escalated, so Claude judges them). An
+    answer of the wrong shape escalates only its own task (invalid_response): the other tasks and pages go on.
     """
 
-    backend = "jev"
-    prompt_version = JEV_PROMPT_VERSION
+    backend = JEV_BACKEND
+    prompt_version = None  # set below the class: jev_prompt_version(), a fingerprint of request()
 
     def __init__(self, judge_id=JEV_JUDGE_ID, model=None, *, api_key=None, min_probability=None, post=None):
         self.judge_id = judge_id
@@ -497,7 +504,7 @@ class JevJudge:
         self.api_key = api_key or os.environ.get("TYPESAFE_API_KEY")
         self.min_probability = jev_min_probability(min_probability)
         self.post = post  # post(url, key, body) -> dict; default jev_ultrafast.model.post_json
-        self.escalations, self.calls, self.errors = {}, [], []
+        self.escalations, self.calls, self.errors, self.pages_left = {}, [], [], 0
 
     def request(self, tasks) -> dict:
         """The systemone body for the tasks of one page: only what the judge needs (no run ids, no URLs)."""
@@ -527,14 +534,19 @@ class JevJudge:
         return {"model": self.model, "state": state, "questions": questions}
 
     def read(self, task, answers, model) -> tuple[dict | None, dict | None]:
-        """(verdict, None) or (None, escalation) from one page's answers; ValueError on an invalid answer."""
+        """(verdict, None) or (None, escalation) from one page's answers; ValueError on an invalid answer
+        (AttributeError when a head's probabilities is not an object: model.validate_choice does not catch it).
+
+        In order: the label head, its probability floor (low_probability; the reversed head is then not read, so a
+        malformed one cannot turn Jev's reading into a retryable invalid_response), the reversed head
+        (position_flip), and the evidence head of the chosen label only (no_evidence)."""
         task_id, labels = task["task_id"], task["labels"]
         label = typesafe.validate_choice(answers.get(f"label:{task_id}", {}), labels)
-        reverse = typesafe.validate_choice(answers.get(f"label_rev:{task_id}", {}), labels)
         choice, p = label["choice"], float(label["probabilities"][label["choice"]])
         reading = {"from": "jev", "model": model, "label": choice, "probability": round(p, 4)}
-        if p < self.min_probability:
+        if p < self.min_probability:  # Jev's reading, permanent: the reversed head is not read
             return None, {**reading, "reason": "low_probability"}
+        reverse = typesafe.validate_choice(answers.get(f"label_rev:{task_id}", {}), labels)
         if reverse["choice"] != choice:
             return None, {**reading, "reason": "position_flip"}
         evidence, rationale = [], f"Jev: p={p:.2f}, ordine inverso concorde"
@@ -550,12 +562,18 @@ class JevJudge:
         return {"task_id": task_id, "judge_id": self.judge_id, "model": model, "label": choice,
                 "confidence": round(p, 4), "evidence": evidence, "rationale": rationale}, None
 
-    def judge(self, tasks) -> list:
+    def judge(self, tasks, *, budget_s=None) -> list:
+        """The accepted verdicts of one request per page. budget_s: no new page is asked once that many seconds passed
+        since the first request started (the first page always is); self.pages_left counts the pages not asked, whose
+        tasks get no verdict, no escalation and no call entry."""
         if not self.api_key:
             raise JudgeError("JevJudge needs TYPESAFE_API_KEY")
-        self.escalations, self.calls, self.errors = {}, [], []
-        verdicts = []
-        for page_id, group in _by_page(tasks).items():
+        self.escalations, self.calls, self.errors, self.pages_left = {}, [], [], 0
+        verdicts, pages, began = [], _by_page(tasks), time.perf_counter()
+        for index, (page_id, group) in enumerate(pages.items()):
+            if index and budget_s is not None and time.perf_counter() - began >= budget_s:
+                self.pages_left = len(pages) - index
+                break
             body = self.request(group)
             started = time.perf_counter()
             answers, model, usage, failure = {}, None, {}, None
@@ -566,8 +584,8 @@ class JevJudge:
                     raise TypeError
                 model = result.get("model") if isinstance(result.get("model"), str) and result["model"] else None
                 usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
-            except (RuntimeError, ValueError) as error:  # HTTP or connection (post_json already retried
-                failure = ("request_failed", str(error))  # 429/503/529), or a 2xx body that is not JSON
+            except (RuntimeError, ValueError, OSError) as error:  # HTTP or connection (post_json already
+                failure = ("request_failed", str(error))  # retried 429/503/529), or a 2xx body that is not JSON
             except (KeyError, TypeError):
                 answers, failure = {}, ("invalid_response", "TypeSafe answer without answers")
             self.calls.append({"page_id": page_id, "tasks": len(group), "model": model, "usage": usage,
@@ -577,8 +595,10 @@ class JevJudge:
                 if failure is None:
                     try:
                         verdict, escalation = self.read(task, answers, model or self.model)
-                    except ValueError as error:
-                        escalation = {"reason": "invalid_response", "error": str(error)}
+                    except (ValueError, TypeError, KeyError, AttributeError) as error:  # validate_choice catches
+                        # KeyError, TypeError and ValueError only: probabilities null or a list raises AttributeError
+                        text = str(error) if isinstance(error, ValueError) else f"Invalid TypeSafe response ({error})"
+                        escalation = {"reason": "invalid_response", "error": text}
                 if verdict is not None:
                     verdicts.append(verdict)
                     continue
@@ -587,6 +607,18 @@ class JevJudge:
                 self.escalations[task["task_id"]] = {"from": "jev", "model": model or self.model, "label": None,
                                                      "probability": None, **escalation}
         return verdicts
+
+
+def jev_prompt_version() -> str:
+    """Fingerprint of Jev's request structure, the second half of its cache namespace (prompt_id: "jev:<this>"):
+    sha256 of the body JevJudge.request builds for JEV_FINGERPRINT_TASKS, serialised without sort_keys so the option
+    order (the reversed head) counts. The five text constants are in that body, so a change to them, to the question
+    ids, the state layout or the heads misses the cache with no manual bump; the task's own view is in the cache key."""
+    body = JevJudge(model="x", api_key="x", min_probability=JEV_MIN_P).request(list(JEV_FINGERPRINT_TASKS))
+    return hashlib.sha256(json.dumps(body, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+
+
+JEV_PROMPT_VERSION = JevJudge.prompt_version = jev_prompt_version()
 
 
 def jev_tasks(run, rubrics=None) -> list:
@@ -599,26 +631,32 @@ def jev_tasks(run, rubrics=None) -> list:
             if routing(t, rubrics) == "jev" and t["task_id"] not in done and retryable(t)]
 
 
-def judge_with_jev(run, judge=None, *, use_cache=True) -> dict:
+def judge_with_jev(run, judge=None, *, use_cache=True, budget_s=None) -> dict:
     """Judge the open Jev tasks of a run with one TypeSafe request per page, then finalise. Mutates run.
 
     Accepted tasks get one verdict from judge_id "jev" and samples_required 1 (judgments.settle), so finalize()
     decides them with agreement 1.0 and confidence p; the others carry task["escalation"] and keep their
-    samples_required for the Claude judges. A failed request (or a body that is not JSON) escalates its page's tasks:
-    Jev failing never blocks the audit. Such an escalation (request_failed, invalid_response) carries no reading of
-    Jev's, so a later call retries the task while no judge has a verdict on it and drops the marker when Jev's answer
-    is accepted; low_probability, position_flip and no_evidence are permanent. Only the verdicts this call accepted or
-    reused are settled. run["model_calls"]["judge_jev"] adds up the requests. Without TYPESAFE_API_KEY nothing
-    changes and the summary says available False. The cache is read only for a pinned model
-    (TYPESAFE_MODEL=jev-1.13.0), because an alias moves on release. Jev judges only tasks no judge has touched (a mix
-    of samples could tie). Pages are asked in sequence and each request may take up to three post_json attempts of
-    its 25 s httpx timeout plus 1.5 s of backoff, so a call can last minutes when TypeSafe is slow; a service running
-    this inside RunStore.update holds the run lock that long (verdicts another writer submits wait, never get lost).
+    samples_required for the Claude judges. A failed request (or a body that is not JSON) escalates its page's tasks
+    and an answer of the wrong shape only its own task, the later pages are still asked and every request sent is
+    counted: Jev failing never blocks the audit. Such an escalation (request_failed, invalid_response) carries no
+    reading of Jev's, so a later call retries the task while no judge has a verdict on it and drops the marker when
+    Jev's answer is accepted; low_probability, position_flip and no_evidence are permanent. Only the verdicts this
+    call accepted or reused are settled. run["model_calls"]["judge_jev"] adds up the requests. Without
+    TYPESAFE_API_KEY nothing changes and the summary says available False. The cache is read only for a pinned model
+    (TYPESAFE_MODEL=jev-1.13.0), because an alias moves on release, and a cached sample counts only at or above
+    today's floor (a more confident accepted answer replaces it: judgments.cache_put). Jev judges only tasks no
+    judge has touched (a mix of samples could tie). Pages are asked in sequence and each request may take up to
+    three post_json attempts of its 25 s httpx timeout plus 1.5 s of backoff. budget_s bounds the call: no new page is
+    asked once that many seconds passed (the first page always is); the pages left unasked stay untouched (no
+    verdict, no escalation, still open: summary["pages_left"] counts them) and the next call asks them, so every page
+    costs one request in all. A service running this inside RunStore.update holds the run lock at most budget_s plus
+    one request (without budget_s, every page's request: minutes when TypeSafe is slow); verdicts another writer
+    submits meanwhile wait, never get lost.
     """
     judge = judge or JevJudge()
     summary = {"available": bool(judge.api_key), "reason": None if judge.api_key else "no_typesafe_key",
                "requests": 0, "latency_ms": 0, "input_tokens": 0, "model": None, "judged": 0, "reused": 0,
-               "escalated": {}, "errors": [], "finalize": None, "open_tasks": None}
+               "escalated": {}, "errors": [], "finalize": None, "open_tasks": None, "pages_left": 0}
     if not judge.api_key:
         return summary
     rubrics = load_rubrics()
@@ -635,8 +673,9 @@ def judge_with_jev(run, judge=None, *, use_cache=True) -> dict:
         todo = jev_tasks(run, rubrics)
     verdicts, escalations, calls, errors = [], {}, [], []
     if todo:  # the judge's lists describe its last judge() call only
-        verdicts = judge.judge(todo)
+        verdicts = judge.judge(todo, budget_s=budget_s)
         escalations, calls, errors = dict(judge.escalations), list(judge.calls), list(judge.errors)
+        summary["pages_left"] = judge.pages_left
     by_model = {}
     for verdict in verdicts:
         by_model.setdefault(verdict["model"], []).append(verdict)

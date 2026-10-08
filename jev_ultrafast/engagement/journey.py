@@ -46,9 +46,18 @@ Agent a guarded view of one tab in an isolated browser context with the device p
 - Policy "typesafe" is the Jev loop as it is (Agent + model.choose, one request per decision); TYPE_TEXT values come
   from the text LLM (model.field_text). Without TEXT_MODEL_API_KEY no text is guessed and no text request is sent:
   TYPE_TEXT stays offered, and when Jev chooses it the Agent's text policy refuses before any input (a refused
-  TYPE_TEXT attempt in steps.jsonl, note TEXT_WITHHELD, warning text_helper_unavailable); fill actions are then
-  withheld from Jev for the rest of the run. journey["text_helper"] names the text model (text_model(); None: no key;
-  "host": the host types its own text).
+  TYPE_TEXT attempt in steps.jsonl with flags guard_blocked and text_withheld, note TEXT_WITHHELD, warning
+  text_helper_unavailable; the first one's {url, label, step} is checks.text_withheld_at at finish(), whatever the
+  outcome); fill actions are then withheld from Jev for the rest of the run. The Agent asks its text policy before
+  Browser.act, as the loop always did, so this refusal precedes the guard's check at input: a field the guard would
+  refuse there too (its autocomplete turned to email after the observation) is logged as TEXT_WITHHELD, not as a guard
+  refusal (attribution only: nothing is typed either way). With a text helper, Jev's TYPE_TEXT that the guard refuses
+  at input (TextRefused: the field, allow_text, or the helper's value, personal_text, such as an EAN that reads as an
+  account number) is denied the same way, since Jev has no notes channel and would send the same request again until
+  MAX_STALE: flags guard_blocked and text_withheld, note "refused by the checkout guard: <reason>", warning
+  text_refused, the guard's reason as checks.text_withheld_at.refusal, fills withheld from then on (the paid text call
+  counted in model_calls.text). A host is told (refused) and chooses again. journey["text_helper"] names the text
+  model (text_model(); None: no key; "host": the host types its own text).
 - finish() verifies the outcome with an independent oracle (oracles.py) on the actual page state, never on DONE,
   stores the friction observations (friction.py) in the run and always releases the context, the transport and a
   Chromium it launched. A host ends a running journey as "done" or "blocked" only; the other statuses are the
@@ -57,16 +66,20 @@ Agent a guarded view of one tab in an isolated browser context with the device p
   DNS, TLS, a proxy or a dead host end on the same page and the run cannot tell which; the net error is recorded,
   repeats are the remedy; a start page that never loaded leaves the run failed), after the guard withheld controls
   of a page audit.js could not read (page_unreadable), or after Jev chose TYPE_TEXT and no text helper could write
-  it (text_helper_unavailable: the oracle failed; a keyless run whose pilot never chose to type is assessed as any
-  other); nor is an outcome the oracle cannot read without a guess (the oracle's own reason stays).
+  it (text_helper_unavailable) or the guard refused the text it wrote (text_refused): the pilot's chosen path was
+  denied, so a failed outcome is confounded on whichever page it failed; the refused attempt,
+  checks.text_withheld_at and the final page's dead clicks stay recorded, and a run whose pilot never chose to type is
+  assessed as any other; nor is an outcome the oracle cannot read without a guess (the oracle's own reason stays).
 - finish() (close() for an abandoned run) stores what deciding cost: journey["model_calls"] {choose: decisions
-  (TypeSafe requests answered with a valid choice, or host choices), text: text helper calls (0 for the host),
-  stale_or_refused: decisions that went stale or were refused before input (the guard, a withheld TYPE_TEXT; DONE,
-  BLOCKED and a failed text helper call are not counted), failed: TypeSafe calls that ended without a valid decision
-  (an HTTP or connection error after post_json's own retries, which are not seen, or an invalid answer), model: the
-  TypeSafe model of the latest decision (typesafe only)}, journey["timing_ms"] {decision, text, site: execution +
-  settle of the executed steps, wall: start() to the end} and journey["usage"] (TypeSafe tokens summed; {} for the
-  host).
+  (TypeSafe requests answered with a valid choice, or host choices), text: text helper calls that returned a value (0
+  for the host; a failed one is counted nowhere: its error ends the run, status error), stale_or_refused: decisions
+  that went stale or were refused before input (the guard, a withheld TYPE_TEXT; a DONE or BLOCKED that ends the run
+  is not counted), failed: TypeSafe decisions without a valid choice, i.e. any error model.choose raised (an HTTP or
+  connection error after post_json's own retries, which are not seen, an invalid answer, or an error before any
+  request, such as a key removed after start()), model: the TypeSafe model of the latest decision (typesafe only)},
+  journey["timing_ms"] {decision and text: latency of the calls that answered (a failed call adds none), site:
+  execution + settle of the executed steps, wall: start() to the end} and journey["usage"] (TypeSafe tokens summed; {}
+  for the host).
 
 Time attributed to the site is page-side (vitals.js clock): execution plus settle per step. The execution clock starts
 after the harness's freshness check (a snapshot.js read), right before the input is dispatched. Decision latency
@@ -150,6 +163,7 @@ NO_PROGRESS = "no progress: three actions in a row changed nothing; choose anoth
 UNREAD = ("page type unknown (the page audit failed): handled as a checkout page, only links away, scrolling and "
           "waiting are offered")
 TEXT_WITHHELD = "TYPE_TEXT withheld: no text helper key (TEXT_MODEL_API_KEY) on the server"
+TEXT_REFUSED = "TYPE_TEXT withheld: the checkout guard refused Jev's text at input"
 TEXT_HELPER = "deepseek-chat"  # model.field_text's default TEXT_MODEL (pinned by an offline test)
 DRAINED = ("Page.", "Network.", "Runtime.", "Log.")  # Target.* events stay for the collector's frame watcher
 LONG_LIVED = ("EventSource", "WebSocket")
@@ -160,9 +174,20 @@ class GuardRefused(Exception):
     """CheckoutGuard refused an action right before input; nothing was executed."""
 
 
+class TextRefused(GuardRefused):
+    """The guard refused a chosen fill at input: its field (allow_text) or the text (personal_text). Its message and
+    refusal are the guard's reason; label names the field. A typesafe run then withholds fills (_withhold_fills)."""
+
+    def __init__(self, reason: str, label: str):
+        super().__init__(reason)
+        self.refusal, self.label = reason, label
+
+
 class _TextWithheld(Exception):
     """Jev chose TYPE_TEXT in a typesafe run without a text helper: no value is asked for or guessed, nothing typed.
     Its message is TEXT_WITHHELD; label names the field Jev chose."""
+
+    refusal = None  # no guard reason: nothing was written to refuse
 
     def __init__(self, label: str):
         super().__init__(TEXT_WITHHELD)
@@ -406,10 +431,12 @@ class JourneyRunner:
         self._unread = False  # the latest observation's audit failed: its page is handled as a checkout page
         self._withheld = False  # controls the guard would otherwise allow were withheld on an unread page
         self._text_helper: str | None = None  # where TYPE_TEXT values come from (journey["text_helper"])
-        self._text_withheld = False  # Jev chose TYPE_TEXT without a text helper: fills withheld from then on
+        # {url, label, step[, refusal]} of Jev's first TYPE_TEXT refused for want of a text helper, or whose text the
+        # guard refused at input (refusal: its reason) (checks.text_withheld_at); set: fills are withheld from then on
+        self._text_withheld: dict | None = None
         self._choices: list[dict] = []  # the host's validated choices (HostPolicy.last): its decisions
         self._idle = 0  # decisions that went stale or were refused before input (_log_attempt)
-        self._failed = 0  # TypeSafe calls that ended without a valid decision (model_calls.failed)
+        self._failed = 0  # errors model.choose raised: decisions without a valid choice (model_calls.failed)
         self._clock: float | None = None  # time.monotonic() at start(): timing_ms.wall
         self._notes: list[str] = []
         self._boundary = False
@@ -665,6 +692,8 @@ class JourneyRunner:
             finally:
                 self._close()
             checks = verification["checks"]
+            if self._text_withheld:  # a fact of the run, recorded whatever the verdict
+                checks["text_withheld_at"] = dict(self._text_withheld)
             broken = self._broken is not None or self._start_failed
             if broken:  # evidence: the document the browser could not load and its net error (not interpreted)
                 checks["navigation_error"] = dict(self._net_error or {"url": None, "error": None})
@@ -678,8 +707,9 @@ class JourneyRunner:
                 elif self._withheld and verification["passed"] is False:  # the guard withheld controls (unread page)
                     reason = "page_unreadable"
                 elif self._text_withheld and verification["passed"] is False:
-                    # Jev chose TYPE_TEXT and nothing could be typed; an unreadable outcome keeps the oracle's reason
-                    reason = "text_helper_unavailable"
+                    # Jev chose TYPE_TEXT and nothing could be typed (no text helper, or the guard refused its text);
+                    # an unreadable outcome keeps the oracle's reason
+                    reason = "text_refused" if self._text_withheld.get("refusal") else "text_helper_unavailable"
             if reason:
                 if verification["passed"] is False:
                     checks["oracle_passed"] = False
@@ -763,11 +793,15 @@ class JourneyRunner:
         except StalePage as exc:
             return self._recover(exc, stale=True)["stale"], None
         except (GuardRefused, _TextWithheld) as exc:
-            withheld = isinstance(exc, _TextWithheld)  # Jev chose TYPE_TEXT and no text helper can write it
-            self._log_attempt(guard_blocked=True,
-                              note=str(exc) if withheld else f"refused by the checkout guard: {exc}")
+            # Jev chose TYPE_TEXT and nothing may type it: no text helper, or (typesafe) the guard refused the text at
+            # input; Jev has no notes channel, so fills are withheld or it would resend the same request. A host is
+            # told (refused) and chooses again.
+            keyless = isinstance(exc, _TextWithheld)
+            withheld = keyless or (isinstance(exc, TextRefused) and self.policy == "typesafe")
+            self._log_attempt(guard_blocked=True, text_withheld=withheld,
+                              note=str(exc) if keyless else f"refused by the checkout guard: {exc}")
             if withheld:  # logged first: the record names the field Jev chose
-                self._withhold_fills(exc.label)
+                self._withhold_fills(exc.label, exc.refusal)
             agent.state["status"] = "ready"
             self._stale_run += 1
             if self.policy == "typesafe" and self._stale_run >= MAX_STALE:
@@ -816,7 +850,8 @@ class JourneyRunner:
 
     def _jev(self, page: dict, goal: str, history: list) -> dict:
         """TypeSafe as the Agent's policy: model.choose, looked up at call time through the Agent's module like the
-        Agent does. A call that ends without a valid decision is counted (model_calls.failed), then raised as is."""
+        Agent does. Any error model.choose raises is counted (model_calls.failed), then raised as is: an HTTP or
+        connection error, an invalid answer, or one raised before any request (a key removed after start())."""
         try:
             return agent_loop.choose(page, goal, history)
         except Exception:
@@ -828,17 +863,24 @@ class JourneyRunner:
         check and before any input, it refuses (no value is asked for or guessed, nothing is typed)."""
         raise _TextWithheld(str((context.get("field") or {}).get("label") or ""))
 
-    def _withhold_fills(self, label: str) -> None:
-        """After Jev chose TYPE_TEXT with no text helper: fill actions are removed from the current page in place (it
-        stays fresh, so the next request on it offers no TYPE_TEXT) and from every later observation (_observe)."""
+    def _withhold_fills(self, label: str, refusal: str | None = None) -> None:
+        """After Jev chose TYPE_TEXT with no text helper, or whose text the guard refused at input (refusal: the
+        guard's reason; its attempt record just logged): fill actions are removed from the current page in place (it
+        stays fresh, so the next request on it offers no TYPE_TEXT) and from every later observation (_observe). The
+        first refusal's page, field, step and guard reason are kept (checks.text_withheld_at)."""
         page = self.agent.state["page"]
         page["actions"] = [a for a in page.get("actions") or [] if a.get("kind") != "fill"]
-        self._notes.insert(0, TEXT_WITHHELD)
+        self._notes.insert(0, TEXT_REFUSED if refusal else TEXT_WITHHELD)
         if not self._text_withheld:
-            self._text_withheld = True
-            self._warn(f"text_helper_unavailable: Jev chose TYPE_TEXT into '{label[:80]}' on "
-                       f"{str(page.get('url') or '')[:200]}; no TEXT_MODEL_API_KEY: nothing typed, fill actions "
-                       "withheld from here on")
+            self._text_withheld = {"url": page.get("url"), "label": label[:80], "step": len(self.steps)}
+            url = str(page.get("url") or "")[:200]
+            if refusal:
+                self._text_withheld["refusal"] = refusal
+                self._warn(f"text_refused: Jev's text for '{label[:80]}' on {url} was refused ({refusal}); nothing "
+                           "typed, fill actions withheld from here on")
+            else:
+                self._warn(f"text_helper_unavailable: Jev chose TYPE_TEXT into '{label[:80]}' on {url}; no "
+                           "TEXT_MODEL_API_KEY: nothing typed, fill actions withheld from here on")
 
     def _stop_checks(self) -> None:
         """The run stops by itself on an anti-bot page, at the checkout boundary (on any site), on another site, on a
@@ -919,12 +961,14 @@ class JourneyRunner:
         raw = self._raw.get(page.get("fingerprint")) or page
         page_type = self._guarded_type()
         ok, reason = self.guard.allowed_action(action, raw, page_type)
-        if ok and action.get("kind") == "fill":
+        if not ok:
+            raise GuardRefused(reason)
+        if action.get("kind") == "fill":  # the field again right before input, then the text itself
             ok, reason = self.guard.allow_text(self.tab, action, page_type)
             if ok and (what := personal_text(text)):
                 ok, reason = False, f"personal_text: looks like {what}"
-        if not ok:
-            raise GuardRefused(reason)
+            if not ok:
+                raise TextRefused(reason, str(action.get("label") or ""))
         self._drain()  # what happened during the decision is not this action's
         # Browser.act's freshness check (a snapshot.js read for typing and scrolling), run before the clock starts:
         # the harness's own read is not site time
@@ -992,9 +1036,10 @@ class JourneyRunner:
         if self._broken is not None:
             self._watch(self.transport.events(self.tab.session, "Network."))  # the failed request, if not seen yet
         if self._text_withheld and any(a.get("kind") == "fill" for a in kept):
-            # Jev chose TYPE_TEXT and no text helper could write it (_withhold_fills): not offered again
+            # Jev chose TYPE_TEXT and no text helper could write it, or the guard refused its text (_withhold_fills):
+            # not offered again
             kept = [a for a in kept if a.get("kind") != "fill"]
-            notes.insert(0, TEXT_WITHHELD)
+            notes.insert(0, TEXT_REFUSED if self._text_withheld.get("refusal") else TEXT_WITHHELD)
         if self._left is not None:
             notes.insert(0, f"left the shop for {url[:120]}: the journey stopped here")
         elif self._broken is not None:
@@ -1362,14 +1407,20 @@ class JourneyRunner:
                    "settle_reason": None, "overlay": dict(self._overlay), "flags": {}, "status": self.status,
                    "guard_notes": []})
 
-    def _log_attempt(self, *, stale: bool = False, guard_blocked: bool = False, note: str = "") -> None:
+    def _log_attempt(self, *, stale: bool = False, guard_blocked: bool = False, text_withheld: bool = False,
+                     note: str = "") -> None:
         """A decision that executed nothing (a stale page, a guard refusal, a TYPE_TEXT withheld for want of a text
-        helper): logged, not counted as a step; model_calls.stale_or_refused counts it once a choice was made."""
+        helper or, typesafe, whose text the guard refused: guard_blocked too, so it is never an executed step, and
+        flags.text_withheld names why fills are withheld): logged, not counted as a step;
+        model_calls.stale_or_refused counts it once a choice was made."""
         if self.host is not None or self._attempt.get("decision") is not None:  # a choice was made (a request paid)
             self._idle += 1
         decision = self._decision()
         page = self.agent.state["page"]
         action = next((a for a in page.get("actions") or [] if a.get("id") == decision.get("choice")), {})
+        flags = {"stale": stale, "guard_blocked": guard_blocked}
+        if text_withheld:
+            flags["text_withheld"] = True
         self._log({"step": len(self.steps) + 1, "t_wall": iso_now(), "operation": decision.get("operation"),
                    "target": decision.get("target"), "label": action.get("label") or decision.get("label"),
                    "kind": action.get("kind"),
@@ -1377,8 +1428,7 @@ class JourneyRunner:
                    "decision_latency_ms": self._decision_latency(), "policy": self.policy,
                    "url_before": page.get("url"), "url_after": None, "page_changed": None,
                    "page_type": self._page_type, "since": {}, "execution_ms": None, "settle_ms": None,
-                   "settle_reason": None, "overlay": dict(self._overlay),
-                   "flags": {"stale": stale, "guard_blocked": guard_blocked}, "status": self.status,
+                   "settle_reason": None, "overlay": dict(self._overlay), "flags": flags, "status": self.status,
                    "guard_notes": [note] if note else []})
 
     def _warn(self, message: str) -> None:

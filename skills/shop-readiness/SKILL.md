@@ -56,9 +56,11 @@ line who will pilot and judge:
   percezione e i casi incerti". When `text_helper` is null add "Jev non può scrivere nei campi di testo:
   TEXT_MODEL_API_KEY assente".
 - `typesafe_key` false: "Nessuna chiave TypeSafe sul server: guido io il journey e giudicano i giudici Claude"; add
-  that `TYPESAFE_API_KEY` (and `TEXT_MODEL_API_KEY`) can go in the `.env` file of the plugin's data directory (the
-  server reads it at start, `JEV_ENGAGEMENT_ENV`) or in the environment Claude Code starts from. Never ask for a key
-  and never write one anywhere yourself.
+  that `TYPESAFE_API_KEY` (and `TEXT_MODEL_API_KEY`) can go, one `KEY=value` per line, in the `.env` file of the
+  plugin's data directory (the part of the result's `artifacts_dir` before `/engagement/`; `JEV_ENGAGEMENT_ENV` names
+  that file) or in the environment Claude Code starts from, and that the server reads them only when it starts: after
+  adding a key, reconnect the server (`/mcp`, the `engagement` server of jev-engagement) or restart Claude Code, then
+  run this skill again. Never ask for a key and never write one anywhere yourself.
 
 When `status` is:
 
@@ -94,9 +96,18 @@ Call `run_journey(url, goal, oracle, oracle_params, profile="mobile", policy="au
 
 - `policy` `typesafe` (the result has `next`): Jev drives the journey by itself on the server. Do not call
   `journey_act`. Call `wait_run(run_id)` again and again while `timed_out` is true, then `journey_finish(run_id)` once.
-  Note its `model_calls` (`choose`: TypeSafe requests), `timing_ms.decision` (deciding time, never counted as the
-  shop's) and `text_helper` (null: no text model, so a TYPE_TEXT Jev chooses is refused before any input; a goal
-  that needed typing then ends "non valutabile (text_helper_unavailable)", which is not the shop's fault).
+  Note its `model_calls` (`choose`: decisions, one TypeSafe request each; `failed`: TypeSafe requests that ended
+  without a decision), `timing_ms.decision` (deciding time, never counted as the shop's) and `text_helper` (null: no
+  text model, so a TYPE_TEXT Jev chooses is refused before any input; a goal that needed typing then ends "non
+  valutabile (text_helper_unavailable)", which is not the shop's fault).
+  If Jev could not take a single decision (`status` `error`, `verification.checks.not_assessable` `journey_error`,
+  `model_calls.choose` 0, `model_calls.failed` above 0 and `steps` 0; its `next` then names a host journey), nothing
+  was executed: start exactly one new journey with the same url, goal, oracle, oracle_params and profile and
+  `policy="host"`, drive it as in the next point, and tell the user in one line why, quoting the warning (for HTTP
+  401 or 403: "Jev non ha potuto decidere (HTTP 401: chiave TypeSafe rifiutata o scaduta): guido io il journey"; for
+  another error name that error instead). Keep the failed run id for step 4 and pass only the host journey's run id
+  to `score_run`. If Jev failed after some steps (`steps` above 0), do not start another journey: report its
+  `journey_error` and offer the user a journey that you pilot.
 - `policy` `host` (the result has `observation`): you drive it step by step with `journey_act` following the
   `journey-driver` skill of this plugin (load it now if it is not loaded): only offered indices and operations, always
   the `observation_id` of the latest observation, one call at a time. When `status` is no longer `running`, call
@@ -106,10 +117,15 @@ Keep the journey `run_id` for step 4; the steps below take the **audit** `run_id
 
 ## 3. Judgments: Jev first, then three Sonnet judges for what is left
 
-0. Call `judge_with_jev(<audit run_id>)` once (it also creates the tasks). Jev answers the operational rubrics with
-   one TypeSafe request per page; the tasks it accepts become final. If `available` is false, say in one line that
-   without a TypeSafe key the Claude judges take every task. Note `accepted`, `escalated` (tasks Jev passed to Claude,
-   by reason) and `requests`. If `open_tasks` is 0, go straight to step 3.5.
+0. Call `judge_with_jev(<audit run_id>)` (it also creates the tasks), and call it again while its `pages_left` is
+   above 0: a call stops asking new pages after about 80 s, so a slow TypeSafe never holds the tool past its timeout,
+   and a page Jev has not asked yet is judged by nobody. Jev answers the operational rubrics with one TypeSafe request
+   per page; the tasks it accepts become final. If `available` is false, say in one line that without a TypeSafe key
+   the Claude judges take every task. If its `errors` name HTTP 401 or 403, say in one line "chiave TypeSafe
+   rifiutata: giudicano i giudici Claude" and stop calling `judge_with_jev` in this session, even while `pages_left`
+   is above 0 (the tasks it could not judge are escalated `request_failed`: the Claude judges take them). Note
+   `accepted`, `escalated` (tasks Jev passed to Claude, by reason) and `requests`, added up over the calls. If
+   `open_tasks` is 0, go straight to step 3.5.
 1. List the pages: call `get_judgment_tasks(<audit run_id>, brief=true)`, then again with `cursor` set to each
    `next_cursor` until it is null. Note each page's `cursor`, `next_cursor` and `missing_samples`. A page holds at most
    15 tasks, fewer when its snippets are long; brief and full reads page identically, so these are exactly the pages
@@ -162,12 +178,14 @@ Rapporto: <report.report_html>
 ```
 
 The models line comes from what ran: the pilot from `journey_finish`'s `policy` (`typesafe`: Jev, `host`: Claude;
-leave the pilot out without a journey), the judges from step 3 (Jev with the `model` of `judge_with_jev` when it
-accepted verdicts, Claude sonnet when Claude judges ran), and the TypeSafe requests added up from `judge_with_jev`'s
-`requests`, the journey's `model_calls.choose` (policy `typesafe` only) and the audit's
-`model_calls.crawler_fallback.requests` (`get_run`, when present). For a Jev journey add "decisioni <choose> in
-<timing_ms.decision / 1000> s, escluse dal tempo del sito". Leave out the "Passati a Claude" line when Jev did not
-judge.
+after the host re-run of step 2: "Claude (Jev non ha potuto decidere: run <failed run id>)"; leave the pilot out
+without a journey), the judges from step 3 (Jev with the `model` of `judge_with_jev` when it accepted verdicts, Claude
+sonnet when Claude judges ran), and the TypeSafe requests added up from `get_run(<audit run_id>)`'s `model_calls`
+(`judge_jev.requests`, every `judge_with_jev` call included, and `crawler_fallback.requests`, each when present) and
+the Jev journey's `model_calls.choose + model_calls.failed` (policy `typesafe` only, the failed run of step 2
+included). When a Jev journey's `model_calls.failed` is above 0, add "<failed> richieste TypeSafe senza decisione".
+For a Jev journey add "decisioni <choose> in <timing_ms.decision / 1000> s, escluse dal tempo del sito". Leave out
+the "Passati a Claude" line when Jev did not judge.
 
 The journey line names the check the oracle made, never just the goal; `<esito>` is "superata", "non superata" or
 "non valutabile (<verification.checks.not_assessable>)" from `journey_finish`'s `verification`. When the goal names a

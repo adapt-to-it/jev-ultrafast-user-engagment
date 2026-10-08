@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -768,9 +769,10 @@ class FakeTypeSafe:
     """Stand-in for jev_ultrafast.model.post_json: checks each request body, then answers like systemone.
 
     script: {task_id: {"label", "p", "rev" (the reversed head's label), "evidence" (snippet id or "none"),
-    "invalid": True}}; a task outside the script gets its last label (absent/unclear: no quote). Evidence heads of
-    labels not chosen get an invalid answer, so reading one would fail. fail_pages: page ids whose request raises
-    error (default: post_json's RuntimeError for an HTTP 529 after its retries).
+    "invalid": True, "probabilities": any JSON value put in place of the label head's probabilities (null, a list)}};
+    a task outside the script gets its last label (absent/unclear: no quote). Evidence heads of labels not chosen get
+    an invalid answer, so reading one would fail. fail_pages: page ids whose request raises error (default:
+    post_json's RuntimeError for an HTTP 529 after its retries).
     """
 
     def __init__(self, script=None, *, fail_pages=(), model=JEV_MODEL, error=None):
@@ -801,6 +803,8 @@ class FakeTypeSafe:
                 answers[qid] = choice(labels, plan["label"], plan["p"])
                 if plan.get("invalid"):
                     answers[qid]["probabilities"][plan["label"]] = 0.99  # no longer sums to 1
+                if "probabilities" in plan:  # valid JSON of the wrong shape
+                    answers[qid]["probabilities"] = copy.deepcopy(plan["probabilities"])
             elif kind == "label_rev":
                 answers[qid] = choice(question["criteria"], plan.get("rev", plan["label"]), plan["p"])
             elif label == [plan["label"]]:
@@ -913,7 +917,9 @@ def test_jev_accepts_settles_and_finalizes_with_one_sample(jev, monkeypatch):
     ({"label": "clear", "rev": "vague", "evidence": "s2"}, "position_flip"),
     ({"label": "clear", "evidence": "none"}, "no_evidence"),
     ({"label": "clear", "evidence": "s2", "invalid": True}, "invalid_response"),
-])
+    ({"label": "clear", "rev": "not-offered", "evidence": "s2"}, "invalid_response"),  # a malformed reversed head
+    ({"label": "clear", "p": 0.5, "rev": "not-offered", "evidence": "s2"}, "low_probability"),  # p is read first:
+])  # a low p is Jev's reading (permanent) whatever the reversed head holds, never a retryable invalid answer
 def test_jev_escalations_leave_the_task_to_claude(jev, plan, reason):
     task_id = "returns_clarity:mobile-pdp-1"
     jev({**ACCEPT, task_id: plan})
@@ -935,6 +941,48 @@ def test_jev_escalations_leave_the_task_to_claude(jev, plan, reason):
     judgments.finalize(run)
     final = next(f for f in run["judgments"]["final"] if f["task_id"] == task_id)
     assert (final["label"], final["samples"], final["agreement"], final["models"]) == ("vague", 3, 1.0, ["model-a"])
+
+
+def test_jev_asks_no_new_page_after_its_budget_and_the_next_call_goes_on(jev, monkeypatch):
+    """budget_s bounds the run lock a service holds: no new page once it passed, the first page always; an unasked
+    page is untouched (no verdict, no escalation, no call) and counted in pages_left; the next call asks it."""
+    fake = jev(ACCEPT)
+    run = mini_run()
+    run["pages"].append(page("desktop-cart-1", "cart", [("checkbox_label", "Non voglio smettere di ricevere offerte")],
+                             profile="desktop"))
+    tasks = {t["task_id"]: t for t in judgments.ensure_tasks(run)}
+    jev_pages = {t["page_id"] for t in tasks.values() if judgments.routing(t) == "jev"}
+    assert len(jev_pages) == 3
+
+    def slow(url, key, body):
+        time.sleep(0.05)  # past the budget: no other page is started in this call
+        return fake(url, key, body)
+    monkeypatch.setattr(typesafe, "post_json", slow)
+    first = judges.judge_with_jev(run, budget_s=0.01)
+    assert first["requests"] == 1 and first["pages_left"] == len(jev_pages) - 1 == 2 and len(fake.bodies) == 1
+    assert first["escalated"] == {} and first["errors"] == []
+    asked = {":".join(qid.split(":")[1:3]) for qid in fake.bodies[0]["questions"]}  # its task ids
+    state = run["judgments"]
+    assert {v["task_id"] for v in state["verdicts"]} == {f["task_id"] for f in state["final"]} == asked
+    assert not any("escalation" in t for t in state["tasks"])  # an unasked page is no failure
+    assert all(t["samples_required"] == 3 for t in state["tasks"] if t["task_id"] not in asked)
+    assert first["open_tasks"] == len(tasks) - len(asked)
+    calls = [judges.judge_with_jev(run, budget_s=0.01)]
+    while calls[-1]["pages_left"]:
+        calls.append(judges.judge_with_jev(run, budget_s=0.01))
+    assert [(c["requests"], c["pages_left"]) for c in calls] == [(1, 1), (1, 0)]
+    pages = [qid.split(":")[2] for body in fake.bodies for qid in list(body["questions"])[:1]]
+    assert sorted(pages) == sorted(jev_pages)  # every page asked exactly once
+    assert run["model_calls"]["judge_jev"]["requests"] == len(jev_pages) == len(fake.bodies)
+    jev_ids = {t for t in tasks if judgments.routing(tasks[t]) == "jev"}
+    assert {f["task_id"] for f in run["judgments"]["final"]} == jev_ids and calls[-1]["open_tasks"] == len(CLAUDE_TASKS)
+    assert judges.judge_with_jev(run, budget_s=0)["requests"] == 0  # nothing left to ask
+    fresh = judges.judge_with_jev(mini_run(), budget_s=0)  # budget 0: the first page is still asked
+    assert (fresh["requests"], fresh["pages_left"]) == (1, 1)
+    unbounded = judges.judge_with_jev(mini_run())  # no budget: every page in one call
+    assert (unbounded["requests"], unbounded["pages_left"]) == (2, 0)
+    monkeypatch.delenv("TYPESAFE_API_KEY")
+    assert judges.judge_with_jev(mini_run(), budget_s=1)["pages_left"] == 0  # no key: nothing asked, nothing left
 
 
 def test_jev_threshold_comes_from_the_environment_and_is_clamped(jev, monkeypatch):
@@ -975,6 +1023,56 @@ def test_a_body_that_is_not_json_escalates_its_page_and_keeps_the_rest(jev):
     assert {f["task_id"] for f in run["judgments"]["final"]} == set(PDP_JEV) and summary["open_tasks"] == 3
 
 
+@pytest.mark.parametrize("probabilities", [None, [0.9, 0.05, 0.05], "0.9", 0.9])
+def test_a_jev_answer_of_the_wrong_shape_escalates_only_its_task(jev, probabilities):
+    # model.validate_choice catches KeyError, TypeError and ValueError: probabilities null or a list raises
+    # AttributeError there. The bad head is on the first page: the cart page is still asked and everything is kept.
+    task_id = "returns_clarity:mobile-pdp-1"
+    fake = jev({**ACCEPT, task_id: {"label": "clear", "evidence": "s2", "probabilities": probabilities}})
+    run = mini_run()
+    summary = judges.judge_with_jev(run)
+    assert summary["escalated"] == {"invalid_response": 1} and summary["judged"] == 2
+    assert len(fake.bodies) == summary["requests"] == run["model_calls"]["judge_jev"]["requests"] == 2  # 2 pages
+    assert summary["input_tokens"] == run["model_calls"]["judge_jev"]["input_tokens"] > 0
+    assert {v["task_id"] for v in run["judgments"]["verdicts"]} == {PDP_JEV[0], CART_JEV}  # the rest is stored
+    assert [(e["page_id"], e["task_id"]) for e in summary["errors"]] == [("mobile-pdp-1", task_id)]
+    assert summary["errors"][0]["error"].startswith("Invalid TypeSafe response")
+    task = next(t for t in run["judgments"]["tasks"] if t["task_id"] == task_id)
+    assert task["samples_required"] == 3 and task["escalation"]["reason"] == "invalid_response"
+    assert (task["escalation"]["label"], task["escalation"]["probability"]) == (None, None)
+    assert {f["task_id"] for f in run["judgments"]["final"]} == {PDP_JEV[0], CART_JEV}
+    assert summary["open_tasks"] == 3 and [t["task_id"] for t in judges.jev_tasks(run)] == [task_id]
+    fake = jev(ACCEPT)  # retryable: a later call asks that task again and settles it
+    fixed = judges.judge_with_jev(run)
+    assert fixed["judged"] == 1 and fixed["escalated"] == {} and len(fake.bodies) == 1
+    assert "escalation" not in task and task["samples_required"] == 1
+    assert run["model_calls"]["judge_jev"]["requests"] == 3
+
+
+def test_jev_accepts_a_confident_unclear_as_not_assessed_and_never_escalates_it(jev):
+    # Ruling: unclear is the rubric's insufficient-evidence label ("non valutato"), not Jev's uncertainty: a label at
+    # p >= the floor that the reversed head confirms is a verdict, and Claude does not re-judge it.
+    hidden = PDP_JEV[0]
+    fake = jev({**ACCEPT, hidden: {"label": "unclear", "p": 0.9}, CART_JEV: {"label": "unclear", "p": 0.9}})
+    run = mini_run()
+    summary = judges.judge_with_jev(run)
+    assert summary["escalated"] == {} and summary["judged"] == 3 and summary["requests"] == 2
+    assert set(summary["finalize"]["pending"]) == CLAUDE_TASKS  # only Claude's own rubrics stay open
+    state = run["judgments"]
+    tasks, finals = {t["task_id"]: t for t in state["tasks"]}, {f["task_id"]: f for f in state["final"]}
+    for task_id in (hidden, CART_JEV):
+        assert [v["label"] for v in state["verdicts"] if v["task_id"] == task_id] == ["unclear"]  # one verdict
+        assert tasks[task_id]["samples_required"] == 1 and "escalation" not in tasks[task_id]
+        final = finals[task_id]
+        assert (final["label"], final["samples"], final["agreement"], final["confidence"]) == ("unclear", 1, 1.0, 0.9)
+        assert final["evidence"] == [] and final["models"] == [JEV_MODEL]
+    rows = [r for r in judgments.observations_from_final(run) if r["source"] == "judged"
+            and r["kpi_id"] in ("DPR.HIDDEN_SUBSCRIPTION", "DPR.TRICK_QUESTIONS")]
+    assert {r["kpi_id"] for r in rows} == {"DPR.HIDDEN_SUBSCRIPTION", "DPR.TRICK_QUESTIONS"}
+    assert {(r["assessed"], r["reason"], r["value"]) for r in rows} == {(False, "judgment_unclear", None)}
+    assert judges.jev_tasks(run) == [] and judges.judge_with_jev(run)["requests"] == 0 and len(fake.bodies) == 2
+
+
 def test_jev_retries_a_failed_request_until_a_judge_answers(jev):
     jev(ACCEPT, fail_pages={"mobile-cart-1"})
     run = mini_run()
@@ -1005,11 +1103,23 @@ def test_jev_retries_a_failed_request_until_a_judge_answers(jev):
     assert task["escalation"]["reason"] == "request_failed" and task["samples_required"] == 3
 
 
-def test_jev_settles_only_the_verdicts_it_stored_itself(jev):
+def test_jev_judge_id_is_reserved_and_jev_settles_only_the_verdicts_it_stored_itself(jev):
     run = mini_run()
-    judgments.ensure_tasks(run)
+    tasks = {t["task_id"]: t for t in judgments.ensure_tasks(run)}
     spoof = verdict(CART_JEV, "absent", confidence=0.3)  # a host submitting under Jev's judge_id
-    assert judgments.submit(run, "jev", "claude-sonnet-5-5", [spoof])["accepted"] == 1
+    for prompt in (None, judgments.HOST_PROMPT, judges.prompt_id(judges.ClaudeCliJudge())):
+        with pytest.raises(ValueError, match="reserved for TypeSafe Jev"):  # the report would credit it to Jev
+            judgments.submit(run, " jev ", "claude-sonnet-5-5", [spoof], prompt=prompt)
+    assert run["judgments"]["verdicts"] == []
+    host = {"task_id": CART_JEV, "judge_id": "j1", "model": "claude-sonnet-5-5", "label": "absent",
+            "confidence": 0.3, "evidence": [], "rationale": ""}
+    for judge_id in ("jev", "j1"):  # samples cached under the host's namespace before the id was reserved
+        judgments.cache_put(tasks[CART_JEV], {**host, "judge_id": judge_id}, judgments.HOST_PROMPT)
+    fresh = mini_run()
+    judgments.ensure_tasks(fresh)
+    assert judgments.apply_cache(fresh, "claude-sonnet-5-5")["reused"] == 1  # j1's; Jev's id is skipped, no error
+    assert [v["judge_id"] for v in fresh["judgments"]["verdicts"]] == ["j1"]
+    run["judgments"]["verdicts"].append({**spoof, "judge_id": "jev", "model": "claude-sonnet-5-5"})  # stored before
     fake = jev(ACCEPT, fail_pages={"mobile-pdp-1"})
     summary = judges.judge_with_jev(run)
     assert len(fake.bodies) == 1 and summary["escalated"] == {"request_failed": 2}  # the cart task was not asked
@@ -1088,6 +1198,67 @@ def test_jev_cache_namespace_and_pinned_model_reuse(jev, monkeypatch):
     monkeypatch.setenv("TYPESAFE_MODEL", "jev-latest")  # an alias moves on release: never read from the cache
     assert judges.judge_with_jev(mini_run())["reused"] == 0 and len(fake.bodies) == 6
     assert judges.judge_with_jev(mini_run(), use_cache=False)["reused"] == 0
+
+
+def test_jev_namespace_is_a_fingerprint_of_its_request(monkeypatch):
+    """Ruling: no manual bump. The namespace hashes the body request() builds for a fixed page, without sort_keys, so
+    a text constant, a question id, the state layout or the order of a head's options moves it; the environment not."""
+    base = judges.jev_prompt_version()
+    assert base == judges.JEV_PROMPT_VERSION == judges.JevJudge.prompt_version
+    assert judgments.JEV_PROMPT_PREFIX == f"{judgments.JEV_BACKEND}:" and judges.JevJudge.backend == "jev"
+    assert judges.prompt_id(judges.JevJudge(api_key="k")) == f"{judgments.JEV_PROMPT_PREFIX}{base}"
+    with monkeypatch.context() as patch:
+        patch.setattr(judges, "JEV_NONE", "None of the snippets states it.")
+        assert judges.jev_prompt_version() != base
+    request = judges.JevJudge.request
+
+    def edited(change):
+        def build(self, tasks):
+            body = request(self, tasks)
+            change(body)
+            return body
+        with monkeypatch.context() as patch:
+            patch.setattr(judges.JevJudge, "request", build)
+            return judges.jev_prompt_version()
+
+    def rename(body):  # a question key
+        body["questions"] = {k.replace("label_rev:", "label_reversed:"): v for k, v in body["questions"].items()}
+
+    def unreverse(body):  # the reversed head back in the label head's order: same keys and values
+        for qid, question in body["questions"].items():
+            if qid.startswith("label_rev:"):
+                question["criteria"] = dict(reversed(question["criteria"].items()))
+
+    def layout(body):  # one more key in the state
+        body["state"]["page"]["viewport"] = None
+    assert len({base, edited(rename), edited(unreverse), edited(layout)}) == 4
+    for name, value in (("TYPESAFE_MODEL", "jev-2.0.0"), ("TYPESAFE_API_KEY", "other"), ("JEV_JUDGE_MIN_P", "0.9")):
+        monkeypatch.setenv(name, value)
+    assert judges.jev_prompt_version() == base
+
+
+def test_jev_cache_keeps_the_more_confident_answer(jev, monkeypatch):
+    assert judges.prompt_id(judges.JevJudge(api_key="k")).startswith(judgments.JEV_PROMPT_PREFIX)
+    monkeypatch.setenv("TYPESAFE_MODEL", JEV_MODEL)
+    jev(ACCEPT)
+    judges.judge_with_jev(mini_run())  # cached: returns_clarity p 0.9, hidden_subscription 0.8, the cart 0.75
+    monkeypatch.setenv("JEV_JUDGE_MIN_P", "0.85")  # 0.8 and 0.75 are no longer reused
+    fake = jev({task_id: {**plan, "p": 0.95} for task_id, plan in ACCEPT.items()})
+    raised = judges.judge_with_jev(mini_run())
+    assert raised["reused"] == 1 and raised["judged"] == 2 and len(fake.bodies) == 2
+    again = mini_run()  # the accepted 0.95 answers replaced the samples under the floor: nothing is asked again
+    summary = judges.judge_with_jev(again)
+    assert summary["reused"] == 3 and summary["requests"] == 0 and len(fake.bodies) == 2
+    assert {f["task_id"]: f["confidence"] for f in again["judgments"]["final"]} == {
+        "returns_clarity:mobile-pdp-1": 0.9, PDP_JEV[0]: 0.95, CART_JEV: 0.95}
+    task = next(t for t in again["judgments"]["tasks"] if t["task_id"] == CART_JEV)
+    sample = next(v for v in again["judgments"]["verdicts"] if v["task_id"] == CART_JEV)
+    namespace = judges.prompt_id(judges.JevJudge())
+    judgments.cache_put(task, {**sample, "confidence": 0.9}, namespace)  # a less confident answer never replaces
+    assert [v["confidence"] for v in judgments.cached_verdicts(task, JEV_MODEL, namespace)] == [0.95]
+    for confidence in (0.5, 0.99):  # outside Jev's namespace the first sample of a judge stays: replays repeat it
+        judgments.cache_put(task, {**sample, "confidence": confidence}, judgments.HOST_PROMPT)
+    assert [v["confidence"] for v in judgments.cached_verdicts(task, JEV_MODEL, judgments.HOST_PROMPT)] == [0.5]
 
 
 def test_claude_judges_only_what_jev_left_and_never_trips_on_settled_tasks(jev, fake_claude):

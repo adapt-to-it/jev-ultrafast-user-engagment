@@ -337,8 +337,10 @@ class JourneyRecord(TypedDict, total=False):
     #                                            the resolved pilot
     text_helper: NotRequired[str | None]  # text model of TYPE_TEXT under policy "typesafe"; None: no
     #                                       TEXT_MODEL_API_KEY, so fill actions were withheld from Jev
-    model_calls: NotRequired[dict]  # {choose: decisions requested (TypeSafe requests, or host decisions), text: text
-    #                                 helper calls, stale_or_refused: decisions that executed nothing}
+    model_calls: NotRequired[dict]  # {choose: decisions (TypeSafe requests answered with a valid choice, or host
+    #                                 choices), text: text helper calls, stale_or_refused: decisions that executed
+    #                                 nothing, failed: TypeSafe calls without a valid decision, model: the versioned
+    #                                 TypeSafe model of the latest decision (typesafe only, e.g. "jev-1.13.0")}
     timing_ms: NotRequired[dict]  # {decision, text, site (execution + settle of executed steps), wall}
     usage: NotRequired[dict]  # {input_tokens, output_tokens} summed over the decisions ({} for host)
 

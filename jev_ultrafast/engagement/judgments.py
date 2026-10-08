@@ -23,7 +23,9 @@ from .store import iso_now
 RUBRICS_DIR = Path(__file__).with_name("rubrics")
 RUBRICS_VERSION = "rubrics.v2"
 JUDGES = ("jev", "claude")  # rubric["judge"]: "jev" = Jev first, Claude for the tasks Jev escalates
-JEV_JUDGE_ID = "jev"  # judge_id of Jev's verdicts (judges.JevJudge)
+JEV_BACKEND = "jev"  # backend id of judges.JevJudge
+JEV_JUDGE_ID = "jev"  # judge_id of Jev's verdicts (judges.JevJudge); submit() takes it only in Jev's namespace
+JEV_PROMPT_PREFIX = f"{JEV_BACKEND}:"  # Jev's cache namespace: judges.prompt_id = backend + ":" + request fingerprint
 RETRY_REASONS = ("request_failed", "invalid_response")  # escalations without a Jev reading: Jev may try again
 MAX_SNIPPET_CHARS = 600
 MAX_RATIONALE_CHARS = 280
@@ -296,11 +298,15 @@ def submit(run, judge_id: str, model: str, verdicts, *, cache=True, prompt=None)
     """Validate and store one judge's verdicts. Rejected verdicts are reported, never stored.
 
     A task takes at most its samples_required verdicts (later ones: "samples_complete"), so a final label depends
-    only on the first samples. prompt names the judge prompt for the cache (default: HOST_PROMPT).
+    only on the first samples. prompt names the judge prompt for the cache (default: HOST_PROMPT). JEV_JUDGE_ID is
+    reserved to Jev's namespace (JEV_PROMPT_PREFIX, judges.judge_with_jev): the report credits a final whose only
+    verdicts come from that judge_id to TypeSafe Jev, so a host's or a fallback judge's verdict under it is refused.
     """
     judge_id, model = str(judge_id or "").strip(), str(model or "").strip()
     if not judge_id or not model:
         raise ValueError("submit needs a judge_id and a model id")
+    if judge_id == JEV_JUDGE_ID and not str(prompt or "").startswith(JEV_PROMPT_PREFIX):
+        raise ValueError(f'judge_id "{JEV_JUDGE_ID}" is reserved for TypeSafe Jev (judge_with_jev): use another id')
     state = run.setdefault("judgments", {})
     tasks = {t["task_id"]: t for t in state.get("tasks") or []}
     final = {f["task_id"] for f in state.get("final") or []}
@@ -591,7 +597,9 @@ def judge_view(task) -> dict:
 def cache_key(view: dict, model: str, prompt=None) -> str:
     """sha256 over the model id, the judge prompt id and the judge-visible task view.
 
-    Any change to the judge input (task, model, instructions or judge backend) misses the cache.
+    Any change to the judge input (task, model, instructions or judge backend) misses the cache. The other tasks of
+    the same request are not part of the key, as for a Claude batch: a re-crawl that changes one task's snippets still
+    reuses its neighbours' samples.
     """
     payload = json.dumps([model, prompt or HOST_PROMPT, view], ensure_ascii=False, sort_keys=True,
                          separators=(",", ":"))
@@ -607,26 +615,38 @@ def _cache_path(task, model, prompt=None) -> Path:
 
 
 def cache_put(task, verdict, prompt=None) -> None:
-    """Remember one validated sample (best effort; an unwritable cache never fails a submission)."""
+    """Remember one validated sample (best effort; an unwritable cache never fails a submission).
+
+    One sample per judge_id. The first one stays, so a replay repeats the first samples; in Jev's namespace
+    (JEV_PROMPT_PREFIX), whose reader takes a sample only at or above today's probability floor, a more confident
+    sample replaces it, so a sample under a raised floor never keeps a newer accepted answer out of the cache.
+    """
     path = _cache_path(task, verdict["model"], prompt)
     try:
         entry = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
     except (OSError, ValueError):
         entry = None
-    entry = entry or {"rubric_id": task["rubric_id"], "rubric_version": task["rubric_version"],
-                      "model": verdict["model"], "prompt": prompt or HOST_PROMPT, "samples": []}
-    if any(s.get("judge_id") == verdict["judge_id"] for s in entry["samples"]):
-        return
+    if not isinstance(entry, dict) or not isinstance(entry.get("samples"), list):
+        entry = {"rubric_id": task["rubric_id"], "rubric_version": task["rubric_version"],
+                 "model": verdict["model"], "prompt": prompt or HOST_PROMPT, "samples": []}
     position = {s["snippet_id"]: i for i, s in enumerate(task["snippets"])}
-    entry["samples"].append(
-        {
-            "judge_id": verdict["judge_id"],
-            "label": verdict["label"],
-            "confidence": verdict["confidence"],
-            "rationale": verdict.get("rationale", ""),
-            "evidence": [{"snippet": position[e["snippet_id"]], "quote": e["quote"]} for e in verdict["evidence"]],
-        }
-    )
+    sample = {
+        "judge_id": verdict["judge_id"],
+        "label": verdict["label"],
+        "confidence": verdict["confidence"],
+        "rationale": verdict.get("rationale", ""),
+        "evidence": [{"snippet": position[e["snippet_id"]], "quote": e["quote"]} for e in verdict["evidence"]],
+    }
+    samples = entry["samples"]
+    same = next((i for i, s in enumerate(samples) if isinstance(s, dict) and s.get("judge_id") == sample["judge_id"]),
+                None)
+    if same is None:
+        samples.append(sample)
+    elif str(prompt or "").startswith(JEV_PROMPT_PREFIX) and (_confidence(sample["confidence"]) or 0) > (
+            _confidence(samples[same].get("confidence")) or 0):
+        samples[same] = sample
+    else:
+        return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(f".{os.getpid()}.tmp")
@@ -643,7 +663,10 @@ def cached_verdicts(task, model: str, prompt=None) -> list:
         return []
     snippets = task["snippets"]
     verdicts = []
-    for sample in entry.get("samples") or []:
+    samples = entry.get("samples") if isinstance(entry, dict) else None
+    for sample in samples if isinstance(samples, list) else []:
+        if not isinstance(sample, dict):
+            continue
         try:
             evidence = [{"snippet_id": snippets[e["snippet"]]["snippet_id"], "quote": e["quote"]}
                         for e in sample.get("evidence") or []]
@@ -672,6 +695,8 @@ def apply_cache(run, model: str, *, judge_ids=None, prompt=None) -> dict:
         if task["task_id"] in final:
             continue
         for verdict in cached_verdicts(task, model, prompt):
+            if verdict["judge_id"] == JEV_JUDGE_ID and not str(prompt or "").startswith(JEV_PROMPT_PREFIX):
+                continue  # a sample cached before JEV_JUDGE_ID was reserved: submit() would refuse it
             if judge_ids is None or verdict["judge_id"] in judge_ids:
                 by_judge.setdefault(verdict["judge_id"], []).append(verdict)
     reused = 0

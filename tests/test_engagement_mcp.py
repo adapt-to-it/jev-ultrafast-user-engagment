@@ -33,7 +33,14 @@ from jev_ultrafast.engagement import judges, judgments, mcp_server
 from jev_ultrafast.engagement.chrome import find_chromium
 from jev_ultrafast.engagement.collectors import PageCollector
 from jev_ultrafast.engagement.mcp_server import RESULT_CHARS, build_server
-from jev_ultrafast.engagement.service import TASK_PAGE, TASK_PAGE_CHARS, EngagementService, _failed, _JobStore
+from jev_ultrafast.engagement.service import (
+    TASK_PAGE,
+    TASK_PAGE_CHARS,
+    EngagementService,
+    _failed,
+    _jev_undecided,
+    _JobStore,
+)
 from jev_ultrafast.engagement.store import RunStore, iso_now
 from jev_ultrafast.engagement.transport import DirectTransport
 
@@ -1288,6 +1295,67 @@ def test_judge_with_jev_then_claude_backend_keeps_jev_finals(service, monkeypatc
     assert sum(1 for f in state["final"] if f["models"] == [JEV_MODEL] and f["samples"] == 1) == 7
 
 
+
+def test_judge_with_jev_asks_no_new_page_after_its_budget_and_the_next_call_goes_on(service, monkeypatch):
+    """A slow TypeSafe (ruling: bound the time the run's lock is held): the tool's call asks no new page once
+    JEV_BUDGET_S passed, the first page always; the pages it did not ask stay untouched (not final, no escalation,
+    counted in pages_left) and the next call asks them. One request per page in all, every Jev task decided."""
+    monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit())
+    svc = service()
+    run_id = svc.audit_shop(SHOP, wait=True)["run_id"]
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    rubrics = judgments.load_rubrics()
+    tasks = {t["task_id"]: t for t in judgments.make_tasks(svc.store.load(run_id))}
+    jev_tasks = {t for t in tasks if judgments.routing(tasks[t], rubrics) == "jev"}
+    jev_pages = {tasks[t]["page_id"] for t in jev_tasks}
+    stand_in = JevJudgeStandIn(tasks, {}, run_id)
+
+    def slow(url, key, body):
+        time.sleep(0.15)  # past the budget: no other page is started in this call
+        return stand_in(url, key, body)
+    monkeypatch.setattr(typesafe, "post_json", slow)
+    monkeypatch.setattr(mcp_server, "JEV_BUDGET_S", 0.05)
+    server = build_server(svc)
+
+    async def once(client):
+        return await call(client, "judge_with_jev", run_id=run_id)
+    first = session(server, once)
+    assert first["requests"] == 1 and first["pages_left"] == len(jev_pages) - 1 == 3
+    assert first["next"] == f"judge_with_jev('{run_id}') again: 3 pages are still to be asked"
+    state = svc.store.load(run_id)["judgments"]
+    final = {f["task_id"] for f in state["final"]}
+    asked = {t for t in jev_tasks if tasks[t]["page_id"] == stand_in.pages[0]}
+    assert final == asked and {v["task_id"] for v in state["verdicts"]} == asked
+    assert not [t for t in state["tasks"] if t.get("escalation")]  # an unasked page is no failure
+    assert first["open_tasks"] == len(tasks) - len(asked)
+
+    async def rest(client):
+        calls = [await call(client, "judge_with_jev", run_id=run_id)]
+        while calls[-1]["pages_left"]:
+            calls.append(await call(client, "judge_with_jev", run_id=run_id))
+        return calls
+    calls = session(server, rest)
+    assert [c["requests"] for c in calls] == [1, 1, 1] and [c["pages_left"] for c in calls] == [2, 1, 0]
+    assert sorted(stand_in.pages) == sorted(jev_pages)  # every page asked once, none twice
+    assert calls[-1]["next"].startswith("get_judgment_tasks") and calls[-1]["open_tasks"] == len(tasks) - len(jev_tasks)
+    run = svc.store.load(run_id)
+    assert {f["task_id"] for f in run["judgments"]["final"]} == jev_tasks
+    assert run["model_calls"]["judge_jev"]["requests"] == len(jev_pages)
+    unbounded = svc.judge_with_jev(run_id)  # the CLI's call has no budget: nothing is left to ask
+    assert unbounded["requests"] == 0 and unbounded["pages_left"] == 0
+
+
+def test_get_run_shows_each_crawler_fallback_lookup(service):
+    """model_calls in get_run keeps the per-stage lookups of the crawler fallback (four levels deep), not a count."""
+    svc = service()
+    run_id = svc.store.new_run("audit", SHOP, {})
+    lookup = {"profile": "mobile", "page_id": "mobile-home-1", "stage": "plp", "purpose": "plp", "operation": "CLICK",
+              "label": "Scarpe da corsa", "probability": 0.91, "executed": True, "reason": None}
+    svc.store.update(run_id, lambda run: run.update(model_calls={"crawler_fallback": {
+        "requests": 1, "latency_ms": 640, "input_tokens": 5200, "model": JEV_MODEL, "stages": [lookup]}}))
+    assert svc.get_run(run_id)["model_calls"]["crawler_fallback"]["stages"] == [lookup]
+
+
 class PilotRunner(FakeRunner):
     """FakeRunner that records the policy it was started with, and a typesafe run_auto (Jev chose until DONE)."""
 
@@ -1421,6 +1489,64 @@ def test_jev_pilots_a_journey_on_the_fixture_shop_by_default(chromium, shop_serv
     assert not [r for r in requests if r["method"] != "GET" or r["path"].startswith("/pay")]
 
 
+
+def test_a_refused_key_ends_the_jev_journey_before_any_step_and_names_the_host_journey(
+        chromium, shop_server, service, monkeypatch):
+    """Ruling on an invalid or expired TypeSafe key: policy auto still chooses Jev (presence, never a probe); the
+    first decision's HTTP 401 costs one request, nothing is executed, and journey_finish says so (status error,
+    journey_error, choose 0, failed 1, steps 0) with next naming a host journey, which the host then drives."""
+    monkeypatch.setattr(PageCollector, "net_quiet_s", 0.8)
+    monkeypatch.setattr(PageCollector, "lcp_quiet_s", 0.8)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "revoked-key")
+    sent = []
+
+    def refused(url, key, body):
+        assert url == SYSTEMONE and set(body) == {"model", "state", "questions"}
+        sent.append(body)
+        raise RuntimeError("Model provider returned HTTP 401; no action executed.")  # post_json on a 401
+    monkeypatch.setattr(typesafe, "post_json", refused)
+    svc = service(transport_factory=lambda: DirectTransport(chromium.ws_url))
+    server = build_server(svc)
+    url = shop_server.url("shop/index.html")
+    since = len(shop_server.requests)
+    journey = {"url": url, "goal": "Aggiungi al carrello un prodotto", "oracle": "cart_not_empty",
+               "profile": "desktop"}
+
+    async def scenario(client):
+        started = await call(client, "run_journey", **journey)
+        for _ in range(5):
+            if not (await call(client, "wait_run", run_id=started["run_id"], timeout_s=60))["timed_out"]:
+                break
+        finished = await call(client, "journey_finish", run_id=started["run_id"])
+        hosted = await call(client, "run_journey", **journey, policy="host")
+        await call(client, "journey_finish", run_id=hosted["run_id"], status="blocked")
+        return started, finished, hosted
+    started, finished, hosted = session(server, scenario)
+    assert started["policy"] == "typesafe" and len(sent) == 1
+    assert finished["status"] == "error" and finished["steps"] == 0 and finished["policy"] == "typesafe"
+    assert finished["verification"]["passed"] is None
+    assert finished["verification"]["checks"]["not_assessable"] == "journey_error"
+    assert finished["model_calls"]["choose"] == 0 and finished["model_calls"]["failed"] == 1
+    assert any("HTTP 401" in warning for warning in finished["warnings"])
+    assert finished["next"].startswith("run_journey(the same url, goal, oracle, oracle_params and profile, "
+                                       "policy='host'): Jev could not decide")
+    assert hosted["policy"] == "host" and hosted["observation"]["elements"] and len(sent) == 1
+    assert not [r for r in shop_server.requests[since:] if r["method"] != "GET" or r["path"].startswith("/pay")]
+
+
+def test_only_a_jev_journey_that_decided_nothing_names_the_host_journey():
+    """The fallback's condition: a failed TypeSafe request, no decision and no step. A browser failure (no failed
+    request), a failure after some steps or a host journey keep the score_run hint."""
+    undecided = {"policy": "typesafe", "status": "error", "steps": 0,
+                 "verification": {"passed": None, "checks": {"not_assessable": "journey_error"}},
+                 "model_calls": {"choose": 0, "text": 0, "stale_or_refused": 0, "failed": 1}}
+    assert _jev_undecided(undecided)
+    for change in ({"steps": 2}, {"policy": "host"}, {"status": "blocked"},
+                   {"model_calls": {"choose": 0, "failed": 0}}, {"model_calls": {"choose": 1, "failed": 1}},
+                   {"verification": {"passed": None, "checks": {"not_assessable": "navigation_error"}}}):
+        assert not _jev_undecided({**undecided, **change}), change
+
+
 def test_the_env_file_reaches_the_server_without_overriding_its_environment(tmp_path, monkeypatch):
     """JEV_ENGAGEMENT_ENV (plugin.json: ${CLAUDE_PLUGIN_DATA}/.env) is read at start with setdefault semantics: a
     variable the server inherited wins; the host learns which keys were found, never a value."""
@@ -1451,3 +1577,36 @@ def test_the_env_file_reaches_the_server_without_overriding_its_environment(tmp_
     text = anyio.run(main)
     assert json.loads(text)["server"] == {"typesafe_key": True, "text_helper": "inherited-model"}
     assert "ts-from-file" not in text and "tm-from-file" not in text
+
+
+def test_an_env_file_from_another_editor_never_keeps_the_server_from_starting(tmp_path, monkeypatch, caplog):
+    """The env file the skill tells users to write may come from Windows Notepad (a UTF-8 byte-order mark before the
+    first key) or a cp1252 editor (bytes that are not UTF-8): the key on the first line still loads, a stray byte
+    never raises, a line the environment cannot hold is skipped and the rest loads. A file that cannot be read at all
+    is logged by its path, never its content, and the server starts with the keys it inherited."""
+    from jev_ultrafast.engagement import cli
+
+    bom = tmp_path / "bom.env"
+    bom.write_bytes(b"\xef\xbb\xbfTYPESAFE_API_KEY=ts-bom\r\nTEXT_MODEL_API_KEY=tm-bom\r\n")
+    monkeypatch.setenv("JEV_ENGAGEMENT_ENV", str(bom))
+    assert mcp_server.load_keys() == {"typesafe_key": True, "text_helper": "deepseek-chat"}
+    assert os.environ["TYPESAFE_API_KEY"] == "ts-bom" and "﻿TYPESAFE_API_KEY" not in os.environ
+    monkeypatch.delenv("TYPESAFE_API_KEY")
+    monkeypatch.delenv("TEXT_MODEL_API_KEY")
+
+    latin1 = tmp_path / "latin1.env"
+    latin1.write_bytes("# chiavi per l\xe9 plugin\n=senza nome\nTEXT_MODEL=a\x00b\nTYPESAFE_API_KEY=ts-latin1\n"
+                       .encode("latin-1"))
+    monkeypatch.setenv("JEV_ENGAGEMENT_ENV", str(latin1))
+    assert mcp_server.load_keys() == {"typesafe_key": True, "text_helper": None}
+    assert os.environ["TYPESAFE_API_KEY"] == "ts-latin1" and "TEXT_MODEL" not in os.environ
+    monkeypatch.delenv("TYPESAFE_API_KEY")
+
+    def unreadable(path=None):
+        raise PermissionError(13, "Permission denied", str(path))
+    monkeypatch.setattr(cli, "load_environment", unreadable)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "ts-inherited")
+    with caplog.at_level("WARNING", logger="jev_ultrafast.engagement.mcp"):
+        assert mcp_server.load_keys() == {"typesafe_key": True, "text_helper": None}
+    assert f"env file {latin1} (JEV_ENGAGEMENT_ENV) not read: Permission denied" in caplog.text
+    assert "ts-" not in caplog.text

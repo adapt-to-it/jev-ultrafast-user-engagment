@@ -23,6 +23,7 @@ from jev_ultrafast.engagement.journey import (
     MAX_STALE,
     NO_PROGRESS,
     TEXT_HELPER,
+    TEXT_REFUSED,
     TEXT_WITHHELD,
     UNREAD,
     GuardRefused,
@@ -1610,10 +1611,10 @@ def element(body, pattern, operation="CLICK"):
                  if re.search(pattern, e["label"]) and operation in e["operations"]), None)
 
 
-def typesafe(decide, requests, texts=None):
+def typesafe(decide, requests, texts=None, text="scarpe da corsa"):
     """model.post_json standing in for TypeSafe and the text helper: it checks the body model.choose (model.field_text)
     built and answers schema-valid, so the real request building and validate_choice run. decide(body) returns
-    (operation, element index or None)."""
+    (operation, element index or None); text is the helper's value."""
     def post(url, key, body):
         assert key == "unused-in-tests"
         if url.endswith("/chat/completions"):  # model.field_text: one OpenAI-compatible JSON request
@@ -1622,7 +1623,7 @@ def typesafe(decide, requests, texts=None):
             context = json.loads(body["messages"][1]["content"])
             assert set(context) == {"goal", "field", "page", "recent_actions"}
             texts.append(context)
-            return {"choices": [{"message": {"content": json.dumps({"text": "scarpe da corsa"})}}],
+            return {"choices": [{"message": {"content": json.dumps({"text": text})}}],
                     "usage": {"prompt_tokens": 90, "completion_tokens": 6}}
         assert url == JEV and set(body) == {"model", "state", "questions"} and body["model"] == "jev-latest"
         state, questions = body["state"], body["questions"]
@@ -1686,10 +1687,13 @@ def test_typesafe_without_a_text_helper_refuses_a_chosen_type_text(journey, shop
     assert [(s["operation"], s["kind"], s["flags"].get("guard_blocked")) for s in steps] == [
         ("TYPE_TEXT", "fill", True), ("DONE", None, None)]
     assert re.search(r"Cerca", steps[0]["label"]) and steps[0]["guard_notes"] == [TEXT_WITHHELD]
+    assert steps[0]["flags"] == {"stale": False, "guard_blocked": True, "text_withheld": True}  # why nothing ran
     assert not step_executed(steps[0]) and steps[0]["execution_ms"] is None
     finished = runner.finish()
     run = store.load(run_id)
     record, checks = run["journey"], finished["verification"]["checks"]
+    assert checks["text_withheld_at"] == {"url": steps[0]["url_before"], "label": steps[0]["label"],
+                                          "step": steps[0]["step"]}  # a fact of the run, whatever the verdict
     assert record["text_helper"] is None and record["policy_requested"] == "auto"  # merged, not overwritten
     assert record["model_calls"] == {"choose": 2, "text": 0, "stale_or_refused": 1, "failed": 0,
                                      "model": "jev-1.13.0"}
@@ -1744,6 +1748,139 @@ def test_a_missing_text_helper_never_excuses_a_failure_jev_did_not_type_for(jour
     assert success["assessed"] and success["value"] is False and finished["friction"]["FAI.JOURNEY_SUCCESS"] is False
     assert not [w for w in run["warnings"] if w.startswith("text_helper_unavailable")]
     assert not [s for s in steps if s["flags"].get("guard_blocked")]
+    assert "text_withheld_at" not in finished["verification"]["checks"]
+
+
+@pytest.mark.parametrize("helper", ["none", "typed", "refused"])
+def test_refusal_on_home_then_dead_add_to_cart_on_pdp(journey, shop_server, monkeypatch, helper):
+    """The pin of ruling 2/5. Jev tries the search box once on the home page, then reaches the product by clicks and
+    its add-to-cart button is dead (the site's defect; typing plays no part in it). With a text helper that types, the
+    failure is the site's. Without one, or when the guard refuses the helper's value at input (an EAN reads as an
+    account number), the pilot's chosen path was denied, so the failed outcome is confounded on whichever page it
+    failed: not assessable (text_helper_unavailable, text_refused), never blamed on the site, while the refused
+    attempt, checks.text_withheld_at and the dead clicks (FAI.DEAD_CLICK_RATE, computed whatever the verdict) stay
+    recorded."""
+    jev_env(monkeypatch, None if helper == "none" else "unused-in-tests")
+    requests, texts, seen = [], [], set()
+
+    def decide(body):
+        url = body["state"]["page"]["url"]
+        if consent := element(body, r"^Rifiuta tutti$"):
+            return "CLICK", consent
+        if "index.html" in url and "search" not in seen:
+            seen.add("search")
+            return "TYPE_TEXT", element(body, r"Cerca", "TYPE_TEXT")
+        if "index.html" in url:
+            return "CLICK", element(body, r"^Scarpe da corsa$")
+        if "category.html" in url:
+            return "CLICK", element(body, r"^Scarpa da corsa Brezza$")
+        if "product.html" in url and "dead" not in seen:  # the button loses its listener; WAIT observes again
+            seen.add("dead")
+            runner.tab.evaluate("document.getElementById('add').replaceWith(document.getElementById('add')"
+                                ".cloneNode(true)), true")
+            return "WAIT", None
+        added = sum(1 for r in body["state"]["recent_actions"] if r["action"] == "Aggiungi al carrello")
+        if "product.html" in url and added < 2:
+            return "CLICK", element(body, r"^Aggiungi al carrello$")
+        return "BLOCKED", None
+
+    value = "8001234567890" if helper == "refused" else "scarpe da corsa"
+    monkeypatch.setattr(model, "post_json", typesafe(decide, requests, texts, text=value))
+    make, store = journey
+    runner = make()
+    started = runner.start(shop_server.url("shop/index.html"), "Aggiungi al carrello la scarpa Brezza",
+                           oracle="cart_not_empty", policy="typesafe", profile="desktop")
+    assert runner.run_auto()["status"] == "blocked"
+    finished = runner.finish()
+    run, steps = store.load(started["run_id"]), store.read_steps(started["run_id"])
+    checks, rows = finished["verification"]["checks"], {o["kpi_id"]: o for o in run["observations"]}
+    typed = [s for s in steps if s["operation"] == "TYPE_TEXT"]
+    assert len(typed) == 1 and typed[0]["url_before"].endswith("index.html")
+    dead = [s for s in steps if step_executed(s) and s["label"] == "Aggiungi al carrello"]
+    assert [(s["flags"]["dead_click"], "product.html" in s["url_before"]) for s in dead] == [(True, True)] * 2
+    rate = rows["FAI.DEAD_CLICK_RATE"]
+    assert rate["assessed"] and rate["evidence"]["dead"] == 2 and rate["value"] > 0
+    success = rows["FAI.JOURNEY_SUCCESS"]
+    if helper == "typed":  # the same path with the search typed: the dead button is the site's failure
+        assert len(texts) == 1 and step_executed(typed[0]) and "text_withheld" not in typed[0]["flags"]
+        assert finished["verification"]["passed"] is False
+        assert "not_assessable" not in checks and "text_withheld_at" not in checks
+        assert success["assessed"] and success["value"] is False
+    else:
+        reason = "text_refused" if helper == "refused" else "text_helper_unavailable"
+        assert len(texts) == (helper == "refused")  # the refused value was paid for
+        assert not step_executed(typed[0]) and typed[0]["flags"]["text_withheld"]
+        assert finished["verification"]["passed"] is None and checks["not_assessable"] == reason
+        assert checks["oracle_passed"] is False  # the oracle's reading stays as evidence
+        assert checks["text_withheld_at"]["url"].endswith("index.html")
+        refusal = {"refusal": "personal_text: looks like a card, phone or account number"} if texts else {}
+        assert checks["text_withheld_at"] == {"url": typed[0]["url_before"], "label": typed[0]["label"],
+                                              "step": typed[0]["step"], **refusal}
+        assert not success["assessed"] and success["reason"] == reason
+
+
+@pytest.mark.parametrize("trigger, reached", [("value", False), ("field", True)])
+def test_typesafe_text_the_guard_refuses_at_input_withholds_fills(journey, shop_server, monkeypatch, trigger,
+                                                                  reached):
+    """With a text helper, Jev's TYPE_TEXT that the guard refuses at input (the helper's value, a 13-digit EAN from
+    the goal, reads as an account number; or the field turned to email after the observation) is denied like a missing
+    helper: Jev has no notes channel, so fills are withheld and the next request differs (no TYPE_TEXT head) instead of
+    the same request until MAX_STALE. A failed goal is then not the site's failure (text_refused); a reached one
+    passes."""
+    jev_env(monkeypatch, "unused-in-tests")
+    requests, texts = [], []
+
+    def decide(body):
+        if field := element(body, r"Cerca", "TYPE_TEXT"):
+            if trigger == "field":  # after the observation, before the input: the guard reads the field again there
+                runner.tab.evaluate("document.getElementById('q').setAttribute('autocomplete', 'email'), true")
+            return "TYPE_TEXT", field
+        return "BLOCKED", None
+
+    value = "8001234567890" if trigger == "value" else "scarpe da corsa"
+    monkeypatch.setattr(model, "post_json", typesafe(decide, requests, texts, text=value))
+    make, store = journey
+    runner = make()
+    started = runner.start(shop_server.url("shop/resi.html"), "Cerca il prodotto con codice EAN 8001234567890",
+                           oracle="cart_not_empty", policy="typesafe", profile="desktop")
+    run_id = started["run_id"]
+    if reached:  # the goal is reached without typing: an earlier tab of the shop filled the cart (localStorage)
+        runner.tab.evaluate(f"localStorage.setItem('ps-cart', JSON.stringify({json.dumps(BREZZA)})), true")
+    result = runner.run_auto()
+    assert result["status"] == "blocked" and len(requests) == 2 and len(texts) == 1  # Jev's own BLOCKED
+    assert runner.tab.evaluate("document.getElementById('q').value") == ""  # nothing typed
+    first, second = requests
+    assert json.dumps(first, sort_keys=True) != json.dumps(second, sort_keys=True)
+    assert "type_text_target" in first["questions"] and "type_text_target" not in second["questions"]
+    assert not [e for e in second["state"]["elements"] if "TYPE_TEXT" in e["operations"]]
+    assert second["state"]["page"]["url"] == first["state"]["page"]["url"]  # the same page, fills withheld
+    notes = result["observation"]["guard_notes"]
+    assert TEXT_REFUSED in notes and TEXT_WITHHELD not in notes
+    refusal = ("personal_text: looks like a card, phone or account number" if trigger == "value"
+               else "personal_field:email")
+    steps = [s for s in store.read_steps(run_id) if s["operation"] != "NAVIGATION"]
+    assert [(s["operation"], s["kind"]) for s in steps] == [("TYPE_TEXT", "fill"), ("BLOCKED", None)]
+    assert steps[0]["flags"] == {"stale": False, "guard_blocked": True, "text_withheld": True}
+    assert steps[0]["guard_notes"] == [f"refused by the checkout guard: {refusal}"] and not step_executed(steps[0])
+    finished = runner.finish()
+    run = store.load(run_id)
+    checks = finished["verification"]["checks"]
+    assert checks["text_withheld_at"] == {"url": steps[0]["url_before"], "label": steps[0]["label"],
+                                          "step": steps[0]["step"], "refusal": refusal}
+    assert run["journey"]["model_calls"] == {"choose": 2, "text": 1, "stale_or_refused": 1, "failed": 0,
+                                             "model": "jev-1.13.0"}
+    assert not [w for w in run["warnings"] if w.startswith(("stopped:", "text_helper_unavailable"))]
+    warnings = [w for w in run["warnings"] if w.startswith("text_refused: ")]
+    assert len(warnings) == 1 and warnings[0].startswith("text_refused: Jev's text for 'Cerca")
+    assert warnings[0].endswith(f"was refused ({refusal}); nothing typed, fill actions withheld from here on")
+    success = next(o for o in run["observations"] if o["kpi_id"] == "FAI.JOURNEY_SUCCESS")
+    if reached:
+        assert finished["verification"]["passed"] is True and "not_assessable" not in checks
+        assert success["assessed"] and success["value"] is True
+    else:
+        assert finished["verification"]["passed"] is None and checks["not_assessable"] == "text_refused"
+        assert checks["oracle_passed"] is False  # the oracle's reading stays as evidence
+        assert not success["assessed"] and success["reason"] == "text_refused"
 
 
 def test_the_recorded_text_helper_is_the_model_field_text_sends(monkeypatch):
@@ -1831,12 +1968,16 @@ def test_host_journey_records_its_choices_and_no_model_calls(journey, shop_serve
     del runner._send
     field = index_of(runner.observation(), r"Cerca", "TYPE_TEXT")
     runner.tab.evaluate("document.getElementById('q').setAttribute('autocomplete', 'email'), true")
-    assert act(runner, "TYPE_TEXT", field, "scarpe")["refused"] == "personal_field:email"
-    runner.finish(status="done")
+    refused = act(runner, "TYPE_TEXT", field, "scarpe")
+    assert refused["refused"] == "personal_field:email"  # a host is told and chooses again: no fill is withheld
+    assert TEXT_REFUSED not in refused["observation"]["guard_notes"]
+    finished = runner.finish(status="done")
     record = store.load(run_id)["journey"]
     assert record["text_helper"] == "host" and record["usage"] == {}
     assert record["model_calls"] == {"choose": 4, "text": 0, "stale_or_refused": 2, "failed": 0}  # no model key
     steps = store.read_steps(run_id)
+    assert "text_withheld_at" not in finished["verification"]["checks"]
+    assert [s["flags"] for s in steps if s["flags"].get("guard_blocked")] == [{"stale": False, "guard_blocked": True}]
     assert record["timing_ms"]["text"] == 0
     assert record["timing_ms"]["decision"] == round(sum(s["decision_latency_ms"] or 0 for s in steps))
 

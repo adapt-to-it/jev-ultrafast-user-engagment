@@ -148,6 +148,7 @@ REASONS = {
     "left_shop": "percorso uscito dal negozio verso un altro sito",
     "page_unreadable": "controlli trattenuti: la pagina non è stata letta dall'audit",
     "text_helper_unavailable": "aiuto testuale non disponibile: TYPE_TEXT non offerto",
+    "text_refused": "testo rifiutato dalla guardia di sicurezza: TYPE_TEXT non più offerto",
     "cart_unreadable": "pagina del carrello non leggibile dall'audit",
     "final_page_unreadable": "pagina finale non leggibile dall'audit",
     "cart_items_unreadable": "righe del carrello non leggibili",
@@ -547,7 +548,8 @@ def _kpi_ids(rows) -> list:
 
 
 def _judgments(run) -> dict:
-    """Counts, models and who judged what: a final is Jev's when its only verdicts come from judge "jev". escalated
+    """Counts, models and who judged what: a final is Jev's when its only verdicts come from judge "jev" (an id
+    judgments.submit reserves to Jev's own namespace, so no host verdict is credited to Jev). escalated
     counts every task Jev passed on, escalated_final only those Claude has already decided (the footer's claim)."""
     state = run.get("judgments") or {}
     finals = state.get("final") or []
@@ -820,7 +822,8 @@ def _seconds(ms) -> str:
 
 def _pilot(journey) -> str:
     """The pilot line, when the run recorded its model calls and timing: who decided, how many decisions and how long
-    they took (excluded from the site's time), and the site's own time."""
+    they took (excluded from the site's time), the TypeSafe calls that gave no valid choice (model_calls.failed, not
+    in the decisions), and the site's own time."""
     calls, timing = journey.get("model_calls") or {}, journey.get("timing_ms") or {}
     if not calls and not timing:
         return ""
@@ -830,6 +833,8 @@ def _pilot(journey) -> str:
         took = timing.get("decision")
         parts.append(f"decisioni {calls['choose']}" + (
             f" ({_seconds(took)}, escluse dal tempo del sito)" if isinstance(took, (int, float)) else ""))
+    if calls.get("failed"):
+        parts.append(f"decisioni non riuscite {calls['failed']}")
     if calls.get("text"):
         helper = f", {journey['text_helper']}" if journey.get("text_helper") else ""
         parts.append(f"testi generati {calls['text']}{helper}")

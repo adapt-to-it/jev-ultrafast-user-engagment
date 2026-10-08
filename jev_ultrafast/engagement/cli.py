@@ -64,16 +64,22 @@ def _trap_signals() -> dict:
 
 def load_environment(path: Path | None = None) -> None:
     """KEY=value lines of ./.env (or path) into the environment, without overriding what is already set; an
-    "export " prefix and quotes around the whole value are dropped."""
+    "export " prefix and quotes around the whole value are dropped. A UTF-8 byte-order mark (Windows Notepad) is
+    skipped, bytes that are not UTF-8 (a cp1252 comment) never raise (they become U+FFFD) and a line the
+    environment cannot hold (no name, a NUL byte) is skipped: the other lines still load."""
     path = path or Path.cwd() / ".env"
     if path.is_file():
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
             if "=" in line and not line.lstrip().startswith("#"):
                 key, value = line.split("=", 1)
                 key, value = key.strip().removeprefix("export ").strip(), value.strip()
                 if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
                     value = value[1:-1]
-                os.environ.setdefault(key, value)
+                try:
+                    if key:
+                        os.environ.setdefault(key, value)
+                except (ValueError, OSError):
+                    pass
 
 
 def _choices(allowed):
@@ -399,8 +405,10 @@ def _print_journey(result: dict) -> None:
     calls, timing = result.get("model_calls") or {}, result.get("timing_ms") or {}
     if result.get("policy") == "typesafe" and calls:
         text = result.get("text_helper") or "non disponibile (TEXT_MODEL_API_KEY assente: Jev non può scrivere)"
-        print(f"  pilota Jev: {calls.get('choose')} decisioni in {_num((timing.get('decision') or 0) / 1000, 2)} s "
-              f"(escluse dal tempo del sito), aiuto testuale {text}")
+        failed = calls.get("failed") or 0  # requests that brought no decision (HTTP error, invalid answer)
+        extra = f" (+{failed} {'richiesta' if failed == 1 else 'richieste'} TypeSafe senza decisione)" if failed else ""
+        print(f"  pilota Jev: {calls.get('choose')} decisioni{extra} in "
+              f"{_num((timing.get('decision') or 0) / 1000, 2)} s (escluse dal tempo del sito), aiuto testuale {text}")
     for kpi, value in (result.get("friction") or {}).items():
         print(f"  {kpi:28} {_num(value, 2)}")
     print(f"  passi: {result.get('steps_path')}")
@@ -430,9 +438,10 @@ def _print_jev(result: dict, final: dict) -> None:
           f"TypeSafe in {_num(result['latency_ms'] / 1000, 2)} s, {final.get('decided', 0)} task decisi")
     for error in result.get("errors") or []:
         print(f"  errore del giudice: {error}")
-    if result.get("open_tasks"):
+    if result.get("open_tasks"):  # the score and the report do not count them until they are judged and rescored
         print(f"  {result['open_tasks']} task restano aperti (rubriche di percezione e passaggi a Claude): "
-              f"jev-engage judge {result['run_id']} --backend cli")
+              f"jev-engage judge {result['run_id']} --backend cli, poi jev-engage score {result['run_id']} "
+              "[--journey <run_id del journey>] per aggiornare punteggi e rapporto")
 
 
 def _journey(args, parser) -> int:

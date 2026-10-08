@@ -50,9 +50,10 @@ Coverage grades are "Confidenza A/B/C (copertura N %)", not quality grades. A pa
 Flow: audit_shop -> wait_run (repeat until complete/partial/failed) -> optional run_journey (policy auto: with \
 TYPESAFE_API_KEY on the server Jev, TypeSafe's choice model, pilots it by itself: wait_run until it finished, then \
 journey_finish; else you drive it with journey_act ... + journey_finish) -> judge_with_jev (Jev judges the rubrics \
-routed to it, one request per page) -> get_judgment_tasks (pages) -> your judges take the tasks still open (the \
-perception rubrics and Jev's escalations) -> submit_judgments -> finalize_judgments -> score_run (with the journey \
-run ids) -> get_report. One audit runs at a time; a journey next to an audit skews both runs' timings.
+routed to it, one request per page; call it again while pages_left > 0) -> get_judgment_tasks (pages) -> your \
+judges take the tasks still open (the perception rubrics and Jev's escalations) -> submit_judgments -> \
+finalize_judgments -> score_run (with the journey run ids) -> get_report. One audit runs at a time; a journey next to \
+an audit skews both runs' timings.
 
 Safety: the tools never place orders, never submit checkout or payment forms, never type into password, payment or \
 personal-data fields, and stop at the first checkout page. In journeys you choose only an offered operation and an \
@@ -65,6 +66,10 @@ IDEMPOTENT = ToolAnnotations(read_only_hint=False, destructive_hint=False, idemp
 BROWSE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True)
 # judge_with_jev asks TypeSafe (outside); a second call judges nothing new
 ASK = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
+# judge_with_jev asks no new page after this many seconds: a request in flight then ends within httpx's 25 s timeout
+# (a hanging TypeSafe is not retried), so the call stays below MAX_WAIT_S and the host's 2-minute tool timeout, and
+# the run's lock it holds is released in time for get_judgment_tasks
+JEV_BUDGET_S = 80
 # Claude Code never defers this tool (the judges read their tasks with it) and never saves one of its pages to a file
 # (by default it does so above 50,000 characters, and the judge agent has no tool to read a file): a page holds at most
 # TASK_PAGE_CHARS of task text plus the rubrics it cites, well below RESULT_CHARS
@@ -258,8 +263,10 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
         (escalated: low_probability, position_flip, no_evidence, or a failed request) stays open for your judges with
         the perception rubrics' tasks (open_tasks). available false (no TYPESAFE_API_KEY on the server): nothing
         changed, your judges take every task. Returns requests, latency_ms, input_tokens, model, accepted, escalated
-        counts by reason, per_task readings and the finalize counts."""
-        return service.judge_with_jev(run_id)
+        counts by reason, per_task readings and the finalize counts. A call asks no new page after about 80 s
+        (TypeSafe is slow): pages_left counts the pages not asked yet, untouched; call judge_with_jev again while
+        pages_left > 0 (each call asks at least one page), then get_judgment_tasks."""
+        return service.judge_with_jev(run_id, budget_s=JEV_BUDGET_S)
 
     @tool(IDEMPOTENT, "Judgment tasks", meta=JUDGE_META)  # the first call creates the tasks (writes the run)
     def get_judgment_tasks(
@@ -371,12 +378,19 @@ def _kill_browsers() -> None:
 
 def load_keys() -> dict:
     """The env file named by JEV_ENGAGEMENT_ENV (KEY=value lines; a variable the server inherited wins), then which
-    model keys the server holds (service.server_keys: booleans and the text model's name, never a value)."""
+    model keys the server holds (service.server_keys: booleans and the text model's name, never a value). A file
+    that cannot be read (permissions, a directory, a NUL byte in the path) is logged by path, never by content, and
+    the server starts with the keys it inherited."""
     from .cli import load_environment
     from .service import server_keys
 
     if path := os.environ.get("JEV_ENGAGEMENT_ENV"):
-        load_environment(Path(path).expanduser())
+        try:
+            load_environment(Path(path).expanduser())
+        except (OSError, ValueError) as exc:  # the reason, never the file's content
+            reason = exc.strerror if isinstance(exc, OSError) and exc.strerror else type(exc).__name__
+            log.warning("env file %s (JEV_ENGAGEMENT_ENV) not read: %s; the server keeps the keys it inherited",
+                        path, reason)
     return server_keys()
 
 

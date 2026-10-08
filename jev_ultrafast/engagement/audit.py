@@ -10,7 +10,9 @@ the funnel and the deception tests (crawler.landed_guard), and run["site"]["fina
 With TYPESAFE_API_KEY set, the funnel asks Jev for a lookup the lexicon missed (crawler: discover_funnel(jev_fallback);
 one request per lookup, at most 6 per profile); its requests add up in run["model_calls"]["crawler_fallback"]
 {requests, latency_ms, input_tokens, model, stages} and a stage reached that way gets the warning "<profile>: <stage>
-found through the Jev fallback: not reproducible across runs". Without the key nothing of this exists.
+found through the Jev fallback: not reproducible across runs" (its own lookup opened its page), or "<profile>: cart
+reached after a Jev pick (add_to_cart): not reproducible across runs" (a click on the way was Jev's). Without the key
+nothing of this exists.
 A Chromium this function launched is always closed, and so is the transport, whatever happens.
 """
 
@@ -173,8 +175,12 @@ def _tokens(usage) -> int:
 
 def _jev_fallbacks(run: dict, profile: str, pages: list[dict], reached: set[str]) -> None:
     """The profile's Jev fallback lookups (PageRecord.probes["jev_fallback"]) added to run["model_calls"]
-    ["crawler_fallback"], and a warning per stage reached through one: another run may get another answer. Nothing
-    when there was none. requests counts the lookups that attempted one (every reason but crawler.NO_REQUEST, so a
+    ["crawler_fallback"], and a warning per stage reached through one (a pick executed whose probe holds no failure
+    reason; any other lookup is listed in stages with its reason): another run may get another answer. The warning
+    names how: "<stage> found through the Jev fallback" when the stage's own lookup (plp, pdp, cart, checkout_entry)
+    opened its page, else "<stage> reached after a Jev pick (<lookups>)" (the add-to-cart or a variant option was
+    Jev's, the cart page the lexicon's). Nothing when there was none. requests counts the lookups that attempted one
+    (every reason but crawler.NO_REQUEST, so a
     "jev_error" counts, a TypeSafe key gone mid-run included); post_json's own retries of a 429, 503 or 529 are part
     of that one request. latency_ms adds up their time (a "jev_error" too); input_tokens comes from the answers' usage
     only (a failed request has none)."""
@@ -197,5 +203,11 @@ def _jev_fallbacks(run: dict, profile: str, pages: list[dict], reached: set[str]
                                                     for page, probe in asked)],
     }
     run["model_calls"] = calls
-    for stage in dict.fromkeys(p["stage"] for _, p in asked if p.get("executed") and p.get("stage") in reached):
-        run["warnings"].append(f"{profile}: {stage} found through the Jev fallback: not reproducible across runs")
+    led = [p for _, p in asked if p.get("executed") and p.get("reason") is None and p.get("stage") in reached]
+    for stage in dict.fromkeys(p["stage"] for p in led):  # a claim: only a lookup whose pick led to the stage
+        purposes = list(dict.fromkeys(p.get("purpose") for p in led if p["stage"] == stage))
+        if stage in purposes:  # the stage's own lookup: Jev's element opened its page
+            run["warnings"].append(f"{profile}: {stage} found through the Jev fallback: not reproducible across runs")
+        else:  # a click on the way (the add-to-cart, a variant option): the stage's page came from the lexicon
+            run["warnings"].append(f"{profile}: {stage} reached after a Jev pick ({', '.join(map(str, purposes))}): "
+                                   "not reproducible across runs")

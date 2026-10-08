@@ -347,7 +347,8 @@ def test_jev_judges_from_the_cli_and_a_claude_backend_takes_the_rest(monkeypatch
     assert f"Giudizi (jev, jev-1.13.0, 1 campione): {accepted} verdetti accettati, {passed} task passati a Claude " \
            f"(low_probability {passed}), {len(requests)} richieste TypeSafe" in out
     open_tasks = len(state["tasks"]) - len(state["final"])
-    assert f"{open_tasks} task restano aperti" in out and f"jev-engage judge {run_id} --backend cli" in out
+    assert f"{open_tasks} task restano aperti" in out and f"jev-engage judge {run_id} --backend cli, poi " \
+           f"jev-engage score {run_id} [--journey <run_id del journey>] per aggiornare punteggi e rapporto" in out
 
     def scripted(self, tasks):
         return [{"task_id": t["task_id"], "judge_id": self.judge_id, "model": self.model,
@@ -362,6 +363,19 @@ def test_jev_judges_from_the_cli_and_a_claude_backend_takes_the_rest(monkeypatch
     assert len(state["final"]) == len(state["tasks"])
     assert sum(1 for f in state["final"] if f["models"] == ["jev-1.13.0"]) == len(jev) - len(escalated)
     assert cli.main(["score", run_id]) == 0 and "con giudizi LLM" in capsys.readouterr().out
+
+
+
+def test_the_jev_pilot_line_counts_the_requests_that_brought_no_decision(capsys):
+    """A refused key at the first decision: 0 decisions plus 1 failed request, as many as were sent."""
+    journey = {"run_id": "r", "status": "error", "steps": 0, "policy": "typesafe", "text_helper": None,
+               "verification": {"passed": None, "checks": {"not_assessable": "journey_error"}},
+               "model_calls": {"choose": 0, "text": 0, "stale_or_refused": 0, "failed": 1},
+               "timing_ms": {"decision": 0}, "friction": {}, "steps_path": "steps.jsonl"}
+    cli._print_journey(journey)
+    assert "pilota Jev: 0 decisioni (+1 richiesta TypeSafe senza decisione) in 0,00 s" in capsys.readouterr().out
+    cli._print_journey({**journey, "model_calls": {"choose": 5, "text": 0, "failed": 0}})
+    assert "pilota Jev: 5 decisioni in 0,00 s (escluse" in capsys.readouterr().out
 
 
 def test_audit_with_the_jev_judge_needs_its_key_before_any_work(capsys, monkeypatch):

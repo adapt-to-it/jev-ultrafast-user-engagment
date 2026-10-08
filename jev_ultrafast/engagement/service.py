@@ -297,18 +297,18 @@ def _clip(text, limit: int = 240) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _compact(value, depth: int = 0):
-    """Evidence for a summary: short strings, at most 5 items per list, two levels deep."""
+def _compact(value, depth: int = 0, *, levels: int = 2, items: int = 5):
+    """Evidence for a summary: short strings, at most `items` items per list, `levels` levels deep."""
     if isinstance(value, str):
         return _clip(value, 160)
     if isinstance(value, dict):
-        if depth >= 2:
+        if depth >= levels:
             return f"{{{len(value)} campi}}"
-        return {k: _compact(v, depth + 1) for k, v in list(value.items())[:12]}
+        return {k: _compact(v, depth + 1, levels=levels, items=items) for k, v in list(value.items())[:12]}
     if isinstance(value, (list, tuple)):
-        if depth >= 2:
+        if depth >= levels:
             return f"[{len(value)} elementi]"
-        return [_compact(v, depth + 1) for v in list(value)[:5]]
+        return [_compact(v, depth + 1, levels=levels, items=items) for v in list(value)[:items]]
     return value
 
 
@@ -348,6 +348,17 @@ def _pilot(journey: dict) -> dict:
     (decision time is never the site's), usage (TypeSafe tokens)."""
     keys = ("policy", "policy_requested", "text_helper", "model_calls", "timing_ms", "usage")
     return {key: journey.get(key) for key in keys if key in journey or key == "policy"}
+
+
+def _jev_undecided(summary: dict) -> bool:
+    """A Jev journey that stopped before its first step because TypeSafe gave no decision (a refused or expired key,
+    an unreachable provider): nothing was executed, so a host journey with the same goal repeats no browser action. A
+    browser failure (no failed request) or a failure after some steps does not qualify."""
+    calls = summary.get("model_calls") if isinstance(summary.get("model_calls"), dict) else {}
+    checks = (summary.get("verification") or {}).get("checks") or {}
+    return (summary.get("policy") == "typesafe" and summary.get("status") == "error"
+            and checks.get("not_assessable") == "journey_error" and not calls.get("choose")
+            and (calls.get("failed") or 0) > 0 and not summary.get("steps"))
 
 
 def _verification(verification):
@@ -578,8 +589,8 @@ class EngagementService:
             "errors": [_clip(e, 400) for e in (run.get("errors") or [])[:10]],
             "server": server_keys(),
         }
-        if isinstance(run.get("model_calls"), dict) and run["model_calls"]:
-            summary["model_calls"] = _compact(run["model_calls"])
+        if isinstance(run.get("model_calls"), dict) and run["model_calls"]:  # down to each fallback lookup's fields
+            summary["model_calls"] = _compact(run["model_calls"], levels=4, items=12)
         if job is not None and job.progress:
             summary["progress"] = job.progress[-1]
         if run.get("journey"):
@@ -808,7 +819,7 @@ class EngagementService:
         run = run or self.store.load(result["run_id"])
         friction = {o["kpi_id"]: o.get("value") for o in run.get("observations") or [] if o.get("assessed")}
         not_assessed = Counter(o.get("reason") for o in run.get("observations") or [] if not o.get("assessed"))
-        return {
+        summary = {
             "run_id": result["run_id"], "status": result.get("status"), "run_status": run.get("status"),
             **_pilot(run.get("journey") or {}),
             "verification": _verification(result.get("verification")), "friction": friction,
@@ -817,6 +828,11 @@ class EngagementService:
             "warnings": [_clip(w) for w in (run.get("warnings") or [])[-10:]],
             "next": f"score_run(<audit run_id>, journey_run_ids=['{result['run_id']}'])",
         }
+        if _jev_undecided(summary):  # the skill's fallback: the host pilots the same journey once
+            summary["next"] = ("run_journey(the same url, goal, oracle, oracle_params and profile, policy='host'): Jev "
+                               "could not decide (see warnings) and nothing was executed; you pilot it with "
+                               "journey_act, and score_run takes that journey's run id instead of this one")
+        return summary
 
     def _ensure_reaper(self) -> None:
         with self._lock:
@@ -1020,13 +1036,17 @@ class EngagementService:
             outcome[key] = (outcome.get(key) or [])[:30]
         return outcome
 
-    def judge_with_jev(self, run_id: str, *, model: str | None = None, use_cache: bool = True) -> dict:
+    def judge_with_jev(self, run_id: str, *, model: str | None = None, use_cache: bool = True,
+                       budget_s: float | None = None) -> dict:
         """Jev judges the open tasks of the rubrics routed to it (judges.judge_with_jev): one TypeSafe request per page
         (a label head, its reversed-order twin and evidence heads over the offered snippet ids), one sample per task.
         An accepted task is final; one Jev is unsure about (low probability, a position flip, no evidence) or could
         not answer is escalated and stays open, with the Claude rubrics' tasks, for the host's judges (open_tasks).
-        Without TYPESAFE_API_KEY nothing changes (available false). The requests run inside the run's lock (seconds),
-        so verdicts the host submits meanwhile wait and are kept."""
+        Without TYPESAFE_API_KEY nothing changes (available false). budget_s: no new page is asked once that many
+        seconds passed (the first page always is); the pages left unasked are untouched (pages_left counts them) and
+        the next call asks them. The requests run inside the run's lock, seconds in the normal case, at most budget_s
+        plus one request when TypeSafe hangs (without budget_s, every page's request), so verdicts the host submits
+        meanwhile wait and are kept."""
         from .judges import JevJudge, judge_with_jev
 
         self._finished_audit(run_id)
@@ -1035,14 +1055,17 @@ class EngagementService:
 
         def work(run):
             _clear_seed(run)
-            summary.update(judge_with_jev(run, judge, use_cache=use_cache))
+            summary.update(judge_with_jev(run, judge, use_cache=use_cache, budget_s=budget_s))
             final = {f["task_id"] for f in run["judgments"].get("final") or []}
             summary["per_task"] = _jev_readings(run, final)
         if judge.api_key:
             self.store.update(run_id, work)
         else:  # nothing is written: the host's judges take every task
             summary = judge_with_jev({}, judge)
-        finalize = summary.get("finalize") or {}
+        finalize, pages_left = summary.get("finalize") or {}, summary.get("pages_left") or 0
+        follow = (f"judge_with_jev('{run_id}') again: {pages_left} pages are still to be asked" if pages_left else
+                  "get_judgment_tasks: the host's judges take the open tasks (Claude rubrics and Jev's escalations), "
+                  "then finalize_judgments")
         return {"run_id": run_id, "backend": "jev", "available": summary["available"],
                 "typesafe_key": bool(judge.api_key), "reason": summary.get("reason"), "model": summary.get("model")
                 or judge.model, "samples": 1, "requests": summary["requests"], "latency_ms": summary["latency_ms"],
@@ -1051,8 +1074,7 @@ class EngagementService:
                 "rejected_total": 0, "per_task": summary.get("per_task", [])[:60],
                 "finalize": {k: len(v) if isinstance(v, list) else v for k, v in finalize.items()},
                 "open_tasks": summary["open_tasks"],  # None when Jev did not run
-                "next": "get_judgment_tasks: the host's judges take the open tasks (Claude rubrics and Jev's "
-                        "escalations), then finalize_judgments"}
+                "pages_left": pages_left, "next": follow}
 
     def judge_with(self, run_id: str, backend: str = "cli", samples: int = 3, *, model: str | None = None,
                    batch_size: int = 8) -> dict:

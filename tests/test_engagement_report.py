@@ -839,16 +839,17 @@ def test_journey_card_names_the_pilot_and_its_decision_time():
     _, html = build(run, steps=steps())
     assert "pilota:" not in html  # a run recorded before model calls were persisted
     run["journey"].update(policy="typesafe", policy_requested="auto", text_helper="deepseek-chat",
-                          model_calls={"choose": 7, "text": 1, "stale_or_refused": 1},
+                          model_calls={"choose": 7, "text": 1, "stale_or_refused": 1, "failed": 2},
                           timing_ms={"decision": 3240, "text": 410, "site": 12430, "wall": 18000},
                           usage={"input_tokens": 61000, "output_tokens": 0})
     data, html = build(run, steps=steps())
-    line = ("pilota: Jev (TypeSafe) · decisioni 7 (3,2 s, escluse dal tempo del sito) · testi generati 1, "
-            "deepseek-chat · tempo del sito 12,4 s")
+    line = ("pilota: Jev (TypeSafe) · decisioni 7 (3,2 s, escluse dal tempo del sito) · decisioni non riuscite 2 · "
+            "testi generati 1, deepseek-chat · tempo del sito 12,4 s")  # a failed TypeSafe call is no decision
     assert f'<p class="muted">{report.e(line)}</p>' in html
     assert data["journey"]["model_calls"]["choose"] == 7 and data["journey"]["policy_requested"] == "auto"
     assert data["journey"]["timing_ms"]["site"] == 12430 and data["journey"]["text_helper"] == "deepseek-chat"
-    run["journey"].update(policy="host", text_helper=None, model_calls={"choose": 5, "text": 0}, timing_ms={})
+    run["journey"].update(policy="host", text_helper=None, model_calls={"choose": 5, "text": 0, "failed": 0},
+                          timing_ms={})
     _, html = build(run, steps=steps())
     assert f'<p class="muted">{report.e("pilota: agente host · decisioni 5")}</p>' in html
 
@@ -859,6 +860,9 @@ def test_text_helper_and_jev_fallback_reasons_are_shown_in_italian():
                                                                  "not_assessable": "text_helper_unavailable"}}
     _, html = build(run, steps=steps())
     assert "Verifica non valutabile: aiuto testuale non disponibile: TYPE_TEXT non offerto." in html
+    run["journey"]["verification"]["checks"]["not_assessable"] = "text_refused"  # the guard refused Jev's text
+    _, html = build(run, steps=steps())
+    assert "Verifica non valutabile: testo rifiutato dalla guardia di sicurezza: TYPE_TEXT non più offerto." in html
     warning = "mobile: plp found through the Jev fallback: not reproducible across runs"
     text = ("mobile: fase listing di categoria trovata con il fallback Jev (elemento scelto dal modello): non "
             "riproducibile tra run diverse")
