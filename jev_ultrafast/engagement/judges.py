@@ -623,12 +623,15 @@ JEV_PROMPT_VERSION = JevJudge.prompt_version = jev_prompt_version()
 
 def jev_tasks(run, rubrics=None) -> list:
     """Tasks Jev may still judge: routed to Jev, not final, untouched by any judge and not escalated with Jev's
-    reading (an escalation for a failed request or an invalid answer is retried: judgments.retryable)."""
+    reading (an escalation for a failed request or an invalid answer is retried: judgments.retryable). Never-asked
+    tasks (no escalation) come first, so a call cut by its budget asks a page no request reached before it retries a
+    failed one: a TypeSafe that keeps failing still gets every page asked once (_by_page keeps one request per page)."""
     state = run.get("judgments") or {}
     rubrics = rubrics or load_rubrics()
     done = {f["task_id"] for f in state.get("final") or []} | {v["task_id"] for v in state.get("verdicts") or []}
-    return [t for t in state.get("tasks") or []
+    todo = [t for t in state.get("tasks") or []
             if routing(t, rubrics) == "jev" and t["task_id"] not in done and retryable(t)]
+    return sorted(todo, key=lambda t: "escalation" in t)  # stable: task order within each half
 
 
 def judge_with_jev(run, judge=None, *, use_cache=True, budget_s=None) -> dict:

@@ -117,15 +117,20 @@ Keep the journey `run_id` for step 4; the steps below take the **audit** `run_id
 
 ## 3. Judgments: Jev first, then three Sonnet judges for what is left
 
-0. Call `judge_with_jev(<audit run_id>)` (it also creates the tasks), and call it again while its `pages_left` is
-   above 0: a call stops asking new pages after about 80 s, so a slow TypeSafe never holds the tool past its timeout,
-   and a page Jev has not asked yet is judged by nobody. Jev answers the operational rubrics with one TypeSafe request
-   per page; the tasks it accepts become final. If `available` is false, say in one line that without a TypeSafe key
-   the Claude judges take every task. If its `errors` name HTTP 401 or 403, say in one line "chiave TypeSafe
-   rifiutata: giudicano i giudici Claude" and stop calling `judge_with_jev` in this session, even while `pages_left`
-   is above 0 (the tasks it could not judge are escalated `request_failed`: the Claude judges take them). Note
-   `accepted`, `escalated` (tasks Jev passed to Claude, by reason) and `requests`, added up over the calls. If
-   `open_tasks` is 0, go straight to step 3.5.
+0. Call `judge_with_jev(<audit run_id>)` (it also creates the tasks), and call it again while its `next` names
+   `judge_with_jev`. Jev answers the operational rubrics with one TypeSafe request per page; the tasks it accepts
+   become final. A call stops asking new pages after about 30 s, so a slow TypeSafe never holds the tool past its
+   timeout. `pages_left` counts the pages Jev has never asked; the server names `judge_with_jev` in `next` only while
+   pages are left and the call lowered `pages_left`, so the loop ends (otherwise `next` names `get_judgment_tasks`,
+   even with `pages_left` above 0: the Claude judges take those pages). A page whose request failed counts as asked:
+   its tasks are escalated `request_failed`, and the Claude judges take them if no later call answers them. Calling
+   again lets Jev read every page once before the Claude judges start, who would otherwise judge its tasks with three
+   samples each. If `available` is false, say in one line that without a TypeSafe key the Claude judges take every
+   task. If its `errors` name HTTP 401 or 403, say in one line "chiave TypeSafe rifiutata: giudicano i giudici
+   Claude" and stop calling `judge_with_jev` in this session, even while its `next` names it (the tasks it could not
+   judge are escalated `request_failed`, and the Claude judges take every open task). Note `accepted` and `requests`,
+   added up over the calls (how many tasks Jev passed to Claude comes from `get_run` in step 4: a page that failed in
+   one call and was answered by a later one is no longer passed). If `open_tasks` is 0, go straight to step 3.5.
 1. List the pages: call `get_judgment_tasks(<audit run_id>, brief=true)`, then again with `cursor` set to each
    `next_cursor` until it is null. Note each page's `cursor`, `next_cursor` and `missing_samples`. A page holds at most
    15 tasks, fewer when its snippets are long; brief and full reads page identically, so these are exactly the pages
@@ -183,7 +188,9 @@ without a journey), the judges from step 3 (Jev with the `model` of `judge_with_
 sonnet when Claude judges ran), and the TypeSafe requests added up from `get_run(<audit run_id>)`'s `model_calls`
 (`judge_jev.requests`, every `judge_with_jev` call included, and `crawler_fallback.requests`, each when present) and
 the Jev journey's `model_calls.choose + model_calls.failed` (policy `typesafe` only, the failed run of step 2
-included). When a Jev journey's `model_calls.failed` is above 0, add "<failed> richieste TypeSafe senza decisione".
+included). The "Passati a Claude" line takes `judgments.escalated` (the count) and `judgments.escalated_reasons` (by
+reason) of that same `get_run`: the tasks that still carry Jev's escalation, never the per-call `escalated` added up.
+When a Jev journey's `model_calls.failed` is above 0, add "<failed> richieste TypeSafe senza decisione".
 For a Jev journey add "decisioni <choose> in <timing_ms.decision / 1000> s, escluse dal tempo del sito". Leave out
 the "Passati a Claude" line when Jev did not judge.
 

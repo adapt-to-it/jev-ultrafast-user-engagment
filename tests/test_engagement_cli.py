@@ -3,6 +3,7 @@ judges, no `claude -p`; Jev through a stand-in for jev_ultrafast.model.post_json
 shop and a SIGTERM/SIGHUP during one (headless Chromium; skipped without it)."""
 
 import copy
+import importlib.util
 import json
 import os
 import signal
@@ -130,6 +131,42 @@ def test_a_journey_that_cannot_start_leaves_the_audit_printed_and_scored(capsys,
     assert "Engagement readiness" in out and RunStore().load(run_id).get("scores")
 
 
+def test_an_audit_whose_jev_judge_failed_on_every_page_exits_1(capsys, monkeypatch):
+    """audit --judge jev reads like judge --backend jev: when every Jev request failed and nothing was accepted the
+    judge step could not be done (exit 1), while the audit is still printed and scored; once Jev answers, exit 0."""
+    from jev_ultrafast.engagement import service
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    monkeypatch.setattr(chrome, "sweep_stale_profiles", lambda root=None: [])
+    run_id = stored_audit()
+    monkeypatch.setattr(service.EngagementService, "audit_shop", lambda self, *a, **k: self.get_run(run_id))
+    sent = []
+
+    def unreachable(url, key, body):
+        sent.append(body)
+        raise RuntimeError("Model connection failed; no action executed.")
+    monkeypatch.setattr(typesafe, "post_json", unreachable)
+    assert cli.main(["audit", SHOP, "--judge", "jev"]) == 1
+    out = capsys.readouterr().out
+    assert sent and "0 verdetti accettati" in out and "Model connection failed" in out
+    assert "Engagement readiness" in out and RunStore().load(run_id).get("scores")
+    assert cli.main(["judge", run_id, "--backend", "jev"]) == 1  # the same step, the same exit status
+    capsys.readouterr()
+
+    def first_label(url, key, body):  # the rubric's first label (last in the reversed head) and the first snippet
+        answers = {}
+        for qid, question in body["questions"].items():
+            ids = list(question["criteria"])
+            pick = ids[-1] if qid.startswith("label_rev:") else ids[0]
+            answers[qid] = {"choice": pick, "probabilities": {i: 0.9 if i == pick else 0.1 / (len(ids) - 1)
+                                                              for i in ids}, "confidence": 0.85}
+        return {"model": "jev-1.13.0", "answers": answers, "usage": {"input_tokens": 900}}
+    monkeypatch.setattr(typesafe, "post_json", first_label)
+    assert cli.main(["audit", SHOP, "--judge", "jev", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)["judgments"]
+    assert result["accepted"] > 0 and not result["errors"] and result["pages_left"] == 0
+
+
 def test_a_closed_pipe_ends_the_command_quietly(tmp_path):
     """`jev-engage list | head -1` with the reader gone: exit 141, no traceback, no "errore" line."""
     command = [sys.executable, "-m", "jev_ultrafast.engagement.cli", "list", "--json"]
@@ -150,6 +187,47 @@ def test_dotenv_values_never_override_the_environment(tmp_path, monkeypatch):
     cli.load_environment()
     assert os.environ["JEV_TEST_KEPT"] == "from the environment" and os.environ["JEV_TEST_ADDED"] == "42"
     assert os.environ["JEV_TEST_QUOTED"] == "a b=c" and os.environ["JEV_TEST_EXPORTED"] == "x"
+
+
+def test_dotenv_inline_comments_and_empty_inherited_values(tmp_path, monkeypatch):
+    """An inherited empty variable (TYPESAFE_API_KEY= in a shell profile) counts as unset, so the file's key loads; an
+    unquoted value ends at " #" and a quoted one at its closing quote, so a comment never becomes part of a key (a 401
+    later); a "#" inside quotes or inside a word stays."""
+    names = ("JEV_TEST_EMPTY", "JEV_TEST_INLINE", "JEV_TEST_QUOTED", "JEV_TEST_HASH", "JEV_TEST_TAB", "JEV_TEST_KEEP",
+             "JEV_TEST_NOTE")
+    for name in names:
+        monkeypatch.setenv(name, "placeholder")
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("JEV_TEST_EMPTY", "")
+    monkeypatch.setenv("JEV_TEST_KEEP", "inherited")
+    (tmp_path / ".env").write_text("JEV_TEST_EMPTY=file-key\nJEV_TEST_INLINE=file-key # la mia chiave\n"
+                                   "JEV_TEST_QUOTED=\"a # b\"  # commento\nJEV_TEST_HASH=abc#def\n"
+                                   "JEV_TEST_TAB=tab-key\t# commento\nJEV_TEST_KEEP=from-file\n"
+                                   "JEV_TEST_NOTE= # solo un commento\n", encoding="utf-8")
+    cli.load_environment()
+    assert [os.environ[name] for name in names] == ["file-key", "file-key", "a # b", "abc#def", "tab-key",
+                                                    "inherited", ""]
+
+
+def test_dotenv_escapes_inside_double_quotes():
+    """Inside double quotes \\" is a quote and \\\\ a backslash (the shell's and python-dotenv's reading), so a value
+    with an escaped quote is not cut there; other backslashes and single-quoted text stay as written."""
+    cases = {' "a\\"b" # nota': 'a"b', '"ends\\\\"': "ends\\", '"c:\\path"': "c:\\path",
+             "'a\\\"b'": 'a\\"b', '"open': '"open', '""': ""}
+    assert {raw: cli._env_value(raw) for raw in cases} == cases
+
+
+def test_an_unreadable_dotenv_is_a_warning_not_a_traceback(monkeypatch, capsys):
+    """./.env that cannot be read (permissions): one line naming the reason, never the content; the command goes on
+    with the inherited environment."""
+    def unreadable(path=None):
+        raise PermissionError(13, "Permission denied", ".env")
+    monkeypatch.setattr(cli, "load_environment", unreadable)
+    monkeypatch.setattr(chrome, "sweep_stale_profiles", lambda root=None: [])
+    assert cli.main(["list"]) == 0
+    captured = capsys.readouterr()
+    assert "avviso: ./.env non letto (Permission denied): valgono le variabili dell'ambiente" in captured.err
+    assert "Traceback" not in captured.err and "Nessuna run" in captured.out
 
 
 def test_list_and_report_of_nothing(capsys, monkeypatch):
@@ -364,6 +442,109 @@ def test_jev_judges_from_the_cli_and_a_claude_backend_takes_the_rest(monkeypatch
     assert sum(1 for f in state["final"] if f["models"] == ["jev-1.13.0"]) == len(jev) - len(escalated)
     assert cli.main(["score", run_id]) == 0 and "con giudizi LLM" in capsys.readouterr().out
 
+
+
+def test_jev_errors_print_one_line_per_message(monkeypatch, capsys):
+    """A refused key fails every page with the same message: one line with how many pages and tasks it hit, not one
+    raw dict per task; the --json output keeps the per-task errors and the groups."""
+    run_id = stored_audit()
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    requests = []
+
+    def refused(url, key, body):
+        requests.append(body)
+        raise RuntimeError("Model provider returned HTTP 401; no action executed.")
+    monkeypatch.setattr(typesafe, "post_json", refused)
+    assert cli.main(["judge", run_id, "--backend", "jev"]) == 1  # nothing judged, every request failed
+    out = capsys.readouterr().out
+    state = RunStore().load(run_id)["judgments"]
+    rubrics = judgments.load_rubrics()
+    jev = [t for t in state["tasks"] if judgments.routing(t, rubrics) == "jev"]
+    pages = len({t["page_id"] for t in jev})
+    assert len(requests) == pages > 1
+    lines = [line for line in out.splitlines() if "errore del giudice" in line]
+    assert lines == [f"  errore del giudice su {pages} pagine ({len(jev)} task): Model provider returned HTTP 401; "
+                     "no action executed."]
+    assert "{'page_id'" not in out
+    assert cli.main(["judge", run_id, "--backend", "jev", "--json"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["error_groups"] == [{"error": "Model provider returned HTTP 401; no action executed.",
+                                       "pages": pages, "tasks": len(jev)}]
+    assert result["errors_total"] == len(jev) and len(result["errors"]) == min(10, len(jev))
+
+
+def smoke_module():
+    """scripts/smoke_engagement.py (not run by pytest: its main calls the paid API); its pure helpers are tested."""
+    path = Path(__file__).resolve().parents[1] / "scripts" / "smoke_engagement.py"
+    spec = importlib.util.spec_from_file_location("smoke_engagement", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_smoke_journey_runs_on_the_audit_run_site(tmp_path, monkeypatch, capsys):
+    """--audit-run: score_run merges the journey into that audit, so the journey runs on the audit's own site: --url
+    on another host exits 2 before any work (unless the journey is skipped); without --url the journey starts from the
+    audit's start page, and the fixture shop is served again iff the audit's smoke_summary.json records a fixture
+    smoke (ruling 1: the record, not the URL's shape; the host has no port, so two loopback shops look alike). A
+    later --audit-run smoke's own summary keeps that record (audit_mode)."""
+    smoke = smoke_module()
+    store = RunStore(tmp_path / "art")
+    real = store.new_run("audit", "https://shop.example/", {})
+    fixture = store.new_run("audit", "http://127.0.0.1:44617/shop/index.html", {})
+    store.write_json(fixture, "smoke_summary.json", {"mode": "fixture", "audit_mode": "fixture"})
+    unmarked = store.new_run("audit", "http://127.0.0.1:44618/shop/index.html", {})  # the CLI's, or a smoke cut short
+    dev = store.new_run("audit", "http://127.0.0.1:8000/shop/index.html", {})  # a dev shop a smoke audited with --url
+    store.write_json(dev, "smoke_summary.json", {"mode": "url", "audit_mode": "url"})
+    rerun = store.new_run("audit", "http://127.0.0.1:44619/shop/index.html", {})  # an earlier smoke's, then --url
+    store.write_json(rerun, "smoke_summary.json", {"mode": "url", "audit_mode": "fixture"})
+    older = store.new_run("audit", "http://127.0.0.1:44620/shop/index.html", {})  # a summary without audit_mode
+    store.write_json(older, "smoke_summary.json", {"mode": "fixture"})
+    broken = store.new_run("audit", "http://127.0.0.1:44621/shop/index.html", {})
+    (store.path(broken) / "smoke_summary.json").write_text("{not json", encoding="utf-8")
+    journey = store.new_run("journey", "https://shop.example/", {})
+
+    def site(*argv):
+        args = smoke.parse_args([*argv, "--artifacts", str(tmp_path / "art")] if "--audit-run" in argv else argv)
+        audit, problem = smoke.load_audit_run(args)
+        return (problem,) if problem else smoke.journey_site(args, audit)
+    assert site() == (True, None, None)
+    assert site("--url", "https://other.example/") == (False, "https://other.example/", None)
+    assert site("--audit-run", real) == (False, "https://shop.example/", None)
+    assert site("--audit-run", real, "--url", "https://shop.example/p/1") == (False, "https://shop.example/p/1", None)
+    assert site("--audit-run", fixture) == (True, None, None)
+    assert site("--audit-run", unmarked) == (False, "http://127.0.0.1:44618/shop/index.html", None)
+    assert site("--audit-run", dev) == (False, "http://127.0.0.1:8000/shop/index.html", None)
+    assert site("--audit-run", rerun) == site("--audit-run", older) == (True, None, None)
+    assert site("--audit-run", broken) == (False, "http://127.0.0.1:44621/shop/index.html", None)
+    args = smoke.parse_args(["--audit-run", fixture, "--artifacts", str(tmp_path / "art")])
+    assert smoke.audit_mode(args, fixture) == "fixture" and smoke.audit_mode(args, real) is None
+    wrong = site("--audit-run", real, "--url", "http://127.0.0.1:8000/shop/index.html")
+    assert wrong[:2] == (False, "http://127.0.0.1:8000/shop/index.html") and "not on shop.example" in wrong[2]
+    assert "is a journey run" in site("--audit-run", journey)[0]
+
+    monkeypatch.setattr(smoke.mcp_server, "load_keys", lambda: pytest.fail("refused before any key is read"))
+    argv = ["--audit-run", real, "--artifacts", str(tmp_path / "art"), "--url", "http://127.0.0.1:8000/"]
+    assert smoke.main(argv) == 2 and "another shop's audit" in capsys.readouterr().err
+    monkeypatch.setattr(smoke.mcp_server, "load_keys", lambda: {"typesafe_key": False, "text_helper": None})
+    assert smoke.main([*argv, "--skip", "journey"]) == 2  # the journey is skipped: only the missing key stops it
+    assert "TYPESAFE_API_KEY is missing" in capsys.readouterr().err
+
+
+def test_the_smoke_checks_count_the_run_and_refuse_a_foreign_journey():
+    """jev_judge_accepted_a_verdict counts Jev's accepted verdicts in the run (an --audit-run whose Jev tasks were
+    settled earlier asks nothing now), and a score that merged a journey of another host fails the smoke."""
+    smoke = smoke_module()
+    recorder = smoke.Recorder(None)
+    judge = {"available": True, "accepted": 0, "accepted_in_run": 11, "requests": 0, "jev_tasks_open": []}
+    score = {"warnings": ["journey runs on another host merged: 127.0.0.1"]}
+    results = {c["name"]: c for c in smoke.checks({"judge": judge, "score": score}, recorder, None, True)}
+    assert results["jev_judge_accepted_a_verdict"]["ok"] is True
+    assert results["jev_judge_accepted_a_verdict"]["detail"] == "11 accepted in the run (0 by this call)"
+    assert results["journey_on_the_audit_host"]["ok"] is False and results["journey_on_the_audit_host"]["required"]
+    clean = {c["name"]: c for c in smoke.checks({"judge": {**judge, "accepted_in_run": 0}, "score": {"warnings": []}},
+                                                 recorder, None, True)}
+    assert clean["jev_judge_accepted_a_verdict"]["ok"] is False and clean["journey_on_the_audit_host"]["ok"] is True
 
 
 def test_the_jev_pilot_line_counts_the_requests_that_brought_no_decision(capsys):

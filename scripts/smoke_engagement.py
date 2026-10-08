@@ -23,10 +23,15 @@ the runs record, and the two are compared. --dump-requests writes each request w
 Once TypeSafe refuses the key (HTTP 401 or 403: wrong, revoked or expired) the later TypeSafe phases (judge, repeat,
 journey) are skipped and the check typesafe_key_accepted fails: they would only be refused again.
 
-Exit 0 when every check of the mode passed, 1 when one failed, 2 without TYPESAFE_API_KEY or with an --audit-run that
-is no audit under --artifacts. Timings are printed, never asserted. smoke_summary.json (requests, tokens, p50/p95
-latencies, per-rubric probabilities, checks) is written into the audit run's directory (the journey's when the audit
-was skipped, the artifacts directory when there is no run).
+--audit-run RUN_ID (with --artifacts) judges and scores an earlier audit instead of a new one. Its journey runs on that
+audit's own site, so score_run never merges another shop's journey into it: --url must be on the audit's host;
+without --url the journey starts from the audit's start page, or from the fixture shop served again when the audit's
+smoke_summary.json says a fixture smoke made it (its server and port are gone; nothing else is guessed).
+
+Exit 0 when every check of the mode passed, 1 when one failed, 2 without TYPESAFE_API_KEY, with an --audit-run that
+is no audit under --artifacts or with a --url on another host than that audit's. Timings are printed, never asserted.
+smoke_summary.json (requests, tokens, p50/p95 latencies, per-rubric probabilities, checks) is written into the audit
+run's directory (the journey's when the audit was skipped, the artifacts directory when there is no run).
 """
 
 import argparse
@@ -44,6 +49,7 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from jev_ultrafast import model
 from jev_ultrafast.engagement import cli, crawler, judges, judgments, mcp_server
@@ -59,6 +65,9 @@ FIXTURE_GOAL = "Aggiungi al carrello un prodotto"
 SLOW_MS, BIG_TOKENS = 1500, 20_000  # a warning, never a failure
 PHASES = ("audit", "judge", "repeat", "journey")
 ASKS_TYPESAFE = ("judge", "repeat", "journey")  # skipped once TypeSafe refused the key (the audit asks only on a miss)
+FIXTURE_PATH = "/shop/index.html"
+SUMMARY = "smoke_summary.json"  # written into the audit's run directory: its audit_mode marks a fixture smoke's audit
+FOREIGN_HOST = "journey runs on another host merged"  # service.score_run's warning: never acceptable in a smoke
 
 
 # ---------------------------------------------------------------- the fixture shop (as tests/conftest.py serves it)
@@ -275,15 +284,16 @@ def run_judge(service, run_id, summary: dict) -> dict:
     judged = service.judge_with(run_id, "jev", 1)
     run = service.store.load(run_id)
     rows = jev_readings(run)
+    in_run = sum(1 for row in rows if not row["escalated"])  # Jev's accepted verdicts, this call's and earlier ones
     print(f"available={judged['available']} model={judged['model']} requests={judged['requests']} "
           f"latency={judged['latency_ms']} ms input_tokens={judged['input_tokens']} accepted={judged['accepted']} "
-          f"escalated={judged['escalated']} open_tasks={judged['open_tasks']}")
+          f"(in the run {in_run}) escalated={judged['escalated']} open_tasks={judged['open_tasks']}")
     for row in rows:
         verdict = f"evidence {','.join(row['evidence']) or '-'}" if not row["escalated"] else \
             f"escalated: {row['escalated']}"
         print(f"  {row['task_id']:45} {str(row['label']):9} p={row['probability']} {verdict}")
-    for error in judged.get("errors") or []:
-        print(f"  error: {error}")
+    for group in judged.get("error_groups") or []:
+        print(f"  error on {group['pages']} pages, {group['tasks']} tasks: {group['error']}")
     rubrics = per_rubric(rows)
     for rubric, line in rubrics.items():
         print(f"  {rubric:20} mean p={line['mean_p']} accepted {line['accepted']}/{line['tasks']} "
@@ -292,8 +302,9 @@ def run_judge(service, run_id, summary: dict) -> dict:
     jev_tasks = [t for t in run["judgments"].get("tasks") or [] if judgments.routing(t, rubric_map) == "jev"]
     final = {f["task_id"] for f in run["judgments"].get("final") or []}
     summary["judge"] = {**{k: judged.get(k) for k in ("available", "model", "requests", "latency_ms", "input_tokens",
-                                                      "accepted", "escalated", "open_tasks", "errors")},
-                        "per_task": rows, "per_rubric": rubrics, "jev_tasks": len(jev_tasks),
+                                                      "accepted", "escalated", "open_tasks", "errors",
+                                                      "error_groups")},
+                        "accepted_in_run": in_run, "per_task": rows, "per_rubric": rubrics, "jev_tasks": len(jev_tasks),
                         "jev_tasks_open": [t["task_id"] for t in jev_tasks
                                            if t["task_id"] not in final and not t.get("escalation")]}
     return judged
@@ -352,10 +363,13 @@ def run_score(service, audit_id, journey_id, summary: dict) -> None:
     heading("Scores")
     scored = service.score_run(audit_id, [journey_id] if journey_id else [])
     ers = scored.get("ers") or {}
-    print(f"ERS {ers.get('score')} (published {ers.get('published')}, grade {ers.get('grade')}, coverage "
-          f"{ers.get('coverage')}), llm_share {ers.get('llm_share')}")
+    print(f"ERS {ers.get('score')} (published {ers.get('published')}), {scored.get('confidence')}, llm_share "
+          f"{ers.get('llm_share')}")
+    for warning in scored.get("warnings") or []:
+        print(f"  warning: {warning}")
     print(f"report: {(scored.get('report') or {}).get('report_html')}")
-    summary["score"] = {"ers": ers, "report": scored.get("report"), "warnings": scored.get("warnings") or []}
+    summary["score"] = {"ers": ers, "confidence": scored.get("confidence"), "report": scored.get("report"),
+                        "warnings": scored.get("warnings") or []}
 
 
 # ---------------------------------------------------------------- checks
@@ -368,7 +382,7 @@ def checks(summary: dict, recorder: Recorder, shop: ShopServer | None, fixture: 
     def check(name, ok, required, detail=""):
         out.append({"name": name, "ok": ok, "required": bool(required and ok is not None), "detail": detail})
 
-    audit, judge, journey = summary.get("audit"), summary.get("judge"), summary.get("journey")
+    audit, judge, journey, score = (summary.get(k) for k in ("audit", "judge", "journey", "score"))
     if audit:
         check("audit_finished", audit["status"] in ("complete", "partial"), True, audit["status"])
         plp = [p for p in audit["jev_fallback"] if p.get("purpose") == "plp" and p.get("executed")]
@@ -379,7 +393,8 @@ def checks(summary: dict, recorder: Recorder, shop: ShopServer | None, fixture: 
         recorded = ((audit["model_calls"] or {}).get("crawler_fallback") or {}).get("requests", 0)
         check("crawler_calls_match_the_run", sent == recorded, True, f"sent {sent}, run records {recorded}")
     if judge:
-        check("jev_judge_accepted_a_verdict", (judge["accepted"] or 0) > 0, fixture, f"{judge['accepted']} accepted")
+        check("jev_judge_accepted_a_verdict", judge["accepted_in_run"] > 0, fixture,  # an --audit-run's earlier
+              f"{judge['accepted_in_run']} accepted in the run ({judge['accepted']} by this call)")  # ones count
         check("jev_tasks_settled_or_escalated", judge["available"] and not judge["jev_tasks_open"], True,
               ", ".join(judge["jev_tasks_open"][:5]))
         sent = len(recorder.of("judge"))
@@ -396,6 +411,9 @@ def checks(summary: dict, recorder: Recorder, shop: ShopServer | None, fixture: 
         check("journey_calls_match_the_run", sent == recorded and texts == calls.get("text"), True,
               f"sent {sent} TypeSafe + {texts} text, run records {calls.get('choose')} decisions + "
               f"{calls.get('failed') or 0} failed + {calls.get('text')} text")
+    if score:
+        foreign = [w for w in score["warnings"] if w.startswith(FOREIGN_HOST)]
+        check("journey_on_the_audit_host", not foreign, True, "; ".join(foreign))
     refused = key_refused(recorder)
     check("typesafe_key_accepted", refused is None, True,
           f"{refused['error']} at request {refused['n']} ({refused['phase']}): check TYPESAFE_API_KEY; the later "
@@ -431,20 +449,52 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def audit_run_error(args) -> str | None:
-    """Why --audit-run cannot be judged and scored (None when it can): the run must be an audit stored under
-    --artifacts, as the default artifacts directory is a new empty one."""
+def load_audit_run(args) -> tuple[dict | None, str | None]:
+    """(the --audit-run audit, None) or (None, why it cannot be judged and scored): the run must be an audit stored
+    under --artifacts, as the default artifacts directory is a new empty one. (None, None) without --audit-run."""
     if not args.audit_run:
-        return None
+        return None, None
     if not args.artifacts:
-        return "--audit-run needs --artifacts (the directory that holds that run)"
+        return None, "--audit-run needs --artifacts (the directory that holds that run)"
     try:
         run = RunStore(Path(args.artifacts).resolve()).load(args.audit_run)
     except (OSError, ValueError) as exc:
-        return f"--audit-run: {exc} in --artifacts {args.artifacts}"
+        return None, f"--audit-run: {exc} in --artifacts {args.artifacts}"
     if run.get("kind") != "audit":
-        return f"--audit-run: {args.audit_run} is a {run.get('kind')} run, not an audit"
-    return None
+        return None, f"--audit-run: {args.audit_run} is a {run.get('kind')} run, not an audit"
+    return run, None
+
+
+def audit_mode(args, run_id: str) -> str | None:
+    """How the audit was made, from the smoke_summary.json a smoke wrote into its run directory: "fixture" (the fixture
+    shop this script served), "url", or None (no smoke made it: the CLI, the plugin, or a smoke stopped before writing).
+    The record, never the URL's shape: two shops on 127.0.0.1 differ only by port, which run["site"]["host"] lacks."""
+    try:
+        marker = json.loads((RunStore(Path(args.artifacts).resolve()).path(run_id) / SUMMARY).read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return (marker.get("audit_mode") or marker.get("mode")) if isinstance(marker, dict) else None
+
+
+def journey_site(args, audit: dict | None) -> tuple[bool, str | None, str | None]:
+    """(fixture, url, problem): where the journey runs (url None: the fixture shop served here). Without --audit-run,
+    the fixture shop unless --url names a shop. With it, score_run merges the journey into that audit, so the journey
+    runs on the audit's own site: --url must be on the audit's host (problem otherwise); without --url it starts from
+    the fixture shop served again iff the audit's smoke_summary.json says a fixture smoke made it (that server and its
+    port are gone), else from the audit's start page (a fixture audit without the record fails there, visibly)."""
+    if audit is None:
+        return args.url is None, args.url, None
+    site = audit.get("site") or {}
+    host, start = str(site.get("host") or "").lower(), str(site.get("start_url") or "")
+    if args.url:
+        if (urlsplit(args.url).hostname or "") != host:
+            return False, args.url, (f"--url {args.url} is not on {host or 'an unknown host'}, the host of --audit-run "
+                                     f"{args.audit_run}: its journey would be scored into another shop's audit (pass "
+                                     "a URL of that shop, or --skip journey)")
+        return False, args.url, None
+    if audit_mode(args, audit.get("run_id") or args.audit_run) == "fixture":
+        return True, None, None
+    return False, start, None
 
 
 def key_refused(recorder: Recorder) -> dict | None:
@@ -455,10 +505,16 @@ def key_refused(recorder: Recorder) -> dict | None:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    if problem := audit_run_error(args):
-        print(problem, file=sys.stderr)
+    audit, problem = load_audit_run(args)
+    fixture, url, wrong_site = journey_site(args, audit)
+    if problem or (wrong_site and "journey" not in args.skip):
+        print(problem or wrong_site, file=sys.stderr)
         return 2
-    cli.load_environment()  # ./.env, then the plugin's env file when JEV_ENGAGEMENT_ENV names one
+    try:
+        cli.load_environment()  # ./.env, then the plugin's env file when JEV_ENGAGEMENT_ENV names one
+    except (OSError, ValueError) as exc:  # the reason, never the file's content
+        reason = exc.strerror if isinstance(exc, OSError) and exc.strerror else type(exc).__name__
+        print(f"./.env not read ({reason}): the environment's variables stay", file=sys.stderr)
     keys = mcp_server.load_keys()
     if not keys["typesafe_key"]:
         print("TYPESAFE_API_KEY is missing (./.env, the JEV_ENGAGEMENT_ENV file or the environment): nothing to "
@@ -469,7 +525,6 @@ def main(argv=None) -> int:
     except ValueError as exc:
         print(f"--oracle-param: {exc}", file=sys.stderr)
         return 2
-    fixture = args.url is None
     artifacts = Path(args.artifacts or tempfile.mkdtemp(prefix="jev-smoke-")).resolve()
     os.environ["JEV_ENGAGEMENT_CACHE"] = str(artifacts / "judge-cache")  # a smoke never reuses a cached verdict
     if fixture:
@@ -479,12 +534,15 @@ def main(argv=None) -> int:
     print(f"artifacts: {artifacts}")
 
     shop = ShopServer() if fixture else None
-    url = shop.url("shop/index.html") if fixture else args.url
-    print(f"mode: {'fixture' if fixture else 'url'} {url}")
+    url = shop.url(FIXTURE_PATH.lstrip("/")) if fixture else url
+    print(f"mode: {'fixture' if fixture else 'url'} {url}"
+          f"{f' (the journey of audit {args.audit_run})' if args.audit_run else ''}")
     recorder = Recorder(args.dump_requests)
     recorder.install()
     service = EngagementService(RunStore(artifacts))
-    summary = {"mode": "fixture" if fixture else "url", "url": url, "started_at": datetime.now(UTC).isoformat(),
+    mode = "fixture" if fixture else "url"
+    summary = {"mode": mode, "audit_mode": audit_mode(args, args.audit_run) if args.audit_run else mode, "url": url,
+               "started_at": datetime.now(UTC).isoformat(),
                "typesafe_model": os.environ.get("TYPESAFE_MODEL") or "jev-latest", "text_helper": keys["text_helper"],
                "artifacts": str(artifacts), "errors": {}, "skipped": {}}
     audit_id, journey_id = args.audit_run, None
@@ -555,12 +613,12 @@ def main(argv=None) -> int:
     store = RunStore(artifacts)
     target = audit_id or journey_id
     summary = json.loads(json.dumps(summary, ensure_ascii=False, default=str))
-    if target and store.path(target).is_dir():
-        store.write_json(target, "smoke_summary.json", summary)
-        where = store.path(target) / "smoke_summary.json"
+    if target and store.path(target).is_dir():  # audit_mode keeps the audit's own record across --audit-run smokes
+        store.write_json(target, SUMMARY, summary)
+        where = store.path(target) / SUMMARY
     else:  # no run, or one that is not under --artifacts
         artifacts.mkdir(parents=True, exist_ok=True)
-        where = artifacts / "smoke_summary.json"
+        where = artifacts / SUMMARY
         where.write_text(json.dumps(summary, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
     print(f"\n{'PASSED' if summary['passed'] else 'FAILED'}; summary: {where}")
     return 0 if summary["passed"] else 1

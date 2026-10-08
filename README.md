@@ -148,8 +148,21 @@ The **ERS** (Engagement Readiness Score) is the weighted geometric mean of the s
 
 Two modes feed the same scores:
 
-- **Audit.** Per device profile (`mobile` 390x844 with throttling, `desktop` 1366x768), a deterministic crawl: home, category listing, product page, add one item to the cart, cart, first checkout step. Dark-pattern tests then run in fresh isolated contexts.
-- **Journey.** One natural-language goal driven through the loop, by Claude Code (the `host` policy) or by TypeSafe (the `typesafe` policy), and checked afterwards by an independent oracle on the real page (`cart_contains_item_under_price`, `cart_not_empty`, `pdp_reached`, `search_results_shown`). A DONE choice is not proof.
+- **Audit.** Per device profile (`mobile` 390x844 with throttling, `desktop` 1366x768), a deterministic crawl: home, category listing, product page, add one item to the cart, cart, first checkout step. Dark-pattern tests then run in fresh isolated contexts. The lexicon crawler goes first; where it finds nothing, Jev is asked once which observed element to click ([the crawler fallback](#the-crawler-fallback)).
+- **Journey.** One natural-language goal driven through the original loop (page, indexed elements, operation and target, execution), by Jev (the `typesafe` policy) whenever `TYPESAFE_API_KEY` is set and by Claude Code (the `host` policy) otherwise, and checked afterwards by an independent oracle on the real page (`cart_contains_item_under_price`, `cart_not_empty`, `pdp_reached`, `search_results_shown`). A DONE choice is not proof.
+
+### Who does what: Jev and Claude
+
+Jev, TypeSafe's choice model, navigates and judges what can be asked as a choice, keeping the round trips few: one request per decision, per judged page and per crawler lookup. Claude takes what needs reading between the lines. Without `TYPESAFE_API_KEY` everything falls back to Claude.
+
+| Job | Who | How | Without the TypeSafe key |
+| --- | --- | --- | --- |
+| Pilot a journey | Jev | The original loop (`Agent` + `model.choose`): one request carries the operation head and the target heads, and only the chosen operation's target is consumed | Claude Code pilots (`host`): one MCP round trip and one deliberation per step |
+| Find the next funnel stage where the lexicon finds nothing | Jev, as a fallback | The same `model.choose`, with a fixed generic goal such as "open the shopping cart page", over the observed click elements the checkout guard allows; only a `CLICK` target is read | The stage is "non valutabile", as before |
+| Judge the operational rubrics: returns clarity, hidden subscription, authority, social proof, trick questions | Jev | One request per judged page, one sample per task: a label head, the same head with the labels reversed, and an evidence head per label over the offered snippet ids | Claude's judges, three samples |
+| Judge the perception rubrics (confirmshaming, value proposition) and whatever Jev is not sure about | Claude | Three Sonnet samples through Claude Code on your subscription, majority vote | The same |
+
+Why this split. Jev is built for narrow, literal, closed-label questions answered in one request. TypeSafe's own notes on jev-1.13 say it reads instructions literally, is weak at counting and arithmetic, leans toward the first option and generates no text. That suits closed questions over literal wording (a return window plus a concrete condition, a named certifying body, recurring-charge wording), which go to Jev: it only picks a label and a snippet id, code copies that snippet's own text as the evidence, and a reversed-order head checks the lean toward the first option. Tone, guilt, pressure and perceived clarity need nuanced reading and stay with Claude. Jev never writes text, selectors or URLs, and its uncertainty is handled by escalating to Claude, not by averaging.
 
 ### Run it from the command line
 
@@ -189,10 +202,12 @@ Rapporto: <artifacts>/<host>/<run id>/report.html
 | Command | What it does |
 | --- | --- |
 | `jev-engage audit URL` | Audit one shop. `--profiles mobile,desktop`, `--stages home,plp,pdp,cart,checkout_entry`, `--consent auto\|reject\|accept\|none`, `--repeats 1-5`, `--max-pages N`, `--locale it\|en` |
-| `jev-engage audit URL --goal "..." --oracle cart_not_empty` | Add a journey with the `typesafe` policy (needs `TYPESAFE_API_KEY`, plus `TEXT_MODEL_API_KEY` for text fields); `--oracle-param max_price=50`, `--optimal-steps`, `--optimal-pages`, `--journey-profile` |
-| `jev-engage audit URL --judge cli\|api\|openai` | Also run the LLM judgments with a fallback backend (see below); `--samples 1-5`, `--judge-model` |
-| `jev-engage journey URL --goal ... --oracle ...` | A `typesafe` journey on its own |
-| `jev-engage judge RUN_ID`, `score RUN_ID [--journey RUN_ID]`, `report RUN_ID [--format summary\|kpis\|paths]`, `list [--host H]` | Work on stored runs |
+| `jev-engage audit URL --goal "..." --oracle cart_not_empty` | Add a journey piloted by Jev (policy `typesafe`; needs `TYPESAFE_API_KEY`, plus `TEXT_MODEL_API_KEY` for text fields); `--oracle-param max_price=50`, `--optimal-steps`, `--optimal-pages`, `--journey-profile` |
+| `jev-engage audit URL --judge jev\|cli\|api\|openai` | Also run the LLM judgments (see [Who judges what](#who-judges-what)). `jev` needs `TYPESAFE_API_KEY`: Jev judges the rubrics routed to it and leaves the rest open; `cli` (your Claude subscription), `api` and `openai` are the Claude-side backends; `--samples 1-5`, `--judge-model` |
+| `jev-engage journey URL --goal ... --oracle ...` | A `typesafe` (Jev) journey on its own |
+| `jev-engage judge RUN_ID [--backend cli\|api\|openai\|jev] [--samples N] [--model M]`, `score RUN_ID [--journey RUN_ID]`, `report RUN_ID [--format summary\|kpis\|paths]`, `list [--host H]` | Work on stored runs; `judge` defaults to `--backend cli` |
+
+With `TYPESAFE_API_KEY` in `./.env` or the environment, `audit` also lets the crawler ask Jev where the lexicon finds nothing (at most six requests per profile); there is no other switch, so unset the key for a purely deterministic audit. `--judge jev` and `judge --backend jev` stop with exit status 1, before any browser starts, when the key is missing.
 
 Every command takes `--artifacts DIR` (default `$JEV_ENGAGEMENT_ARTIFACTS`, else `./artifacts/engagement`) and `--json`. Only `audit` and `journey` also take `--browser auto|launch|harness|cdp:<url>`, `--headed`, `--locale` and `--chrome-arg=--proxy-server=...` (repeatable, for a launched Chromium; `JEV_CHROME_ARGS`, a shell-quoted string such as `JEV_CHROME_ARGS="--proxy-server=http://proxy:3128"`, adds the same extras to every Chromium the CLI or the MCP server launches). Without `--judge` the judged KPIs are simply not applicable and do not lower the coverage. Exit status: 0 on success, 1 when the run failed or a run id is malformed or unknown, 2 for invalid arguments (a URL that is not http or https included), 128 plus the signal number when interrupted (the browser is closed and the run marked failed), 141 when the reader of the output went away (for example `| head`).
 
@@ -212,7 +227,9 @@ claude plugin install jev-engagement@jev-engagement-local
 /jev-engagement:shop-readiness https://shop.example Aggiungi al carrello un paio di scarpe da corsa sotto i 50 euro
 ```
 
-The skill audits the shop, optionally drives a shopping journey with Claude Code as the policy, has three Sonnet judges read the page texts, scores everything and presents the result in Italian with the path of `report.html`.
+The skill audits the shop, optionally runs a shopping journey (piloted by Jev when the server holds a TypeSafe key, else driven step by step by Claude Code), lets Jev judge the operational rubrics and three Sonnet judges read the rest (the perception rubrics and whatever Jev passed on), scores everything and presents the result in Italian with the path of `report.html`, the models that ran and the number of TypeSafe requests.
+
+**Keys for Jev.** Jev needs `TYPESAFE_API_KEY`, and `TEXT_MODEL_API_KEY` to type into search or quantity fields (see `.env.example`). The MCP server reads the environment it inherits plus the `KEY=value` file named by `JEV_ENGAGEMENT_ENV`, which `plugin.json` sets to `${CLAUDE_PLUGIN_DATA}/.env`: the `.env` next to the `engagement` folder that `list_runs` reports as `root` (with `--plugin-dir`: `~/.claude/plugins/data/jev-engagement-inline/.env`). A variable the server inherited with a value wins over the file; a quoted value and an inline ` # comment` are understood. The server reads the file only when it starts, so reconnect it (`/mcp`) or restart Claude Code after adding a key. This repository did not verify whether Claude Code forwards your shell's variables to a plugin's server, so the file is the sure path. Keep it readable by you only. `get_run` returns `server: {typesafe_key, text_helper}` (booleans and the text model's name, never a value) and the skill tells you from it who will pilot and judge. Nothing ever writes a key.
 
 Prerequisites: `uv` on the `PATH` that Claude Code sees (a GUI-launched app on macOS may lack `~/.local/bin`), and Chrome or Chromium (set `JEV_CHROME_PATH` otherwise; without any, the server falls back to your Chrome through Browser Harness). The first session installs the server's dependencies into the plugin's data directory; on a slow network raise `MCP_TIMEOUT` so Claude Code waits for it. The background judge subagents may ask permission for the tool that reads their tasks: allow `mcp__plugin_jev-engagement_engagement__get_judgment_tasks` in your permission settings to avoid the prompt. Runs are stored in `${CLAUDE_PLUGIN_DATA}/engagement` (with `--plugin-dir`: `~/.claude/plugins/data/jev-engagement-inline/engagement`; `list_runs` reports the `root`) and are deleted on uninstall unless you pass `--keep-data`.
 
@@ -222,11 +239,12 @@ MCP tools (server `engagement`, stdio). Each returns a compact summary and file 
 | --- | --- |
 | `audit_shop` | Start the audit in the background and return its `run_id` |
 | `wait_run` | Wait up to 110 s for a run; call again while `timed_out` is true |
-| `get_run` | Run summary: pages, not assessable stages with reasons, judgment progress, warnings |
-| `run_journey` | Open a journey and return the first observation (`host` or `typesafe` policy) |
+| `get_run` | Run summary: pages, not assessable stages with reasons, judgment progress and escalations, warnings, the TypeSafe requests the run made (`model_calls`), `server` (which keys it holds) |
+| `run_journey` | Open a journey. `policy` `auto` (default): Jev pilots by itself when the server has `TYPESAFE_API_KEY` (then `wait_run`, then `journey_finish`), else you get the first observation and drive it with `journey_act`; `host` and `typesafe` force one |
 | `journey_act` | One operation and one offered element index on the latest observation; `observation_id` is required and a stale one executes nothing |
-| `journey_finish` | Verify with the oracle, store the friction KPIs, close the browser |
-| `get_judgment_tasks` | A page of at most 15 judgment tasks with their rubrics |
+| `journey_finish` | Verify with the oracle, store the friction KPIs, close the browser; returns what deciding cost (`model_calls`, `timing_ms`) |
+| `judge_with_jev` | Jev judges the rubrics routed to it, one request per page, then finalises; `available` is false without a key. A call asks no new page after about 30 s: call it again while its `next` names it |
+| `get_judgment_tasks` | A page of at most 15 judgment tasks with their rubrics; the tasks still open are the perception rubrics' and Jev's escalations |
 | `submit_judgments` | Validate and store one judge's verdicts |
 | `finalize_judgments` | Majority label per task |
 | `score_run` | Compute the scores, write `report.json` and `report.html`, merge finished journeys |
@@ -237,7 +255,7 @@ MCP tools (server `engagement`, stdio). Each returns a compact summary and file 
 
 ```text
 <artifacts>/<host>/<run id>/
-  run.json           pages, observations, judgments, scores, warnings (the full record)
+  run.json           pages, observations, judgments, scores, warnings, model_calls (the full record)
   steps.jsonl        every executed step, appended before its result is observed
   snapshots/         one audit payload per page
   shots/             optional screenshots
@@ -245,27 +263,93 @@ MCP tools (server `engagement`, stdio). Each returns a compact summary and file 
   report.html        self-contained Italian report: no external resources
 ```
 
-### Who judges
+### Who judges what
 
-Seven KPIs are LLM judgments over short page snippets with closed labels (returns clarity, value proposition, authority, social proof, confirmshaming, trick questions, hidden subscription). Every judgment cites a quote that must appear verbatim in the snippet, except the labels a rubric exempts (`absent`, and `unclear` in the three dark-pattern rubrics; the value-proposition rubric exempts none). A label needs at least two of three samples to agree.
+Seven KPIs are LLM judgments over short page snippets with closed labels. Each rubric in `rubrics/*.json` (`rubrics.v2`) names its judge:
 
-Claude Code does not support MCP sampling, so the plugin inverts the call: the server prepares the tasks, **the host judges** with Sonnet subagents on your Claude subscription, and the server validates and scores the verdicts. No API key is involved. Outside the plugin, `--judge cli` runs `claude -p` with your subscription login, and `--judge api` (`ANTHROPIC_API_KEY`) and `--judge openai` (`TEXT_MODEL_API_KEY`, `TEXT_MODEL_BASE_URL`) are the fallbacks that use keys. Three samples of one model are a stability check, not three independent raters, and the report says so.
+| Rubric (KPI) | Judge | Why |
+| --- | --- | --- |
+| `returns_clarity` (`TRI.RETURNS_CLARITY`) | Jev | A time window plus one concrete condition: literal wording |
+| `hidden_subscription` (`DPR.HIDDEN_SUBSCRIPTION`) | Jev | Recurring-charge wording against a CTA that presents the purchase as free or single |
+| `authority` (`MPI.AUTHORITY`) | Jev | A named body, prize or certification number against a generic claim |
+| `social_proof` (`MPI.SOCIAL_PROOF_RICH`) | Jev | Specific text plus one authenticity element (author, date, verified purchase, photo) |
+| `trick_questions` (`DPR.TRICK_QUESTIONS`) | Jev | Double negations and inverted logic are properties of the text; the probability floor catches the rest |
+| `confirmshaming` (`DPR.CONFIRMSHAMING`) | Claude | Guilt, shame or irony: tone |
+| `value_prop` (`CCL.VALUE_PROP_CLARITY`) | Claude | Whether a first-time visitor understands at once what is sold and why to choose it: perceived clarity |
+
+**Jev's judge** (`judges.judge_with_jev`, the `judge_with_jev` MCP tool, `--judge jev`). Tasks are grouped by page and a page costs one `systemone` request, built like `model.choose` (state plus choice questions, `post_json`, `validate_choice`). For every task it carries a label head (the rubric's closed labels and descriptions as the criteria), the same head with the labels in reversed order (Jev leans toward the first option) and, for each label that needs a quote, a speculative evidence head ("Assume the answer is `clear`: which snippet states it literally?") whose options are the offered snippet ids plus `none`. Code reads the label head, then the reversed head, and only the evidence head of the chosen label. A verdict is accepted when the chosen label's probability is at least 0.6 (`JEV_JUDGE_MIN_P`, clamped to 0.5-0.95), the reversed head agrees and, for a label that needs a quote, the evidence head picked a snippet and not `none`. The stored quote is that snippet's whole text, so it is verbatim by construction; Jev never writes text.
+
+Anything else is **escalated** to Claude: no verdict is stored, `task["escalation"]` records Jev's reading (`low_probability`, `position_flip`, `no_evidence`) or the failure (`request_failed`, `invalid_response`, which a later call retries), and the task keeps its three required samples. An accepted task is settled with one sample (agreement 1.0, confidence = the label's probability), so the scoring is unchanged. TypeSafe documents repeated identical calls as largely identical, so three Jev samples would add little; their cookbooks also show borderline items flipping, and whether answers hold still on your pages is what `--repeat` in the smoke checks. A Jev failure never blocks the audit: the page's tasks stay open for Claude.
+
+**Claude's judges** take the tasks of the `claude` rubrics and Jev's escalations, three samples each, and a label needs at least two of the three to agree. Claude Code does not support MCP sampling, so the plugin inverts the call: the server prepares the tasks, **the host judges** with Sonnet subagents on your Claude subscription, and the server validates and scores the verdicts. No API key is involved. Outside the plugin, `--judge cli` runs `claude -p` with your subscription login, and `--judge api` (`ANTHROPIC_API_KEY`) and `--judge openai` (`TEXT_MODEL_API_KEY`, `TEXT_MODEL_BASE_URL`) are the fallbacks that use keys. Every evidence quote, Jev's or Claude's, must appear verbatim in the snippet it cites, except for the labels a rubric exempts (`absent`, and `unclear` in the three dark-pattern rubrics; the value-proposition rubric exempts none).
+
+**Order.** Jev judges only tasks no other judge has touched (a mix of samples could tie), so run it first: `judge_with_jev` in the plugin, `--judge jev` and then `jev-engage judge RUN_ID --backend cli` and `jev-engage score RUN_ID` outside it. Until the open tasks are judged the score does not count them. Verdicts are cached under `$JEV_ENGAGEMENT_CACHE` (default `~/.cache/jev-engagement/judgments`); Jev's cache is read only when `TYPESAFE_MODEL` pins a version (for example `jev-1.13.0`), because an alias such as `jev-latest` moves on release.
+
+**In the report.** Jev's verdicts count in `llm_share` like Claude's. The footer names who judged what (Jev's rubrics and model, Claude's rubrics and the tasks Jev passed on) and how many TypeSafe requests the run made. Three samples of one model are a stability check, not three independent raters; a Jev verdict is one sample plus an order check, not a second opinion.
+
+**What is not known yet.** The rubrics' criteria are Italian and are sent as written, while TypeSafe says non-English text works "not equally well". How well Jev reads them, how often it escalates and how stable its labels are is for the live smoke below to show; nothing is claimed here.
+
+### Who pilots a journey
+
+`run_journey` takes `policy`: `auto` (the MCP default), `typesafe` or `host`. `auto` resolves to `typesafe` when the server holds `TYPESAFE_API_KEY` and to `host` otherwise; the journey record keeps both (`policy_requested`, `policy`). From the CLI a journey is always `typesafe`.
+
+- **Jev (`typesafe`).** The original agent loop, unchanged: one TypeSafe request per decision carries the operation head and the target heads, and only the chosen operation's target is consumed. The engagement code wraps it for measurement only (marks, `steps.jsonl`, guard filtering, the oracle). In the plugin it runs in the background: `wait_run` until it finished, then `journey_finish`. The step budget is `max_steps` (default 40, at most 60).
+- **Claude Code (`host`).** The host chooses each step with `journey_act`, following the `journey-driver` rules. Every step is an MCP round trip plus Claude's deliberation, and the choices are not reproducible. If Jev cannot take a single decision (for example a refused key), the skill starts one host journey instead; nothing was executed, so no browser action is repeated.
+- **Text.** Values for `TYPE_TEXT` come from the text LLM (`TEXT_MODEL_API_KEY`). Without it nothing is typed and no text is guessed: `TYPE_TEXT` stays offered, and if Jev chooses it the attempt is refused before any input (a logged step with `text_withheld`, warning `text_helper_unavailable`), and fill actions are withheld from Jev from then on. If the oracle then fails, the journey is "non valutabile" (`text_helper_unavailable`): the pilot's chosen path was denied, so the failure is not the shop's. A text the checkout guard refuses is treated the same way (`text_refused`).
+- **What deciding costs** is recorded apart from the shop's time: `journey.model_calls` (`choose` decisions, `text` helper calls, `stale_or_refused` decisions that executed nothing, `failed` TypeSafe calls without a decision, the versioned `model`), `journey.timing_ms` (`decision`, `text`, `site`, `wall`) and `journey.usage` (input and output tokens). `FAI.TIME_ON_TASK_SITE` never includes the decision time. The report's journey card shows the pilot and these figures.
+
+### The crawler fallback
+
+The crawl is deterministic first: the lexicon, JSON-LD and URL patterns find the category, product, cart and checkout paths, so a repeated audit repeats. Where they find nothing (no listing, product or cart link, or no add-to-cart, variant or checkout control) and `TYPESAFE_API_KEY` is set, Jev is asked once:
+
+- the way the loop asks it: one `model.choose` request with a fixed generic goal (`crawler.GOALS`, for example "Open the shopping cart page ... Do not add or remove items"; no page text, no site value) over the observed click elements the checkout guard allows and that have an accessible name;
+- only a `CLICK` target is consumed. `DONE` and `BLOCKED` mean "no element" (`jev_done`, `jev_blocked`), and the stage fails with the reason it would have had without the fallback;
+- a link is loaded like a lexicon candidate (same site, no checkout URL, no cart-changing GET); an element without a usable href is clicked once, never retried, and logged before its result is observed. The stage's own test still decides: `is_listing`, `is_product`, `is_cart`, a checkout page;
+- one request per lookup and at most six per profile (listing, product, cart, add to cart, variant, checkout entry); nothing is asked when `max_pages` leaves no room for the page it would lead to. Consent, overlays, the search probe, repeats, the guest path and the deception tests are never asked.
+
+Every lookup is recorded: `probes.jev_fallback` on the page it was asked on (chosen label, probability, latency, tokens, reason), `run.model_calls.crawler_fallback`, and a warning "found through the Jev fallback: not reproducible across runs", which the report translates. The observation is viewport-only (`snapshot.js` offers elements whose centre is inside the viewport, at most 250), so a link below the fold is invisible to Jev: the lookup ends as `jev_blocked` (no suitable element) or in a pick the stage's own test rejects, and the stage stays "non valutabile". Link lookups ask at the top of their start page.
+
+### Live smoke (Jev)
+
+Automated tests are offline: they replace `jev_ultrafast.model.post_json` (or the agent's `choose`) with fakes that validate the request body and answer with schema-valid choices, so the real request builders and `validate_choice` run. The one script that calls TypeSafe for real is started by you; it prints what it measured and writes `smoke_summary.json`, and you decide what to claim. This README publishes no Jev result: none is committed yet.
+
+```bash
+cp .env.example .env     # TYPESAFE_API_KEY (and TEXT_MODEL_API_KEY for text fields); .env is git-ignored
+uv run python scripts/smoke_engagement.py                    # fixture shop: crawler fallback, judge, journey, score
+uv run python scripts/smoke_engagement.py --url https://shop.example --goal "Aggiungi al carrello un prodotto" --oracle cart_not_empty
+uv run python scripts/smoke_engagement.py --skip journey     # --skip audit|judge|journey|score, repeatable
+uv run python scripts/smoke_engagement.py --repeat 3 --dump-requests /tmp/jev-requests
+```
+
+It reads `./.env`, the file named by `JEV_ENGAGEMENT_ENV` or the environment, and exits 2 without `TYPESAFE_API_KEY`. It needs a Chromium like the audit does. What it exercises:
+
+1. **Audit (crawler fallback).** Fixture mode serves `tests/fixtures/` on 127.0.0.1 and hides the shop's category links from the lexicon, so the listing page can only come from Jev's pick; Chromium gets a dead proxy, so only the model requests leave the machine. With `--url` a real shop is audited unchanged (and one item goes into its cart, as in any audit).
+2. **Judge.** Jev judges the audit: per task the rubric, label, probability, evidence id or escalation reason; per request the latency and input tokens; per rubric the mean probability, the number accepted and the escalations by reason. `--repeat N` judges N more copies (cache off, nothing stored) and prints the label agreement per task.
+3. **Journey.** Jev pilots `--goal` (default "Aggiungi al carrello un prodotto", oracle `cart_not_empty`): steps, `model_calls`, `timing_ms`, usage and the oracle's verdict.
+4. **Score.** The ERS, the "Confidenza" line, `llm_share` and the report path.
+
+Every TypeSafe and text-helper request goes through a recording wrapper of `post_json`, so the printed counts, latencies and tokens are measured independently and compared with what the runs record. It then prints the checks and exits 0 when all required ones pass, 1 otherwise: the audit finished, the crawler, judge and journey request counts match the runs', every TypeSafe answer validated, the key was accepted (after an HTTP 401 or 403 the later TypeSafe phases are skipped), Jev piloted the journey and every Jev task was settled or escalated. In fixture mode it also requires the listing to come through the fallback, the cart to be reached, at least one Jev verdict accepted, the oracle to pass and no request but GET and HEAD to reach the shop (no order, no payment). `--url` mode relaxes those fixture-specific checks. Timings are printed, never asserted; it warns above 1.5 s or 20,000 input tokens per request. `--dump-requests DIR` writes each request with its answer (never the key), so the labels can be read against the page.
+
+Limits of the smoke: it is paid and not part of the checks; fixture mode forces only the listing lookup, so the product, cart, add-to-cart and checkout lookups run only if the lexicon misses them; one fixture shop (invented, with known truths) shows how Jev reads those snippets, not how accurate it is in general; latencies include your machine's network; Jev's output has no seed, so a repeat that agrees once is evidence of stability on those tasks only.
 
 ### Safety
 
 - It never places an order, never submits a checkout or payment form, and stops at the first checkout page.
-- It never types into personal-data, payment or password fields. The only text an audit types is a word from a category label into the shop's search box. In a journey the host chooses the text: only search, quantity and coupon fields take it, and the server refuses text that looks like an email, a phone, card or account number, an IBAN, a fiscal code, a date, a street address or a card security code. A name cannot be told from a product word, so the journey-driver skill forbids it; the field guard is the guarantee, the text check a best-effort net.
+- It never types into personal-data, payment or password fields. The only text an audit types is a word from a category label into the shop's search box. In a journey the host chooses the text (under Jev, the text LLM writes it): only search, quantity and coupon fields take it, and the server refuses text that looks like an email, a phone, card or account number, an IBAN, a fiscal code, a date, a street address or a card security code. A name cannot be told from a product word, so the journey-driver skill forbids it; the field guard is the guarantee, the text check a best-effort net.
 - Labels that pay or confirm an order are never clicked (the one exception is a same-site link to a checkout URL, a navigation into the step where the run stops; a button with the same label stays refused), and nothing is done on another site.
 - Adding one item to the cart is the one deliberate change to shop data: it puts an item into the session's own cart. The audit also clicks other observed controls that are not meant to change anything: a variant choice, the cart's guest control and checkout button, consent and overlay buttons. On some platforms a checkout button or a guest control posts and opens a checkout session on the shop's side, and a consent choice can set cookies. Use it on shops you own or may test.
-- Page text and judge output are data: neither becomes a selector, a URL or code, and a host chooses only an element index the latest observation offered.
+- Page text and judge output are data: neither becomes a selector, a URL or code. A host chooses only an element index the latest observation offered; Jev chooses only an operation and an observed element index, a label and an offered snippet id. Jev reads untrusted page text and TypeSafe says it is not trained for adversarial content, so a hostile page can try to steer a label or a click; what it cannot do is make Jev write text, or reach a control the checkout guard withholds. The probability floor, the order check and the stages' own tests narrow the rest; they do not remove it.
 
 ### Limits
 
 - Bot detection and CAPTCHAs: a challenge page makes the later stages "non valutabile". The browser identity is an ordinary user agent with matching client hints; nothing is evaded.
 - Shadow DOM and iframes: `audit.js` reads open shadow roots, but the controls the crawler clicks and the journeys offer come from `snapshot.js`, which does not enter shadow roots. Listing and product pages (and the cart, once the add-to-cart has been clicked, when only its link sits in a shadow root) are still loaded by their URL, but a step that must click a control in a shadow root, such as the add-to-cart, ends the funnel there with a reason (for example `add_to_cart_failed` or `checkout_cta_not_found`) and the later stages are "non valutabile". Cross-origin iframes (review and payment widgets) and closed shadow roots are only partly read.
 - Consent banners change the first page and can block clicks; the landing is measured as it is and the choice is recorded.
-- It is a synthetic agent: a host's choices vary between runs, one variant of any A/B test is seen from one place with a cold cache on an emulated device, and lab timings are not field data. The mobile profile approximates Lighthouse's preset and its scores are not comparable with Lighthouse or PageSpeed Insights.
+- It is a synthetic agent: a host's choices vary between runs (so may Jev's), one variant of any A/B test is seen from one place with a cold cache on an emulated device, and lab timings are not field data. The mobile profile approximates Lighthouse's preset and its scores are not comparable with Lighthouse or PageSpeed Insights.
 - Italian and English lexicons; first checkout step only; one audit at a time per server process.
+- Jev reads text only (no image input), and its accuracy on the rubrics' Italian criteria is untested until the live smoke runs. Request size matters: TypeSafe limits a request's state plus its longest question to 32k tokens, and a judged page carries up to eight 600-character snippets per task.
+- A stage found through the crawler fallback is flagged "not reproducible across runs", and Jev's journey choices have no seed either: repeat a journey from the CLI to get medians. Only the deterministic crawl repeats by construction. The fallback sees the viewport only.
+- With `host` (no TypeSafe key) every journey step is an MCP round trip plus Claude's deliberation; that time is recorded apart (`decision_latency_ms`) and never counted as the shop's.
 - A shop behind HTTP authentication cannot be audited: a start URL with `user:password@` is refused, since the credentials would reach the run, its progress messages and the shared report.
 - No accuracy, speed or predictive-validity claim is made without a committed artifact. The golden runs in `tests/fixtures/runs/` pin the data shapes and the scoring arithmetic, not a correlation with real outcomes. The catalogue lists what a calibration against GA4 and Clarity would need.
 
@@ -283,7 +367,7 @@ claude plugin validate .
 claude plugin validate --strict .claude-plugin/plugin.json
 ```
 
-Tests are offline; the engagement browser tests launch a local Chromium against `tests/fixtures/shop/` and skip when none is found. `uv run python scripts/check_guards.py` checks real controls in a local browser without model calls. Live examples and recording scripts make paid API calls. `scripts/record_flights.py <new-folder>` captures original browser timestamps; `scripts/render_demo.py <recording-folder>` renders that verified run at 1× and crops out the Google account strip. Credentials and raw traces stay ignored.
+Tests are offline; the engagement browser tests launch a local Chromium against `tests/fixtures/shop/` and skip when none is found, and the Jev tests use stand-ins for `jev_ultrafast.model.post_json` (see [Live smoke](#live-smoke-jev)). `uv run python scripts/check_guards.py` checks real controls in a local browser without model calls. Live examples, `scripts/smoke_engagement.py` and the recording scripts make paid API calls. `scripts/record_flights.py <new-folder>` captures original browser timestamps; `scripts/render_demo.py <recording-folder>` renders that verified run at 1× and crops out the Google account strip. Credentials and raw traces stay ignored.
 
 ---
 

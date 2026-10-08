@@ -2890,3 +2890,280 @@ def test_only_a_pick_that_led_to_its_stage_gets_the_jev_warning():
     assert run["warnings"] == ["mobile: cart found through the Jev fallback: not reproducible across runs"]
     assert [(s["stage"], s["reason"]) for s in run["model_calls"]["crawler_fallback"]["stages"]] == [
         ("pdp", "not_found"), ("checkout_entry", "no_navigation"), ("cart", None)]
+
+
+# ---------------------------------------------------------------- Jev fallback: round 5 rulings and fixes
+
+
+def cart_of(shop):
+    return {"page_id": "mobile-cart-1", "profile": "mobile", "stage": "cart", "url": f"{SHOP}cart",
+            "final_url": f"{SHOP}cart", "classification": {"type": "cart"}, "audit": shop.audit()}
+
+
+class CrossSellCart(NoCtaCart):
+    """A cart page audit.js read no checkout CTA on, whose "Acquista ora" sits in a cross-sell product card (audit.js's
+    in-card CTA)."""
+
+    def audit(self):
+        return {**super().audit(), "ctas": [{"label": "Acquista ora", "in_card": True,
+                                             "rect": self.place("Acquista ora")}]}
+
+
+GATE = (f"{SHOP}accedi", "other", {"forms": {"login_required": True}})  # a same-site login wall
+UTILITY_CART = ["Svuota carrello", "Aggiorna carrello", "Calcola spedizione", "Il tuo account",
+                "Procedi alla spedizione", "Conferma carrello", "Checkout senza account"]
+PAYPAL = "https://www.paypal.com/checkoutnow?token=EC-1"
+
+
+@pytest.mark.parametrize("controls, answer, arrival, offered, reached", [
+    (UTILITY_CART, "Procedi alla spedizione", (f"{SHOP}checkout/spedizione", "checkout", {"doc": {"word_count": 10}}),
+     UTILITY_CART[4:], True),  # rulings 1 and 6: a utility label offered only when it also reads as a way on
+    (["Acquista ora", "Ordina adesso"], "Ordina adesso", GATE, ["Ordina adesso"],
+     True),  # ruling 5b: a same-site login wall is rule d's gate, whatever the CTA's label
+    (["Acquista ora", "Ordina adesso"], "Ordina adesso", (PAYPAL, "checkout", {"forms": {"login_required": True}}),
+     ["Ordina adesso"], False),  # ruling 5a: Jev's arrival off the shop's site is no checkout entry
+])
+def test_the_checkout_lookup_offers_the_ways_on_and_keeps_only_an_arrival_on_the_shop_s_site(
+        monkeypatch, jev, controls, answer, arrival, offered, reached):
+    """Rulings 1/6 and 5: the checkout lookup never offers a utility control ("Svuota carrello", "Aggiorna carrello",
+    "Calcola spedizione", "Il tuo account") unless the lexicon also reads it as a way on ("Procedi alla spedizione",
+    "Conferma carrello", "Checkout senza account"), nor a cross-sell card's "Acquista ora"; a top-level "Ordina adesso"
+    is offered. The page Jev's control opened must be on the shop's own site: a hosted pay page or another site's login
+    is demoted with a note naming its host, checkout_entry is "checkout_cta_not_found" and no warning claims it."""
+    monkeypatch.setattr(Tab, "await_effect", lambda self, origin, **kw: "navigated")
+    stand_in = jev(checkout_entry=answer)
+    shop = CrossSellCart(controls=controls)
+    crawl = Crawl(ArrivalCollector(shop, arrival), EngagementSettings(url=SHOP), profile="mobile", guard=GUARD,
+                  jev_fallback=True)
+    crawl.tab.browser = crawl.collector.browser
+    cart = cart_of(shop)
+    if reached:
+        crawl.checkout(cart)
+    else:
+        with pytest.raises(Stop) as stop:
+            crawl.checkout(cart)
+        assert (stop.value.stage, stop.value.reason) == ("checkout_entry", "checkout_cta_not_found")
+    assert [e["label"] for e in stand_in.bodies[0]["state"]["elements"]] == offered
+    assert stand_in.asked == ["checkout_entry"] and crawl.tab.browser.acted == [answer]
+    [page] = crawl.pages
+    [asked] = cart["probes"]["jev_fallback"]
+    assert (page["stage"], asked["executed"], asked["reason"]) == (
+        ("checkout_entry", True, None) if reached else ("extra", True, "not_found"))
+    if not reached:
+        assert page["notes"] == ["checkout_entry candidate rejected: on another site (www.paypal.com)"]
+        assert cart["probes"]["checkout_entry"]["reason"] == "not_found"
+    run = {"warnings": []}
+    audit_module._jev_fallbacks(run, "mobile", [cart, page], {"home", "plp", "pdp", "cart"} | (
+        {"checkout_entry"} if reached else set()))
+    assert run["model_calls"]["crawler_fallback"]["requests"] == 1
+    assert run["warnings"] == (["mobile: checkout_entry found through the Jev fallback: not reproducible across runs"]
+                               if reached else [])
+
+
+@pytest.mark.parametrize("purpose", sorted(GOALS))
+def test_a_field_s_click_is_never_offered(jev, purpose):
+    """Ruling 4: snapshot.js adds a click twin ("Open <name>") to every text field, on the field's node: it only
+    focuses the field, so no lookup is offered it (it would spend the lookup's one request). Detected by node, not by
+    role: a custom role=combobox (a div, no fill twin) is a variant or sort control and stays."""
+    stand_in = jev(**{purpose: "Scarpe"})
+    page = {"url": SHOP, "title": "", "text": "", "guards": {}, "actions": [
+        {"id": "e1", "kind": "fill", "label": "Cerca", "role": "searchbox", "node": 1},
+        {"id": "e2", "kind": "click", "label": "Open Cerca", "role": "searchbox", "node": 1},
+        {"id": "e3", "kind": "click", "label": "Scarpe", "role": "link", "node": 3}]}
+    action, _ = jev_pick(page, GUARD, "home", GOALS[purpose])
+    assert action["id"] == "e3" and [e["label"] for e in stand_in.bodies[0]["state"]["elements"]] == ["Scarpe"]
+    sort = {**page, "actions": [*page["actions"], {"id": "e4", "kind": "click", "label": "Ordina per",
+                                                   "role": "combobox", "node": 4}]}
+    jev_pick(sort, GUARD, "home", GOALS[purpose])
+    assert [e["label"] for e in stand_in.bodies[1]["state"]["elements"]] == ["Scarpe", "Ordina per"]
+    assert stand_in.asked == [purpose, purpose]
+
+
+def test_the_cart_and_add_to_cart_lookups_offer_only_the_shape_of_a_control_that_opens_or_adds():
+    """A product page with an open mini-cart: a click the cart lookup or the add-to-cart lookup is offered is a button
+    or a link with no checked state and no quantity, coupon or add-on label, as the checkout lookup's. A paid add-on
+    Jev ticked would be in the cart deception.py reads (prechecked_paid, sneak_into_basket would blame the shop)."""
+    controls = [("Aumenta quantità", "button", None, {}), ("Diminuisci quantità", "button", None, {}),
+                ("Protezione spedizione Premium (+2,90 €)", "checkbox", None, {"checked": "false"}),
+                ("Garanzia estesa 2 anni (+29,00 €)", "checkbox", None, {"checked": "false"}),
+                ("Imballo ecologico", "button", None, {"checked": "false"}),
+                ("Applica codice sconto", "button", None, {}),
+                ("Descrizione", "tab", None, {}), ("Rimuovi", "button", None, {}),
+                ("Mettilo nella sporta", "button", None, {}), ("Vedi la sporta", "link", "/sporta", {})]
+    page = {"url": f"{SHOP}p/aurora", "scroll": {"y": 0},
+            "actions": [{"id": f"e{n}", "kind": "click", "label": label, "role": role, "node": n, **extra}
+                        for n, (label, role, _, extra) in enumerate(controls)],
+            "guards": {str(n): [None] * GUARD_HREF + [href] for n, (_, _, href, _) in enumerate(controls)}}
+    crawl = crawl_of(ScriptedShop())
+    product = record({}, url=page["url"], kind="pdp")
+    offered = {stage: [a["label"] for a in page["actions"] if crawl.link_offer(stage, product, False)(a, page)]
+               for stage in ("plp", "pdp", "cart")}
+    assert offered == {stage: ["Mettilo nella sporta", "Vedi la sporta"] for stage in ("plp", "pdp", "cart")}
+    assert [a["label"] for a in page["actions"] if crawl.add_offer(product, {})(a, page)] == ["Mettilo nella sporta"]
+
+
+class LateBannerCart(NoCtaCart):
+    """A blocking consent banner with "Accetta tutti" only shows up once the first click met a stale page."""
+
+    stale_seen = False
+
+    def audit(self):
+        audit = super().audit()
+        if self.stale_seen:
+            audit["overlays"] = [banner(button("Accetta tutti", "accept"))]
+        return audit
+
+
+class StaleOnceBrowser(ScriptedBrowser):
+    def act(self, action, page, text=None):
+        if not self.shop.stale_seen:
+            self.shop.stale_seen = True
+            raise StalePage("covered")
+        return super().act(action, page, text)
+
+
+@pytest.mark.parametrize("label, key", [("Procedi al checkout", False), ("Vai avanti", True)])
+def test_a_blocking_banner_on_the_re_observe_stops_any_checkout_click_as_consent_blocking(monkeypatch, jev, label,
+                                                                                          key):
+    """The checkout CTA (the lexicon's, or Jev's pick) met a stale page; on the one re-observe a blocking banner that
+    "reject" cannot clear is up: no click, and checkout_entry is "consent_blocking" whoever chose the control. Jev's
+    probe keeps its own outcome (nothing sent, a request asked: it counts)."""
+    monkeypatch.setattr(Tab, "await_effect", lambda self, origin, **kw: "navigated")
+    stand_in = jev(checkout_entry=label)
+    shop = LateBannerCart(controls=[label])
+    collector = ScriptedCollector(shop)
+    collector.browser = StaleOnceBrowser(shop)
+    crawl = Crawl(collector, EngagementSettings(url=SHOP, consent="reject"), profile="mobile", guard=GUARD,
+                  jev_fallback=key)
+    crawl.tab.browser = collector.browser
+    cart = cart_of(shop)
+    with pytest.raises(Stop) as stop:
+        crawl.checkout(cart)
+    assert (stop.value.stage, stop.value.reason) == ("checkout_entry", "consent_blocking")
+    assert collector.browser.acted == [] and cart["probes"]["checkout_entry"]["reason"] == "consent_blocking"
+    assert stand_in.asked == (["checkout_entry"] if key else [])
+    if key:
+        [asked] = cart["probes"]["jev_fallback"]
+        assert (asked["executed"], asked["reason"], asked["stale_reobserved"]) == (False, "not_executed:covered", 1)
+        run = {"warnings": []}
+        audit_module._jev_fallbacks(run, "mobile", [cart], {"home", "plp", "pdp", "cart"})
+        assert run["model_calls"]["crawler_fallback"]["requests"] == 1 and run["warnings"] == []
+
+
+def failing_collect(failure, url=f"{SHOP}cassa"):
+    """collect() for a click whose page failed: an exception to raise, or the page type it lands on."""
+    def collect(browser, *, stage, page_id):
+        if failure == "timeout":
+            raise TimeoutError("the document never settled")
+        if failure == "renderer_crashed":
+            raise RuntimeError("Session with given id not found.")
+        kind, signals = ("challenge", []) if failure == "bot_challenge" else ("other", ["navigation_error"])
+        return {"page_id": page_id, "profile": "mobile", "stage": stage, "url": url, "final_url": url,
+                "classification": {"type": kind, "signals": signals}, "audit": {}}
+    return collect
+
+
+@pytest.mark.parametrize("failure", ["navigation_error", "timeout", "renderer_crashed", "bot_challenge"])
+def test_what_stops_the_funnel_after_jev_s_checkout_click_is_in_its_probe(monkeypatch, jev, failure):
+    """Jev's checkout click navigated, but its page did not load (Chrome's error page, a timeout, a crashed renderer)
+    or was a bot challenge: the probe says why (never the executed, reasonless shape of a pick that worked). A page
+    that did not load is no checkout: "checkout_cta_not_found", the lexicon's reason; a bot challenge stops every
+    funnel with its own reason."""
+    monkeypatch.setattr(Tab, "await_effect", lambda self, origin, **kw: "navigated")
+    stand_in = jev(checkout_entry="Vai avanti")
+    shop = NoCtaCart(controls=["Vai avanti"])
+    collector = ScriptedCollector(shop)
+    collector.collect = failing_collect(failure)
+    crawl = Crawl(collector, EngagementSettings(url=SHOP), profile="mobile", guard=GUARD, jev_fallback=True)
+    crawl.tab.browser = collector.browser
+    cart = cart_of(shop)
+    with pytest.raises(Stop) as stop:
+        crawl.checkout(cart)
+    assert (stop.value.stage, stop.value.reason) == (
+        "checkout_entry", "bot_challenge" if failure == "bot_challenge" else "checkout_cta_not_found")
+    assert stand_in.asked == ["checkout_entry"] and collector.browser.acted == ["Vai avanti"]
+    [asked] = cart["probes"]["jev_fallback"]
+    assert (asked["executed"], asked["reason"]) == (True, failure)
+    if failure != "bot_challenge":
+        assert cart["probes"]["checkout_entry"]["reason"] == failure
+    assert [p["stage"] for p in crawl.pages] == ([] if failure in ("timeout", "renderer_crashed") else ["extra"])
+    run = {"warnings": []}
+    audit_module._jev_fallbacks(run, "mobile", [cart, *crawl.pages], {"home", "plp", "pdp", "cart"})
+    assert [s["reason"] for s in run["model_calls"]["crawler_fallback"]["stages"]] == [failure]
+    assert run["warnings"] == [] and run["model_calls"]["crawler_fallback"]["requests"] == 1
+
+
+def test_an_error_page_after_jev_s_add_to_cart_is_in_its_probe(monkeypatch, jev):
+    """Jev's add-to-cart click navigated to Chrome's error page: the cart stage is "navigation_error" (as after the
+    lexicon's click) and the add-to-cart lookup's probe says so."""
+    monkeypatch.setattr(Tab, "await_effect", lambda self, origin, **kw: "navigated")
+    jev(add_to_cart="Mettilo nella sporta")
+    shop = SportaShop()
+    collector = ScriptedCollector(shop)
+    collector.collect = failing_collect("navigation_error")
+    crawl = Crawl(collector, EngagementSettings(url=SHOP), profile="mobile", guard=GUARD, jev_fallback=True)
+    crawl.tab.browser = collector.browser
+    product = pdp_of(shop)
+    with pytest.raises(Stop) as stop:
+        crawl.cart(product)
+    assert (stop.value.stage, stop.value.reason) == ("cart", "navigation_error")
+    [asked] = product["probes"]["jev_fallback"]
+    assert (asked["purpose"], asked["executed"], asked["reason"]) == ("add_to_cart", True, "navigation_error")
+    assert [p["stage"] for p in crawl.pages] == ["extra"]
+
+
+class GoneBrowser(LinkBrowser):
+    """A click on one of the gone labels reaches the page, then the session or the transport goes."""
+
+    def __init__(self, shop, hrefs, gone, error):
+        super().__init__(shop, hrefs)
+        self.gone, self.error = gone, error
+
+    def act(self, action, page, text=None):
+        if action["label"] in self.gone:
+            self.acted.append(action["label"])
+            raise self.error
+        return super().act(action, page, text)
+
+
+@pytest.mark.parametrize("purpose", ["add_to_cart", "cart"])
+@pytest.mark.parametrize("error", [ConnectionError("the transport closed"),
+                                   RuntimeError("Session with given id not found.")])
+def test_a_jev_click_whose_session_or_transport_went_is_in_its_probe(monkeypatch, jev, purpose, error):
+    """Tab.act raises after Jev's click may have reached the page (a closed transport, a gone session): the funnel
+    stops, and the lookup's probe says "failed:<error>" (executed False, as Tab.act's own failure), never the picked
+    shape with no reason. A click lookup (the add-to-cart) and a link lookup clicking an element without href (the
+    cart)."""
+    monkeypatch.setattr(Tab, "await_effect", lambda self, origin, **kw: "quiet")
+    jev(add_to_cart="Mettilo nella sporta", cart="Vedi la sporta")
+    shop = SportaShop()
+    collector = SportaCollector(shop, {}, [])
+    gone = "Mettilo nella sporta" if purpose == "add_to_cart" else "Vedi la sporta"
+    collector.browser = GoneBrowser(shop, {}, {gone}, error)
+    crawl = Crawl(collector, EngagementSettings(url=SHOP), profile="mobile", guard=GUARD, jev_fallback=True)
+    crawl.tab.browser = collector.browser
+    product = pdp_of(shop)
+    with pytest.raises(type(error)):
+        crawl.cart(product)
+    probes = {p["purpose"]: (p["executed"], p["reason"]) for p in product["probes"]["jev_fallback"]}
+    assert probes[purpose] == (False, f"failed:{type(error).__name__}") and collector.browser.acted[-1] == gone
+    if purpose == "cart":
+        assert probes["add_to_cart"] == (True, None)
+
+
+def test_the_jev_warning_says_whether_the_stage_s_own_lookup_opened_it():
+    """A cart reached through the lexicon's cart link after Jev picked the variant option and the add-to-cart is
+    "reached after a Jev pick" naming those lookups; "found through the Jev fallback" only when the stage's own lookup
+    opened its page."""
+    picks = [{"stage": "cart", "purpose": purpose, "executed": True, "reason": None}
+             for purpose in ("select_variant", "add_to_cart")]
+    run = {"warnings": []}
+    audit_module._jev_fallbacks(run, "mobile", [{"page_id": "mobile-pdp-1", "probes": {"jev_fallback": picks}}],
+                                set(STAGES))
+    assert run["warnings"] == [
+        "mobile: cart reached after a Jev pick (select_variant, add_to_cart): not reproducible across runs"]
+    picks.append({"stage": "cart", "purpose": "cart", "executed": True, "reason": None})
+    run = {"warnings": []}
+    audit_module._jev_fallbacks(run, "mobile", [{"page_id": "mobile-pdp-1", "probes": {"jev_fallback": picks}}],
+                                set(STAGES))
+    assert run["warnings"] == ["mobile: cart found through the Jev fallback: not reproducible across runs"]

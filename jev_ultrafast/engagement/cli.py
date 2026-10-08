@@ -1,7 +1,8 @@
 """jev-engage: engagement-readiness audits from the command line.
 
-Human output is Italian; --json prints the service's JSON instead. Journeys from the CLI use policy "typesafe"
-(TYPESAFE_API_KEY, plus TEXT_MODEL_API_KEY for text fields): host-driven journeys exist only through the MCP server.
+Human output is Italian; --json prints the service's JSON instead (its `next` fields name MCP tools). Journeys from
+the CLI use policy "typesafe" (TYPESAFE_API_KEY, plus TEXT_MODEL_API_KEY for text fields): host-driven journeys exist
+only through the MCP server.
 --judge jev (judge --backend jev) lets Jev judge the rubrics routed to it, one TypeSafe request per page; the tasks it
 leaves open (the perception rubrics and its escalations) wait for a Claude backend (judge --backend cli).
 Exit status: 0 on success, 1 when the run failed or a step could not be done, 2 for invalid arguments, 141 when
@@ -13,6 +14,7 @@ abandoned). At start, runs of a jev-engage or MCP server process that died are c
 import argparse
 import json
 import os
+import re
 import signal
 import sys
 import threading
@@ -62,22 +64,38 @@ def _trap_signals() -> dict:
     return previous
 
 
+DOUBLE_QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')  # a double-quoted .env value; \" and \\ inside are escapes
+
+
+def _env_value(raw: str) -> str:
+    r"""A .env value (the text after "="): the text inside its quotes when quoted (what follows the closing quote,
+    e.g. a comment, is dropped), else the text before an inline comment (a "#" after a blank, as in the shell:
+    "KEY= # note" is empty, "KEY=a#b" keeps its "#"), stripped. Inside double quotes \" is a quote and \\ a
+    backslash, as in the shell and python-dotenv (any other backslash stays); single quotes hold their text as is."""
+    value = raw.strip()
+    if value[:1] == '"' and (quoted := DOUBLE_QUOTED.match(value)):
+        return re.sub(r'\\(["\\])', r"\1", quoted.group(1))
+    if value[:1] == "'" and (end := value.find("'", 1)) > 0:
+        return value[1:end]
+    return re.split(r"\s#", raw, maxsplit=1)[0].strip()
+
+
 def load_environment(path: Path | None = None) -> None:
-    """KEY=value lines of ./.env (or path) into the environment, without overriding what is already set; an
-    "export " prefix and quotes around the whole value are dropped. A UTF-8 byte-order mark (Windows Notepad) is
-    skipped, bytes that are not UTF-8 (a cp1252 comment) never raise (they become U+FFFD) and a line the
-    environment cannot hold (no name, a NUL byte) is skipped: the other lines still load."""
+    """KEY=value lines of ./.env (or path) into the environment, without overriding a variable already set to a
+    non-empty value (an inherited empty one, e.g. TYPESAFE_API_KEY= in a shell profile, counts as unset); an "export "
+    prefix, quotes around the value and an inline comment (" # ..." after an unquoted value, anything after the
+    closing quote) are dropped. A UTF-8 byte-order mark (Windows Notepad) is skipped, bytes that are not UTF-8 (a
+    cp1252 comment) never raise (they become U+FFFD) and a line the environment cannot hold (no name, a NUL byte) is
+    skipped: the other lines still load. A file that cannot be read raises OSError (callers say so and go on)."""
     path = path or Path.cwd() / ".env"
     if path.is_file():
         for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
             if "=" in line and not line.lstrip().startswith("#"):
                 key, value = line.split("=", 1)
-                key, value = key.strip().removeprefix("export ").strip(), value.strip()
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-                    value = value[1:-1]
+                key, value = key.strip().removeprefix("export ").strip(), _env_value(value)
                 try:
-                    if key:
-                        os.environ.setdefault(key, value)
+                    if key and not os.environ.get(key):
+                        os.environ[key] = value
                 except (ValueError, OSError):
                     pass
 
@@ -393,7 +411,14 @@ def _audit(args, parser) -> int:
         if result.get("score"):
             _print_score(result["score"])
     _emit(args, result, show)
-    return 1 if audited["status"] == "failed" or "journey_error" in result else 0
+    failed = audited["status"] == "failed" or "journey_error" in result
+    return 1 if failed or _judged_nothing(result.get("judgments")) else 0
+
+
+def _judged_nothing(result: dict | None) -> bool:
+    """A judge step that could not be done: its judges failed (every Jev request, a refused key, a judge CLI that
+    errors) and no verdict was accepted or reused. The audit and its score are printed all the same."""
+    return bool(result and result.get("errors") and not result.get("accepted") and not result.get("reused"))
 
 
 def _print_journey(result: dict) -> None:
@@ -436,8 +461,10 @@ def _print_jev(result: dict, final: dict) -> None:
     print(f"Giudizi (jev, {result['model']}, 1 campione): {result['accepted']} verdetti accettati, "
           f"{escalated} task passati a Claude{f' ({reasons})' if reasons else ''}, {result['requests']} richieste "
           f"TypeSafe in {_num(result['latency_ms'] / 1000, 2)} s, {final.get('decided', 0)} task decisi")
-    for error in result.get("errors") or []:
-        print(f"  errore del giudice: {error}")
+    for group in result.get("error_groups") or []:  # one line per message: a refused key fails every page alike
+        pages, tasks = group["pages"], group["tasks"]
+        print(f"  errore del giudice su {pages} {'pagina' if pages == 1 else 'pagine'} ({tasks} task): "
+              f"{group['error']}")
     if result.get("open_tasks"):  # the score and the report do not count them until they are judged and rescored
         print(f"  {result['open_tasks']} task restano aperti (rubriche di percezione e passaggi a Claude): "
               f"jev-engage judge {result['run_id']} --backend cli, poi jev-engage score {result['run_id']} "
@@ -463,7 +490,7 @@ def _judge(args, parser) -> int:
     service = _service(args)
     result = service.judge_with(args.run_id, args.backend, args.samples, model=args.model)
     _emit(args, result, _print_judgments)
-    return 1 if result["errors"] and not result["accepted"] and not result["reused"] else 0
+    return 1 if _judged_nothing(result) else 0
 
 
 def _score(args, parser) -> int:
@@ -499,7 +526,11 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     parser = args.command_parser  # the subcommand's parser: its errors print its own usage line
     _check(args, parser)
-    load_environment()
+    try:
+        load_environment()
+    except (OSError, ValueError) as exc:  # the reason, never the file's content: the inherited environment stays
+        reason = exc.strerror if isinstance(exc, OSError) and exc.strerror else type(exc).__name__
+        print(f"avviso: ./.env non letto ({reason}): valgono le variabili dell'ambiente", file=sys.stderr)
     previous = _trap_signals()
     try:
         code = COMMANDS[args.command](args, parser)

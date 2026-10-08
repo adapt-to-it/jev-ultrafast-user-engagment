@@ -54,6 +54,7 @@ MAX_JOURNEYS = 3
 FINISHED = ("complete", "partial", "failed")
 UNFINISHED = ("created", "running")
 OWNER = "owner.json"
+LOOKUPS = 40  # crawler fallback lookups get_run lists (6 lookups x 2 profiles: at most 12 requests, plus refusals)
 NEVER_STARTED_S = 120  # a run stays "created" for milliseconds: one still created after this lost its process
 BACKENDS = ("cli", "api", "openai", "jev")  # jev: judge_with_jev (one sample per task, escalations stay open)
 POLICIES = ("auto", "host", "typesafe")  # auto: typesafe with TYPESAFE_API_KEY, else host
@@ -115,6 +116,7 @@ class _Job:
     done: threading.Event = field(default_factory=threading.Event)
     progress: list[str] = field(default_factory=list)
     thread: threading.Thread | None = None
+    summarized: bool = False  # a typesafe journey whose finish summary was returned (wait=True, journey_finish)
 
 
 @dataclass
@@ -348,6 +350,34 @@ def _pilot(journey: dict) -> dict:
     (decision time is never the site's), usage (TypeSafe tokens)."""
     keys = ("policy", "policy_requested", "text_helper", "model_calls", "timing_ms", "usage")
     return {key: journey.get(key) for key in keys if key in journey or key == "policy"}
+
+
+REPORT_JOURNEY = ("run_id", "goal", "oracle", "oracle_params", "profile", "policy", "policy_requested", "text_helper",
+                  "status", "steps", "optimal_steps", "model_calls", "timing_ms", "usage", "started_at", "finished_at")
+
+
+def _report_journey(journey) -> dict:
+    """A merged journey of report.json for get_report's summary, by name (a dict cut at its first keys would drop the
+    run id, the steps and what deciding cost): the fields of _journey_brief plus the steps count and the tokens, and
+    the verdict as passed plus why it could not be assessed."""
+    if not isinstance(journey, dict):
+        return _compact(journey)
+    verification = journey.get("verification") if isinstance(journey.get("verification"), dict) else {}
+    checks = verification.get("checks") if isinstance(verification.get("checks"), dict) else {}
+    return {**{key: _compact(journey.get(key)) for key in REPORT_JOURNEY},
+            "verification": {"passed": verification.get("passed"), "not_assessable": checks.get("not_assessable")}
+            if journey.get("verification") else None}
+
+
+def _error_groups(errors) -> list[dict]:
+    """Jev's errors grouped by message, with how many pages and tasks each hit (a refused key fails every page with
+    the same message): {error, pages, tasks}, in first-seen order."""
+    groups = {}
+    for error in errors or []:
+        group = groups.setdefault(_clip(error.get("error") or "", 300), {"pages": set(), "tasks": 0})
+        group["pages"].add(error.get("page_id"))
+        group["tasks"] += 1
+    return [{"error": text, "pages": len(g["pages"]), "tasks": g["tasks"]} for text, g in groups.items()]
 
 
 def _jev_undecided(summary: dict) -> bool:
@@ -589,16 +619,21 @@ class EngagementService:
             "errors": [_clip(e, 400) for e in (run.get("errors") or [])[:10]],
             "server": server_keys(),
         }
-        if isinstance(run.get("model_calls"), dict) and run["model_calls"]:  # down to each fallback lookup's fields
-            summary["model_calls"] = _compact(run["model_calls"], levels=4, items=12)
+        if isinstance(run.get("model_calls"), dict) and run["model_calls"]:  # down to each fallback lookup's fields:
+            # every lookup (at most one request per purpose and profile, plus the re-asks it refused), up to LOOKUPS
+            summary["model_calls"] = _compact(run["model_calls"], levels=4, items=LOOKUPS)
+            fallback = run["model_calls"].get("crawler_fallback")
+            stages = fallback.get("stages") if isinstance(fallback, dict) else None
+            if isinstance(stages, list) and len(stages) > LOOKUPS:
+                summary["model_calls"]["crawler_fallback"]["stages_total"] = len(stages)
         if job is not None and job.progress:
             summary["progress"] = job.progress[-1]
         if run.get("journey"):
             summary["journey"] = self._journey_brief(run)
         if job is not None and not job.done.is_set():
             summary["next"] = f"wait_run('{run_id}')"
-        elif job is not None and job.kind == "journey":  # a typesafe journey that ended: its summary
-            summary["next"] = f"journey_finish('{run_id}')"
+        elif job is not None and job.kind == "journey" and not job.summarized:  # a typesafe journey that ended
+            summary["next"] = f"journey_finish('{run_id}')"  # its summary, not returned yet
         return summary
 
     @staticmethod
@@ -621,9 +656,11 @@ class EngagementService:
         if _unrequested(run):
             return {"prepared": False}
         state = run.get("judgments") or {}
+        reasons = Counter(t["escalation"].get("reason") for t in state.get("tasks") or []
+                          if isinstance(t.get("escalation"), dict))
         return {"prepared": True, **judgments.progress(run), "verdicts": len(state.get("verdicts") or []),
-                "skipped_rubrics": len(state.get("skipped") or []),
-                "escalated": sum(1 for t in state.get("tasks") or [] if t.get("escalation"))}
+                "skipped_rubrics": len(state.get("skipped") or []),  # escalated: tasks still passed to Claude now
+                "escalated": sum(reasons.values()), "escalated_reasons": dict(reasons)}
 
     @staticmethod
     def _scores_brief(run: dict) -> dict:
@@ -738,6 +775,7 @@ class EngagementService:
 
         if wait:
             result = work()
+            job.summarized = result is not None  # the caller gets the finish summary: no journey_finish owed
             return self._finish_summary(result) if result else self.get_run(run_id)
         job.thread = threading.Thread(target=work, name=f"journey-{run_id[-40:]}", daemon=True)
         job.thread.start()
@@ -805,8 +843,12 @@ class EngagementService:
             from .friction import executed
 
             steps = sum(1 for step in self.store.read_steps(run_id) if executed(step))  # as finish() counts them
-            return self._finish_summary({"run_id": run_id, "status": run["journey"].get("status"),
-                                         "verification": run["journey"].get("verification"), "steps": steps}, run=run)
+            summary = self._finish_summary({"run_id": run_id, "status": run["journey"].get("status"),
+                                            "verification": run["journey"].get("verification"), "steps": steps},
+                                           run=run)
+            if ended:  # get_run stops pointing at journey_finish
+                job.summarized = True
+            return summary
         raise self._not_open(run_id)
 
     def _forget(self, run_id: str, live: _Live) -> None:
@@ -1043,38 +1085,59 @@ class EngagementService:
         An accepted task is final; one Jev is unsure about (low probability, a position flip, no evidence) or could
         not answer is escalated and stays open, with the Claude rubrics' tasks, for the host's judges (open_tasks).
         Without TYPESAFE_API_KEY nothing changes (available false). budget_s: no new page is asked once that many
-        seconds passed (the first page always is); the pages left unasked are untouched (pages_left counts them) and
-        the next call asks them. The requests run inside the run's lock, seconds in the normal case, at most budget_s
-        plus one request when TypeSafe hangs (without budget_s, every page's request), so verdicts the host submits
-        meanwhile wait and are kept."""
-        from .judges import JevJudge, judge_with_jev
+        seconds passed (the first page always is).
+
+        pages_left is read from the run after the call: the pages holding a Jev task that is open with no verdict and
+        no escalation, i.e. never asked (a page whose request failed was asked: its tasks are escalated request_failed
+        or invalid_response and retried while no judge has them). The server owns the loop's end: `next` names
+        judge_with_jev again only when pages are left and this call made progress (fewer never-asked pages than before
+        it); a call that asked none of them (TypeSafe failing on a page it retried first, or no answer at all) sends
+        the host to get_judgment_tasks, so "call again while next names judge_with_jev" ends after at most one call
+        per page plus one, whatever the order judges.py asks pages in. The requests run inside the run's lock, seconds
+        in the normal case, at most budget_s plus one request of up to three attempts when TypeSafe is slow (without
+        budget_s, every page's request), so verdicts the host submits meanwhile wait and are kept; a host whose tool
+        call timed out first loses nothing: the call ends under the lock, stores every verdict and escalation, and the
+        next call goes on from the run."""
+        from .judges import JevJudge, jev_tasks, judge_with_jev
 
         self._finished_audit(run_id)
         judge = JevJudge(model=model)
-        summary = {}
+        summary, pages, rubrics = {}, {"before": 0, "after": 0}, judgments.load_rubrics()
+
+        def never_asked(run) -> set:  # pages with an open Jev task that has no verdict and no escalation
+            return {t.get("page_id") for t in jev_tasks(run, rubrics) if not t.get("escalation")}
 
         def work(run):
             _clear_seed(run)
+            judgments.ensure_tasks(run)
+            pages["before"] = len(never_asked(run))
             summary.update(judge_with_jev(run, judge, use_cache=use_cache, budget_s=budget_s))
+            pages["after"] = len(never_asked(run))
             final = {f["task_id"] for f in run["judgments"].get("final") or []}
             summary["per_task"] = _jev_readings(run, final)
         if judge.api_key:
             self.store.update(run_id, work)
         else:  # nothing is written: the host's judges take every task
             summary = judge_with_jev({}, judge)
-        finalize, pages_left = summary.get("finalize") or {}, summary.get("pages_left") or 0
-        follow = (f"judge_with_jev('{run_id}') again: {pages_left} pages are still to be asked" if pages_left else
-                  "get_judgment_tasks: the host's judges take the open tasks (Claude rubrics and Jev's escalations), "
-                  "then finalize_judgments")
+        finalize, left = summary.get("finalize") or {}, pages["after"]
+        if left and left < pages["before"]:
+            follow = f"judge_with_jev('{run_id}') again: {left} pages are still to be asked"
+        elif left:  # no progress: asking again could repeat this call, so the host's judges take over
+            follow = (f"get_judgment_tasks: {left} pages were never asked and this call asked none of them; the "
+                      "host's judges take their tasks with the other open ones, then finalize_judgments")
+        else:
+            follow = ("get_judgment_tasks: the host's judges take the open tasks (Claude rubrics and Jev's "
+                      "escalations), then finalize_judgments")
         return {"run_id": run_id, "backend": "jev", "available": summary["available"],
                 "typesafe_key": bool(judge.api_key), "reason": summary.get("reason"), "model": summary.get("model")
                 or judge.model, "samples": 1, "requests": summary["requests"], "latency_ms": summary["latency_ms"],
                 "input_tokens": summary["input_tokens"], "accepted": summary["judged"], "reused": summary["reused"],
                 "escalated": summary["escalated"], "errors": [_compact(e) for e in summary["errors"][:10]],
+                "errors_total": len(summary["errors"]), "error_groups": _error_groups(summary["errors"]),
                 "rejected_total": 0, "per_task": summary.get("per_task", [])[:60],
                 "finalize": {k: len(v) if isinstance(v, list) else v for k, v in finalize.items()},
                 "open_tasks": summary["open_tasks"],  # None when Jev did not run
-                "pages_left": pages_left, "next": follow}
+                "pages_left": left, "next": follow}
 
     def judge_with(self, run_id: str, backend: str = "cli", samples: int = 3, *, model: str | None = None,
                    batch_size: int = 8) -> dict:
@@ -1248,7 +1311,7 @@ class EngagementService:
                               "evidence": _compact(s.get("evidence") or {})}
                              for s in (data.get("risk_signals") or [])[:5]],
             "not_assessable_reasons": {report.reason_text(r) or str(r): n for r, n in reasons.most_common(12)},
-            "journeys": [_compact(j) for j in ([data["journey"]] if data.get("journey") else [])
+            "journeys": [_report_journey(j) for j in ([data["journey"]] if data.get("journey") else [])
                          + (data.get("journeys") or [])][:5],
             "judgments": data.get("judgments"),
             "disclaimer": data.get("disclaimer"),

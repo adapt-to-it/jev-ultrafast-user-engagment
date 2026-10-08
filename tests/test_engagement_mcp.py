@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import anyio
+import httpx
 import pytest
 from mcp import Client, StdioServerParameters
 
@@ -34,6 +35,8 @@ from jev_ultrafast.engagement.chrome import find_chromium
 from jev_ultrafast.engagement.collectors import PageCollector
 from jev_ultrafast.engagement.mcp_server import RESULT_CHARS, build_server
 from jev_ultrafast.engagement.service import (
+    LOOKUPS,
+    MAX_WAIT_S,
     TASK_PAGE,
     TASK_PAGE_CHARS,
     EngagementService,
@@ -296,6 +299,37 @@ def test_audit_judgments_score_and_report_through_the_protocol(service, monkeypa
         return [len(json.dumps(x)) for x in (summary, kpis, scored, *pages)]
     sizes = session(server, scenario)
     assert max(sizes) < 40_000  # every result stays far below the host's 25k-token tool output limit
+
+
+def test_get_report_names_each_merged_journey_with_its_run_steps_and_cost(service, monkeypatch):
+    """get_report's summary lists a merged journey by field name: its run id, its steps, the pilot and what deciding
+    cost (model_calls, timing_ms, usage) survive, and the verdict shows why it was not assessable. (A dict cut at its
+    first twelve keys dropped them once report.JOURNEY_FIELDS grew.)"""
+    monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit())
+    svc = service()
+    audit_id = svc.audit_shop(SHOP, wait=True)["run_id"]
+    golden = json.loads((RUNS / "journey_run.json").read_text(encoding="utf-8"))
+    steps = [json.loads(line) for line in (RUNS / "journey_steps.jsonl").read_text(encoding="utf-8").splitlines()]
+    pilot = {"policy": "typesafe", "policy_requested": "auto", "text_helper": None,
+             "model_calls": {"choose": 6, "text": 0, "stale_or_refused": 1, "failed": 0},
+             "timing_ms": {"decision": 2900, "text": 0, "site": 8100, "wall": 15400},
+             "usage": {"input_tokens": 61000, "output_tokens": 0}}
+    verification = {"passed": None, "checks": {"not_assessable": "text_helper_unavailable", "cart_reached": False}}
+    journey_id = svc.store.new_run("journey", SHOP, {})
+    svc.store.update(journey_id, lambda run: run.update(
+        {k: copy.deepcopy(v) for k, v in golden.items() if k not in ("run_id", "created_at", "journey")},
+        journey={**copy.deepcopy(golden["journey"]), **pilot, "verification": verification}))
+    for step in steps:
+        svc.store.append_step(journey_id, step)
+    svc.score_run(audit_id, [journey_id])
+    stored = json.loads((svc.store.path(audit_id) / "report.json").read_text(encoding="utf-8"))["journeys"]
+    assert len(stored) == 1 and len(stored[0]) > 12  # more fields than the old cut kept
+    summary = svc.get_report(audit_id)
+    (journey,) = summary["journeys"]
+    assert journey["run_id"] == journey_id and journey["steps"] == len(steps) == stored[0]["steps"]
+    assert {k: journey[k] for k in pilot} == pilot and journey["goal"] == golden["journey"]["goal"]
+    assert journey["verification"] == {"passed": None, "not_assessable": "text_helper_unavailable"}
+    assert journey["oracle"] == golden["journey"]["oracle"] and journey["status"] == golden["journey"]["status"]
 
 
 def test_an_audit_without_judgments_is_scored_as_unjudged(service, monkeypatch):
@@ -1251,6 +1285,7 @@ def test_jev_judges_its_rubrics_and_claude_judges_what_it_leaves(service, monkey
         else:
             assert "escalation" not in item
     assert pages[0]["open_tasks"] == 9 and run["judgments"]["escalated"] == 4
+    assert run["judgments"]["escalated_reasons"] == first["escalated"]  # what the skill's "Passati a Claude" reads
     assert run["model_calls"]["judge_jev"] == {"requests": 4, "latency_ms": first["latency_ms"],
                                                "input_tokens": 4800, "model": JEV_MODEL}
     assert run["server"] == {"typesafe_key": True, "text_helper": None}
@@ -1329,9 +1364,9 @@ def test_judge_with_jev_asks_no_new_page_after_its_budget_and_the_next_call_goes
     assert not [t for t in state["tasks"] if t.get("escalation")]  # an unasked page is no failure
     assert first["open_tasks"] == len(tasks) - len(asked)
 
-    async def rest(client):
+    async def rest(client):  # the host's loop: again while next names judge_with_jev
         calls = [await call(client, "judge_with_jev", run_id=run_id)]
-        while calls[-1]["pages_left"]:
+        while calls[-1]["next"].startswith("judge_with_jev"):
             calls.append(await call(client, "judge_with_jev", run_id=run_id))
         return calls
     calls = session(server, rest)
@@ -1345,15 +1380,147 @@ def test_judge_with_jev_asks_no_new_page_after_its_budget_and_the_next_call_goes
     assert unbounded["requests"] == 0 and unbounded["pages_left"] == 0
 
 
+def test_judge_with_jev_loop_ends_while_typesafe_keeps_failing(service, monkeypatch):
+    """Ruling 4 (judges.py, wsA): pages_left counts the pages Jev never asked in the run. A TypeSafe failing slowly on
+    every page (a connect or read timeout: "Model connection failed") with the budget cut after one page: each call
+    asks one never-asked page first, so pages_left drops at every call and the host's loop ("again while next names
+    judge_with_jev") reads every page once, never re-asking the failed first page while others were never asked.
+    Every Jev task ends escalated request_failed and open for the host's judges, who see why. (The server's backstop
+    ends the loop whatever judges.py does: test_judge_with_jev_sends_the_host_on_when_a_call_asks_no_new_page.)"""
+    monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit())
+    svc = service()
+    run_id = svc.audit_shop(SHOP, wait=True)["run_id"]
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    rubrics = judgments.load_rubrics()
+    tasks = {t["task_id"]: t for t in judgments.make_tasks(svc.store.load(run_id))}
+    jev_tasks = {t for t in tasks if judgments.routing(tasks[t], rubrics) == "jev"}
+    jev_pages = {tasks[t]["page_id"] for t in jev_tasks}
+    checker, asked = JevJudgeStandIn(tasks, {}, run_id), []
+
+    def failing(url, key, body):
+        checker(url, key, body)  # a valid request (one page, choice heads only), then the provider fails
+        asked.append(checker.pages[-1])
+        time.sleep(0.1)  # past the budget: no other page is started in this call
+        raise RuntimeError("Model connection failed; no action executed.")
+    monkeypatch.setattr(typesafe, "post_json", failing)
+    monkeypatch.setattr(mcp_server, "JEV_BUDGET_S", 0.05)
+    server = build_server(svc)
+
+    async def loop(client):
+        calls = [await call(client, "judge_with_jev", run_id=run_id)]
+        while calls[-1]["next"].startswith("judge_with_jev") and len(calls) <= len(jev_pages):  # guard: broken loop
+            calls.append(await call(client, "judge_with_jev", run_id=run_id))
+        return calls
+    calls = session(server, loop)
+    left = [c["pages_left"] for c in calls]
+    assert left == list(range(len(jev_pages) - 1, -1, -1))  # strictly down to 0: one call per page
+    assert [c["requests"] for c in calls] == [1] * len(jev_pages) and all(c["accepted"] == 0 for c in calls)
+    assert sorted(asked) == sorted(jev_pages)  # every page asked once; no failed page re-asked before the others
+    for c in calls[:-1]:
+        assert c["next"] == f"judge_with_jev('{run_id}') again: {c['pages_left']} pages are still to be asked"
+    assert calls[-1]["next"].startswith("get_judgment_tasks") and "again" not in calls[-1]["next"]
+    assert calls[-1]["open_tasks"] == len(tasks)  # Jev decided nothing: every task waits for the host's judges
+    for c in calls:  # one line per message, whatever the number of tasks it hit
+        assert c["error_groups"] == [{"error": "Model connection failed; no action executed.", "pages": 1,
+                                      "tasks": c["errors_total"]}] and c["errors_total"] >= 1
+    state = svc.store.load(run_id)["judgments"]
+    assert {t["task_id"] for t in state["tasks"] if (t.get("escalation") or {}).get("reason") == "request_failed"} \
+        == jev_tasks and not state["verdicts"]
+    page = svc.get_judgment_tasks(run_id, brief=True)
+    escalated = [t for t in page["tasks"] if t["judge"] == "jev"]
+    assert escalated and all(t["escalation"] == {"from": "jev", "reason": "request_failed"} for t in escalated)
+    assert svc.store.load(run_id)["model_calls"]["judge_jev"]["requests"] == len(jev_pages)
+
+
+def test_judge_with_jev_sends_the_host_on_when_a_call_asks_no_new_page(service, monkeypatch):
+    """Ruling 3, the server's backstop, independent of judges.py's page order: pages_left is the run's count of pages
+    with a Jev task that has no verdict and no escalation (a page whose request failed was asked, so it is not
+    counted), and next names judge_with_jev again only when the call lowered it. Here judges.py asks the failed page
+    again first (the order ruling 4 forbids) and the budget cuts the call there: no never-asked page was asked, so
+    next sends the host to get_judgment_tasks with pages_left still counting the pages Jev never read. The loop "again
+    while next names judge_with_jev" thus ends after at most one call per page plus one."""
+    monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit())
+    svc = service()
+    run_id = svc.audit_shop(SHOP, wait=True)["run_id"]
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    rubrics = judgments.load_rubrics()
+    tasks = {t["task_id"]: t for t in judgments.make_tasks(svc.store.load(run_id))}
+    jev_pages = {tasks[t]["page_id"] for t in tasks if judgments.routing(tasks[t], rubrics) == "jev"}
+    checker, asked = JevJudgeStandIn(tasks, {}, run_id), []
+
+    def failing(url, key, body):
+        checker(url, key, body)
+        asked.append(checker.pages[-1])
+        time.sleep(0.1)  # past the budget: no other page is started in this call
+        raise RuntimeError("Model connection failed; no action executed.")
+    ordered = judges.jev_tasks
+
+    def failed_first(run, rubrics=None):  # the regression: retryable (failed) tasks before the never-asked ones
+        return sorted(ordered(run, rubrics), key=lambda t: "escalation" not in t)
+    monkeypatch.setattr(typesafe, "post_json", failing)
+    monkeypatch.setattr(judges, "jev_tasks", failed_first)
+    monkeypatch.setattr(mcp_server, "JEV_BUDGET_S", 0.05)
+    server = build_server(svc)
+
+    async def loop(client):
+        calls = [await call(client, "judge_with_jev", run_id=run_id)]
+        while calls[-1]["next"].startswith("judge_with_jev") and len(calls) <= len(jev_pages) + 1:
+            calls.append(await call(client, "judge_with_jev", run_id=run_id))
+        return calls
+    first, second = calls = session(server, loop)
+    left = len(jev_pages) - 1
+    assert first["requests"] == 1 and first["pages_left"] == left == 3  # the failed page is not counted
+    assert first["next"] == f"judge_with_jev('{run_id}') again: {left} pages are still to be asked"
+    assert second["requests"] == 1 and asked == [asked[0]] * 2  # judges.py re-asked the failed page, nothing new
+    assert second["pages_left"] == left and len(calls) == 2  # no third call is suggested
+    assert second["next"] == (f"get_judgment_tasks: {left} pages were never asked and this call asked none of them; "
+                              "the host's judges take their tasks with the other open ones, then finalize_judgments")
+    state = svc.store.load(run_id)["judgments"]
+    failed = {t["task_id"] for t in state["tasks"] if t.get("escalation")}
+    assert failed and {tasks[t]["page_id"] for t in failed} == {asked[0]}
+    never = {t["page_id"] for t in judges.jev_tasks(svc.store.load(run_id)) if not t.get("escalation")}
+    assert never == jev_pages - {asked[0]} and second["open_tasks"] == len(tasks)
+    assert svc.get_run(run_id)["judgments"]["escalated_reasons"] == {"request_failed": len(failed)}
+
+    monkeypatch.setattr(typesafe, "post_json", checker)  # TypeSafe is back: a later call answers every page
+    third = svc.judge_with_jev(run_id)
+    assert third["requests"] == len(jev_pages) and third["pages_left"] == 0 and third["accepted"] > 0
+    escalated = first["escalated"].get("request_failed", 0) + second["escalated"].get("request_failed", 0)
+    state = svc.get_run(run_id)["judgments"]  # the tasks still passed to Claude, not the per-call counts added up
+    assert escalated == 2 * len(failed) and state["escalated"] == 0 and state["escalated_reasons"] == {}
+
+
+def test_jev_budget_leaves_room_for_the_request_in_flight():
+    """Rulings 1 and 5: a judge_with_jev call lasts its budget plus the request in flight, which post_json makes up
+    to three times (429, 503, 529) on its httpx timeout with 0.5 s + 1 s of backoff: the sum stays below MAX_WAIT_S,
+    itself below the host's 2-minute tool timeout."""
+    assert typesafe.CLIENT.timeout == httpx.Timeout(25)  # connect = read = write = pool = 25: one phase per attempt
+    attempt = typesafe.CLIENT.timeout.read
+    assert attempt == 25 and mcp_server.JEV_BUDGET_S + 3 * attempt + 1.5 <= MAX_WAIT_S < 120
+
+
 def test_get_run_shows_each_crawler_fallback_lookup(service):
-    """model_calls in get_run keeps the per-stage lookups of the crawler fallback (four levels deep), not a count."""
+    """model_calls in get_run keeps the per-stage lookups of the crawler fallback (four levels deep), not a count: all
+    of them for two profiles (six lookups each plus the re-asks refused as fallback_exhausted), and the total when a
+    run holds more than LOOKUPS."""
     svc = service()
     run_id = svc.store.new_run("audit", SHOP, {})
     lookup = {"profile": "mobile", "page_id": "mobile-home-1", "stage": "plp", "purpose": "plp", "operation": "CLICK",
               "label": "Scarpe da corsa", "probability": 0.91, "executed": True, "reason": None}
-    svc.store.update(run_id, lambda run: run.update(model_calls={"crawler_fallback": {
-        "requests": 1, "latency_ms": 640, "input_tokens": 5200, "model": JEV_MODEL, "stages": [lookup]}}))
+    lookups = [{**lookup, "profile": profile, "purpose": purpose} for profile in ("mobile", "desktop")
+               for purpose in ("plp", "pdp", "add_to_cart", "select_variant", "cart", "checkout_entry", "cart")]
+
+    def store(stages):
+        svc.store.update(run_id, lambda run: run.update(model_calls={"crawler_fallback": {
+            "requests": 12, "latency_ms": 640, "input_tokens": 5200, "model": JEV_MODEL, "stages": stages}}))
+    store([lookup])
     assert svc.get_run(run_id)["model_calls"]["crawler_fallback"]["stages"] == [lookup]
+    store(lookups)
+    shown = svc.get_run(run_id)["model_calls"]["crawler_fallback"]
+    assert shown["stages"] == lookups and len(lookups) == 14 and "stages_total" not in shown
+    store(lookups * 4)
+    shown = svc.get_run(run_id)["model_calls"]["crawler_fallback"]
+    assert shown["stages"] == (lookups * 4)[:LOOKUPS] and shown["stages_total"] == 56 and shown["requests"] == 12
 
 
 class PilotRunner(FakeRunner):
@@ -1419,7 +1586,11 @@ def test_run_journey_auto_lets_jev_pilot_when_the_server_has_its_key(service, mo
     assert finished["verification"]["passed"] is True and finished["policy"] == "typesafe"
     assert finished["model_calls"] == {"choose": 4, "text": 0, "stale_or_refused": 0}
     assert finished["timing_ms"]["decision"] == 900 and finished["text_helper"] is None
+    assert "next" not in svc.get_run(run_id)  # the summary was delivered: get_run no longer asks for journey_finish
     assert explicit["policy"] == "host" and explicit["policy_requested"] == "host"
+    svc.journey_finish(explicit["run_id"], "done")
+    inline = svc.run_journey(SHOP, "Trova scarpe", "cart_not_empty", wait=True)  # the CLI's and the smoke's path
+    assert inline["policy"] == "typesafe" and "next" not in svc.get_run(inline["run_id"])
     with pytest.raises(ValueError, match="policy must be one of"):
         svc.run_journey(SHOP, "Trova scarpe", "cart_not_empty", policy="random")
 

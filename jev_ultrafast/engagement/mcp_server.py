@@ -8,7 +8,7 @@ by a process that died anyway are closed the same way at the next start. Either 
 "failed" and an interrupted journey "abandoned" (its run "partial", or "failed" when it holds no page).
 
 Model keys stay on the server: the inherited environment, plus the KEY=value file named by JEV_ENGAGEMENT_ENV (the
-plugin sets ${CLAUDE_PLUGIN_DATA}/.env), loaded at start without overriding an inherited variable. With
+plugin sets ${CLAUDE_PLUGIN_DATA}/.env), loaded at start without overriding a non-empty inherited variable. With
 TYPESAFE_API_KEY, Jev pilots journeys (policy "auto"), judges the rubrics routed to it (judge_with_jev) and backs the
 audit crawler up; get_run()["server"] tells the host which keys were found, never their values.
 """
@@ -50,10 +50,10 @@ Coverage grades are "Confidenza A/B/C (copertura N %)", not quality grades. A pa
 Flow: audit_shop -> wait_run (repeat until complete/partial/failed) -> optional run_journey (policy auto: with \
 TYPESAFE_API_KEY on the server Jev, TypeSafe's choice model, pilots it by itself: wait_run until it finished, then \
 journey_finish; else you drive it with journey_act ... + journey_finish) -> judge_with_jev (Jev judges the rubrics \
-routed to it, one request per page; call it again while pages_left > 0) -> get_judgment_tasks (pages) -> your \
-judges take the tasks still open (the perception rubrics and Jev's escalations) -> submit_judgments -> \
-finalize_judgments -> score_run (with the journey run ids) -> get_report. One audit runs at a time; a journey next to \
-an audit skews both runs' timings.
+routed to it, one request per page; call it again while its next names judge_with_jev) -> get_judgment_tasks \
+(pages) -> your judges take the tasks still open (the perception rubrics and Jev's escalations) -> submit_judgments \
+-> finalize_judgments -> score_run (with the journey run ids) -> get_report. One audit runs at a time; a journey next \
+to an audit skews both runs' timings.
 
 Safety: the tools never place orders, never submit checkout or payment forms, never type into password, payment or \
 personal-data fields, and stop at the first checkout page. In journeys you choose only an offered operation and an \
@@ -64,12 +64,23 @@ READ = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_h
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
 IDEMPOTENT = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
 BROWSE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True)
-# judge_with_jev asks TypeSafe (outside); a second call judges nothing new
+# judge_with_jev asks TypeSafe (outside); a repeated call asks only pages without an answer of Jev's (never asked,
+# or whose request failed): safe to repeat
 ASK = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
-# judge_with_jev asks no new page after this many seconds: a request in flight then ends within httpx's 25 s timeout
-# (a hanging TypeSafe is not retried), so the call stays below MAX_WAIT_S and the host's 2-minute tool timeout, and
-# the run's lock it holds is released in time for get_judgment_tasks
-JEV_BUDGET_S = 80
+# judge_with_jev asks no new page after this many seconds, but the request in flight still ends: model.post_json makes
+# up to three attempts (on 429, 503 and 529) with 0.5 s + 1 s of backoff. 25 s is httpx's per-phase timeout
+# (model.CLIENT: connect = read = write = pool = 25 s), counted as one phase per attempt at its limit, which is how a
+# failing TypeSafe presents: a connect or read hang ends the first attempt with httpx's timeout, which post_json raises
+# as a RuntimeError with no retry, and an attempt that got a 429/503/529 received its answer, so it was short; the
+# theoretical per-attempt maximum is connect + write + read. With one phase per attempt: budget + three 25 s attempts
+# + 1.5 s backoff <= MAX_WAIT_S (110), so the budget is at most 33 s: with 30 a call ends within 106.5 s, below
+# MAX_WAIT_S and the host's 2-minute tool timeout, and the run's lock it holds is released in time for
+# get_judgment_tasks. Should a call exceed it anyway, the host's tool call times out but nothing is lost: the server's
+# thread ends the call under the run's lock, stores every verdict and escalation, and the next call goes on from the
+# run (pages_left and next are read from it). Only model requests are ever retried, never a browser action. At
+# 0.1-1.5 s per page a 30 s budget never cuts a normal audit; only a TypeSafe that is already slow needs more calls
+# (still one request per page in all)
+JEV_BUDGET_S = 30
 # Claude Code never defers this tool (the judges read their tasks with it) and never saves one of its pages to a file
 # (by default it does so above 50,000 characters, and the judge agent has no tool to read a file): a page holds at most
 # TASK_PAGE_CHARS of task text plus the rubrics it cites, well below RESULT_CHARS
@@ -263,9 +274,13 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
         (escalated: low_probability, position_flip, no_evidence, or a failed request) stays open for your judges with
         the perception rubrics' tasks (open_tasks). available false (no TYPESAFE_API_KEY on the server): nothing
         changed, your judges take every task. Returns requests, latency_ms, input_tokens, model, accepted, escalated
-        counts by reason, per_task readings and the finalize counts. A call asks no new page after about 80 s
-        (TypeSafe is slow): pages_left counts the pages not asked yet, untouched; call judge_with_jev again while
-        pages_left > 0 (each call asks at least one page), then get_judgment_tasks."""
+        counts by reason, per_task readings and the finalize counts. A call asks no new page after about 30 s
+        (TypeSafe is slow): pages_left counts the pages Jev has never asked in this run (a page whose request failed
+        was asked: its tasks are escalated request_failed, retried by later calls and otherwise judged by yours).
+        next names judge_with_jev again only while pages are left and the call lowered pages_left; a call that asked
+        none of them sends you to get_judgment_tasks, so the loop always ends. Call judge_with_jev again while its
+        next names judge_with_jev (unless its errors name HTTP 401 or 403), then get_judgment_tasks: your judges take
+        every task still open, Jev's failed and never-asked pages included."""
         return service.judge_with_jev(run_id, budget_s=JEV_BUDGET_S)
 
     @tool(IDEMPOTENT, "Judgment tasks", meta=JUDGE_META)  # the first call creates the tasks (writes the run)
@@ -377,10 +392,10 @@ def _kill_browsers() -> None:
 
 
 def load_keys() -> dict:
-    """The env file named by JEV_ENGAGEMENT_ENV (KEY=value lines; a variable the server inherited wins), then which
-    model keys the server holds (service.server_keys: booleans and the text model's name, never a value). A file
-    that cannot be read (permissions, a directory, a NUL byte in the path) is logged by path, never by content, and
-    the server starts with the keys it inherited."""
+    """The env file named by JEV_ENGAGEMENT_ENV (KEY=value lines, cli.load_environment: a non-empty variable the
+    server inherited wins), then which model keys the server holds (service.server_keys: booleans and the text model's
+    name, never a value). A file that cannot be read (permissions, a directory, a NUL byte in the path) is logged by
+    path, never by content, and the server starts with the keys it inherited."""
     from .cli import load_environment
     from .service import server_keys
 
