@@ -1,7 +1,8 @@
 {
   "id": "trick_questions",
-  "version": "rubrics.v1",
+  "version": "rubrics.v2",
   "kpi_id": "DPR.TRICK_QUESTIONS",
+  "judge": "jev",
   "snippet_kinds": [
     "checkbox_label"
   ],

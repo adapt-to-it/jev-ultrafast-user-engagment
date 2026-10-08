@@ -1,7 +1,8 @@
 {
   "id": "returns_clarity",
-  "version": "rubrics.v1",
+  "version": "rubrics.v2",
   "kpi_id": "TRI.RETURNS_CLARITY",
+  "judge": "jev",
   "snippet_kinds": [
     "returns_policy"
   ],

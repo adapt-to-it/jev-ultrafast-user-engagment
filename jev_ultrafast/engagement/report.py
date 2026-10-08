@@ -6,7 +6,7 @@ import json
 import re
 from html import escape
 
-from .judgments import RUBRICS_VERSION, load_rubrics
+from .judgments import JEV_JUDGE_ID, RUBRICS_VERSION, load_rubrics
 from .kpis import KPIS
 from .schemas import RISK_INDEX, SCHEMA_VERSION, SUB_INDICES
 from .scoring import NAMES, load_anchors, run_observations, score_run
@@ -147,11 +147,18 @@ REASONS = {
     "journey_error": "percorso interrotto da un errore del sistema di prova, non del sito",
     "left_shop": "percorso uscito dal negozio verso un altro sito",
     "page_unreadable": "controlli trattenuti: la pagina non è stata letta dall'audit",
+    "text_helper_unavailable": "aiuto testuale non disponibile: TYPE_TEXT non offerto",
     "cart_unreadable": "pagina del carrello non leggibile dall'audit",
     "final_page_unreadable": "pagina finale non leggibile dall'audit",
     "cart_items_unreadable": "righe del carrello non leggibili",
     "cart_price_unreadable": "prezzo del prodotto nel carrello non leggibile",
     "cart_price_ambiguous": "prezzo nel carrello ambiguo tra prezzo unitario e totale di riga",
+    # crawler: Jev chooses the element of a funnel stage the lexicon missed
+    "jev_done": "fallback Jev: il modello ha risposto che non serve alcuna azione",
+    "jev_blocked": "fallback Jev: nessun elemento adatto secondo il modello",
+    "jev_error": "fallback Jev: richiesta al modello non riuscita",
+    "no_click_actions": "fallback Jev: nessun elemento cliccabile osservato",
+    "fallback_exhausted": "fallback Jev già usato per questa fase",
     # LLM judgments
     "not_judged": "giudizi non richiesti",
     "no_snippets": "nessun testo da giudicare",
@@ -172,6 +179,7 @@ REASON_PREFIXES = {
     "not_executed:": "azione non eseguita: la pagina era cambiata",
     "failed:": "azione non riuscita",
     "error:": "errore imprevisto del sistema di prova",
+    "jev_": "fallback Jev",  # crawler.py: f"jev_{operation}" when Jev answered with another operation than CLICK
 }
 # "<prefix><value>" reasons whose value is shown as written: a KPI id, an autocomplete token, a field type, a lexicon
 # key (safety.py refusals).
@@ -237,6 +245,7 @@ JOURNEY_STATUS = {
     "abandoned": "abbandonato senza verifica",  # service.py: closed idle or at shutdown
 }
 POLICIES = {"host": "agente host (strumenti MCP)", "typesafe": "TypeSafe (automatica)"}
+PILOTS = {"host": "agente host", "typesafe": "Jev (TypeSafe)"}  # the journey card's pilot line
 STAGE_NAMES = {  # schemas.STAGES, plus "extra": an evidence page that feeds no stage's KPIs (a journey's start page,
     # the cart an oracle read, a bot challenge, an error page, a rejected candidate); the "Tipo" column says what it is
     "home": "home",
@@ -432,6 +441,7 @@ def reason_text(reason, assessed=False, absent=True) -> str:
 
 
 STAGE_WARNING = re.compile(r"(?P<profile>[\w.-]+): (?P<stage>\w+) not assessable \((?P<reason>.+)\)")
+JEV_WARNING = re.compile(r"(?P<profile>[\w.-]+): (?P<stage>\w+) found through the Jev fallback(?:: .*)?")  # audit.py
 CODE_WARNING = re.compile(r"(?P<code>[a-z]+(?:_[a-z]+)+): (?P<detail>.+)")
 
 
@@ -442,6 +452,10 @@ def warning_text(warning) -> str:
     if match := STAGE_WARNING.fullmatch(warning):
         stage = STAGE_NAMES.get(match["stage"], match["stage"])
         return f"{match['profile']}: fase {stage} non valutabile: {reason_text(match['reason'])}"
+    if match := JEV_WARNING.fullmatch(warning):
+        stage = STAGE_NAMES.get(match["stage"], match["stage"])
+        return (f"{match['profile']}: fase {stage} trovata con il fallback Jev (elemento scelto dal modello): "
+                "non riproducibile tra run diverse")
     if (match := CODE_WARNING.fullmatch(warning)) and match["code"] in REASONS:
         return f"{REASONS[match['code']]} ({match['detail']})"
     return warning
@@ -519,13 +533,44 @@ def _not_assessable(run, overall) -> list:
 
 
 JOURNEY_FIELDS = ("goal", "oracle", "oracle_params", "profile", "policy", "status", "verification", "optimal_steps",
-                  "started_at", "finished_at")
+                  "started_at", "finished_at", "policy_requested", "text_helper", "model_calls", "timing_ms", "usage")
 
 
 def _journey_summary(run, steps) -> dict:
     summary = {k: (run.get("journey") or {}).get(k) for k in JOURNEY_FIELDS}
     summary.update(run_id=run.get("run_id"), steps=len(steps))
     return summary
+
+
+def _kpi_ids(rows) -> list:
+    return sorted({r.get("kpi_id") for r in rows if r.get("kpi_id")})
+
+
+def _judgments(run) -> dict:
+    """Counts, models and who judged what: a final is Jev's when its only verdicts come from judge "jev". escalated
+    counts every task Jev passed on, escalated_final only those Claude has already decided (the footer's claim)."""
+    state = run.get("judgments") or {}
+    finals = state.get("final") or []
+    tasks = {t["task_id"]: t for t in state.get("tasks") or []}
+    judges = {}
+    for verdict in state.get("verdicts") or []:
+        judges.setdefault(verdict["task_id"], set()).add(verdict.get("judge_id"))
+    by_model, jev, claude = {}, [], []
+    for final in finals:
+        for model in final.get("models") or []:
+            by_model[model] = by_model.get(model, 0) + 1
+        (jev if judges.get(final["task_id"]) == {JEV_JUDGE_ID} else claude).append(final)
+    return {
+        **{key: len(state.get(key) or []) for key in ("tasks", "verdicts", "final")},
+        "models": sorted(by_model),
+        "by_model": dict(sorted(by_model.items())),
+        "single_sample": sum(1 for f in finals if f.get("samples") == 1),
+        "escalated": sum(1 for t in tasks.values() if t.get("escalation")),
+        "escalated_final": sum(1 for f in claude if (tasks.get(f["task_id"]) or {}).get("escalation")),
+        "jev_kpis": _kpi_ids(jev),
+        "jev_models": sorted({m for f in jev for m in f.get("models") or []}),
+        "claude_kpis": _kpi_ids([f for f in claude if not (tasks.get(f["task_id"]) or {}).get("escalation")]),
+    }
 
 
 def _caveats(run, overall) -> dict:
@@ -555,7 +600,6 @@ def build_report(run, scores, *, steps=None, journeys=None, thumbnails=None, anc
     linked = [(item.get("run") or {}, list(item.get("steps") or [])) for item in journeys or [] if item]
     ers = overall.get("ers") or {}
     risk = overall.get("dpr") or {}
-    state = run.get("judgments") or {}
     reason = ers.get("reason")
     if run.get("kind") == "journey" and not ers.get("published"):
         reason = f"{JOURNEY_ONLY}; {reason}" if reason else JOURNEY_ONLY
@@ -593,10 +637,8 @@ def build_report(run, scores, *, steps=None, journeys=None, thumbnails=None, anc
         "journey": None,
         "journeys": [_journey_summary(r, s) for r, s in linked],
         "caveats": _caveats(run, overall),
-        "judgments": {
-            **{key: len(state.get(key) or []) for key in ("tasks", "verdicts", "final")},
-            "models": sorted({m for f in state.get("final") or [] for m in f.get("models") or []}),
-        },
+        "judgments": _judgments(run),
+        "model_calls": dict(run.get("model_calls") or {}),
         "method": {
             "dpr_penalty": anchors["dpr_penalty"],
             "floor": anchors["floor"],
@@ -772,6 +814,30 @@ def _risks(overall) -> str:
     )
 
 
+def _seconds(ms) -> str:
+    return f"{_it(ms / 1000, 1)} s"
+
+
+def _pilot(journey) -> str:
+    """The pilot line, when the run recorded its model calls and timing: who decided, how many decisions and how long
+    they took (excluded from the site's time), and the site's own time."""
+    calls, timing = journey.get("model_calls") or {}, journey.get("timing_ms") or {}
+    if not calls and not timing:
+        return ""
+    who = PILOTS.get(journey.get("policy"), journey.get("policy") or "n/d")
+    parts = [f"pilota: {who} ({calls['model']})" if calls.get("model") else f"pilota: {who}"]
+    if calls.get("choose") is not None:
+        took = timing.get("decision")
+        parts.append(f"decisioni {calls['choose']}" + (
+            f" ({_seconds(took)}, escluse dal tempo del sito)" if isinstance(took, (int, float)) else ""))
+    if calls.get("text"):
+        helper = f", {journey['text_helper']}" if journey.get("text_helper") else ""
+        parts.append(f"testi generati {calls['text']}{helper}")
+    if isinstance(timing.get("site"), (int, float)):
+        parts.append(f"tempo del sito {_seconds(timing['site'])}")
+    return f'<p class="muted">{e(" · ".join(parts))}</p>'
+
+
 def _journey(journey, steps, *, linked=False) -> str:
     if not journey:
         return ""
@@ -806,6 +872,7 @@ def _journey(journey, steps, *, linked=False) -> str:
         text = json.dumps(checks, ensure_ascii=False, sort_keys=True, default=str)[:600]
         checks_html = f'<div class="muted"><code>{e(text)}</code></div>'
     unverified = f'<p class="note warn">Verifica non valutabile: {e(reason_text(why))}.</p>' if why else ""
+    pilot = _pilot(journey)
     heading = "Percorso dell'agente (run collegata)" if linked else "Percorso dell'agente"  # static, code-owned
     source = f'<p class="meta">Run journey <code>{e(journey.get("run_id"))}</code></p>' if linked else ""
     return (
@@ -816,7 +883,7 @@ def _journey(journey, steps, *, linked=False) -> str:
         f"<span>Stato <b>{e(JOURNEY_STATUS.get(journey.get('status'), journey.get('status')))}</b></span>"
         f"<span>Verifica indipendente ({e(ORACLES.get(journey.get('oracle'), journey.get('oracle')))}) "
         f"<b>{e(outcome)}</b></span></div>"
-        f"{unverified}{checks_html}{timeline}"
+        f"{pilot}{unverified}{checks_html}{timeline}"
         '<p class="muted">Il tempo di decisione del modello è escluso dai tempi attribuiti al sito.</p></div></section>'
     )
 
@@ -925,11 +992,47 @@ def _missing(report) -> str:
     )
 
 
+def _judges_text(judged) -> str:
+    """Who judged: today's sentence when no Jev final exists, else Jev's rubrics, then Claude's and the escalations."""
+    if not judged.get("jev_kpis"):
+        return e(
+            "I giudizi LLM usano etichette chiuse, citazioni verificate parola per parola sul testo della pagina e la "
+            "maggioranza di più valutatori, che sono campioni dello stesso modello con lo stesso prompt: la "
+            "maggioranza controlla la stabilità del giudizio, non un accordo tra valutatori indipendenti."
+        )
+    text = (f"I giudizi di {', '.join(judged['jev_kpis'])} sono scelte del modello TypeSafe Jev "
+            f"({', '.join(judged.get('jev_models') or [])}) fra etichette chiuse, con l'evidenza scelta fra gli "
+            "snippet offerti e un controllo di stabilità a ordine invertito, un campione per task")
+    claude, passed = judged.get("claude_kpis") or [], judged.get("escalated_final") or 0  # decided by Claude
+    handed = "il task che Jev ha passato a Claude" if passed == 1 else f"i {passed} task che Jev ha passato a Claude"
+    who, verb = None, "sono"
+    if claude:
+        who = f"i giudizi di {', '.join(claude)}" + (f" (e {handed})" if passed else "")
+    elif passed == 1:
+        who, verb = "il giudizio del task che Jev ha passato a Claude", "è"
+    elif passed:
+        who = f"i giudizi dei {passed} task che Jev ha passato a Claude"
+    if who:
+        text += (f"; {who} {verb} la maggioranza di più campioni dello stesso modello con lo stesso prompt, con "
+                 "citazioni verificate parola per parola sul testo della pagina: la maggioranza controlla la "
+                 "stabilità, non un accordo fra valutatori indipendenti")
+    return e(text + ".")
+
+
+def _calls_text(calls) -> str:
+    """TypeSafe requests the run made outside the journey (Jev judge, crawler fallback), when there were any."""
+    names = {"judge_jev": "giudice Jev", "crawler_fallback": "fallback del crawler"}
+    parts = [f"{names.get(k, k)} {v['requests']}" for k, v in sorted(calls.items())
+             if isinstance(v, dict) and isinstance(v.get("requests"), int) and v["requests"] > 0]
+    return f"<p>Richieste TypeSafe: {e(' · '.join(parts))}.</p>" if parts else ""
+
+
 def _footer(report, overall) -> str:
     v = report["versions"]
     m = report["method"]
     publish = m["publish"]
-    models = report["judgments"].get("models") or []
+    judged = report["judgments"]
+    models = judged.get("models") or []
     models = f" Modelli dei valutatori: {e(', '.join(models))}." if models else ""
     return (
         "<footer><h2>Metodo</h2>"
@@ -940,10 +1043,8 @@ def _footer(report, overall) -> str:
         "rischio, e senza segnali valutati il rischio è n/d. L'indice è pubblicato solo con copertura complessiva ≥ "
         f"{e(fmt_share(publish['min_coverage']))} e copertura ≥ {e(fmt_share(publish['min_major_coverage']))} per "
         f"ogni sotto-indice con peso ≥ {e(_it(publish.get('major_weight', 15), 0))}. La confidenza A, B o C è un "
-        "grado di copertura, non di qualità del punteggio. I giudizi LLM usano etichette chiuse, citazioni verificate "
-        "parola per parola sul testo della pagina e la maggioranza di più valutatori, che sono campioni dello stesso "
-        "modello con lo stesso prompt: la maggioranza controlla la stabilità del giudizio, non un accordo tra "
-        f"valutatori indipendenti.{models}</p>"
+        f"grado di copertura, non di qualità del punteggio. {_judges_text(judged)}{models}</p>"
+        f"{_calls_text(report.get('model_calls') or {})}"
         f"<p>{e(DISCLAIMER)}</p>"
         f"<p>Run <code>{e(report['run_id'])}</code> · tipo: {e(RUN_KINDS.get(report['kind'], report['kind']))} · "
         f"stato: {e(RUN_STATUS.get(report['status'], report['status']))} · creata {e(report['created_at'])}</p>"

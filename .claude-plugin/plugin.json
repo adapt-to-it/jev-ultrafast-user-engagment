@@ -17,7 +17,8 @@
       "env": {
         "BH_TAB_MARKER": "0",
         "UV_PROJECT_ENVIRONMENT": "${CLAUDE_PLUGIN_DATA}/.venv",
-        "JEV_ENGAGEMENT_ARTIFACTS": "${CLAUDE_PLUGIN_DATA}/engagement"
+        "JEV_ENGAGEMENT_ARTIFACTS": "${CLAUDE_PLUGIN_DATA}/engagement",
+        "JEV_ENGAGEMENT_ENV": "${CLAUDE_PLUGIN_DATA}/.env"
       }
     }
   }

@@ -1,7 +1,8 @@
 {
   "id": "hidden_subscription",
-  "version": "rubrics.v1",
+  "version": "rubrics.v2",
   "kpi_id": "DPR.HIDDEN_SUBSCRIPTION",
+  "judge": "jev",
   "snippet_kinds": [
     "subscription",
     "fee_line",

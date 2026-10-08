@@ -7,14 +7,19 @@ deterministic observations (checks.observations) and a status: "complete" when e
 every profile, "partial" when funnel pages were collected but something is missing, "failed" when none was.
 The shop is where the start URL lands: a home page on another registrable domain re-anchors CheckoutGuard there for
 the funnel and the deception tests (crawler.landed_guard), and run["site"]["final_url"] records it.
+With TYPESAFE_API_KEY set, the funnel asks Jev for a lookup the lexicon missed (crawler: discover_funnel(jev_fallback);
+one request per lookup, at most 6 per profile); its requests add up in run["model_calls"]["crawler_fallback"]
+{requests, latency_ms, input_tokens, model, stages} and a stage reached that way gets the warning "<profile>: <stage>
+found through the Jev fallback: not reproducible across runs". Without the key nothing of this exists.
 A Chromium this function launched is always closed, and so is the transport, whatever happens.
 """
 
+import os
 from collections.abc import Callable
 
 from . import checks
 from .collectors import PageCollector
-from .crawler import discover_funnel, landed_guard
+from .crawler import NO_REQUEST, discover_funnel, landed_guard
 from .deception import DECEPTION_VERSION, run_deception_tests
 from .judgments import RUBRICS_VERSION
 from .lexicon import lexicon_for
@@ -119,7 +124,8 @@ def _audit_profile(settings, profile, transport, store, run_id, say) -> None:
         collector = PageCollector(transport, store, run_id, profile=profile, locale=settings.locale,
                                   screenshots=settings.screenshots, settle_timeout_s=settings.settle_timeout_s,
                                   context_id=context)
-        pages, missing = discover_funnel(collector, settings, profile=profile, guard=guard, progress=say)
+        pages, missing = discover_funnel(collector, settings, profile=profile, guard=guard, progress=say,
+                                         jev_fallback=bool(os.environ.get("TYPESAFE_API_KEY")))
     finally:
         try:
             close_context(transport, context)
@@ -144,6 +150,7 @@ def _audit_profile(settings, profile, transport, store, run_id, say) -> None:
                 run["errors"].append(f"{profile}: {item['stage']}: {item['reason']}")
             elif item["reason"] not in ACCEPTED and item["stage"] not in reached:
                 run["warnings"].append(f"{profile}: {item['stage']} not assessable ({item['reason']})")
+        _jev_fallbacks(run, profile, pages, reached)
 
     store.update(run_id, save_funnel)
     say(f"{profile}: deception tests")
@@ -157,3 +164,38 @@ def _audit_profile(settings, profile, transport, store, run_id, say) -> None:
         run["deception"][profile] = result
         run["warnings"] += [f"{profile}: deception test error: {error}" for error in result.get("errors") or []]
     store.update(run_id, save_deception)
+
+
+def _tokens(usage) -> int:
+    value = usage.get("input_tokens") if isinstance(usage, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _jev_fallbacks(run: dict, profile: str, pages: list[dict], reached: set[str]) -> None:
+    """The profile's Jev fallback lookups (PageRecord.probes["jev_fallback"]) added to run["model_calls"]
+    ["crawler_fallback"], and a warning per stage reached through one: another run may get another answer. Nothing
+    when there was none. requests counts the lookups that attempted one (every reason but crawler.NO_REQUEST, so a
+    "jev_error" counts, a TypeSafe key gone mid-run included); post_json's own retries of a 429, 503 or 529 are part
+    of that one request. latency_ms adds up their time (a "jev_error" too); input_tokens comes from the answers' usage
+    only (a failed request has none)."""
+    asked = [(page, probe) for page in pages for probe in (page.get("probes") or {}).get("jev_fallback") or []
+             if isinstance(probe, dict)]
+    if not asked:
+        return
+    calls = run.get("model_calls") if isinstance(run.get("model_calls"), dict) else {}
+    before = calls.get("crawler_fallback") if isinstance(calls.get("crawler_fallback"), dict) else {}
+    sent = [probe for _, probe in asked if probe.get("reason") not in NO_REQUEST]
+    calls["crawler_fallback"] = {
+        "requests": (before.get("requests") or 0) + len(sent),
+        "latency_ms": (before.get("latency_ms") or 0) + sum(p.get("latency_ms") or 0 for p in sent),
+        "input_tokens": (before.get("input_tokens") or 0) + sum(_tokens(p.get("usage")) for p in sent),
+        "model": next((p["model"] for p in reversed(sent) if p.get("model")), None) or before.get("model"),
+        "stages": [*(before.get("stages") or []), *({"profile": profile, "page_id": page.get("page_id"),
+                                                     **{k: probe.get(k) for k in ("stage", "purpose", "operation",
+                                                                                  "label", "probability", "executed",
+                                                                                  "reason")}}
+                                                    for page, probe in asked)],
+    }
+    run["model_calls"] = calls
+    for stage in dict.fromkeys(p["stage"] for _, p in asked if p.get("executed") and p.get("stage") in reached):
+        run["warnings"].append(f"{profile}: {stage} found through the Jev fallback: not reproducible across runs")

@@ -1,7 +1,8 @@
 {
   "id": "confirmshaming",
-  "version": "rubrics.v1",
+  "version": "rubrics.v2",
   "kpi_id": "DPR.CONFIRMSHAMING",
+  "judge": "claude",
   "snippet_kinds": [
     "modal_decline",
     "consent"

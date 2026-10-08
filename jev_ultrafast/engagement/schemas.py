@@ -175,7 +175,9 @@ class PageRecord(TypedDict, total=False):
     snapshot: str | None  # path relative to the run directory, e.g. "snapshots/<page_id>.json"
     loaded_ms: float | None  # wall time from navigation to settle
     visual: dict  # {colorfulness, edge_density, bytes_per_px} computed from the screenshot (collectors.py)
-    probes: dict  # active probes run by the crawler, e.g. {"search_autocomplete": {typed, options, latency_ms}}
+    probes: dict  # active probes run by the crawler, e.g. {"search_autocomplete": {typed, options, latency_ms}};
+    #               "jev_fallback": {stage, purpose, goal, model, latency_ms, usage, operation, target, label, href,
+    #               probability, confidence, executed, reason} when Jev chose the element of a stage the lexicon missed
     consent: dict  # {"choice": "reject"|"accept"|"none", "reason": str} when the crawler handled a consent banner
     notes: list[str]
     repeat_of: NotRequired[str]  # settings.repeats > 1: page_id of the first load of the same URL (checks.py reports
@@ -218,7 +220,13 @@ class JudgmentTask(TypedDict, total=False):
     no_quote_labels: list[str]  # labels that may be returned without evidence quotes
     snippets: list[Snippet]
     context: dict  # {page_type, locale, url}
-    samples_required: int
+    samples_required: int  # lowered to 1 when a Jev verdict settles the task (judgments.settle); never raised
+    escalation: NotRequired[dict]  # Jev passed the task to Claude: {from: "jev", model, label, probability,
+    #                                reason, at}; no Jev verdict is stored and the task keeps its samples_required.
+    #                                reason: Jev's reading "low_probability" | "position_flip" | "no_evidence" or a
+    #                                judgments.submit() rejection (e.g. "quote_not_verbatim"), all permanent; or
+    #                                "request_failed" | "invalid_response" (label and probability None), which Jev
+    #                                retries while no judge has a verdict on the task (judgments.RETRY_REASONS)
 
 
 class EvidenceQuote(TypedDict):
@@ -314,8 +322,9 @@ class JourneyRecord(TypedDict, total=False):
     status: str  # running | done | blocked | stopped_at_checkout_boundary | budget_exhausted | error
     verification: dict | None  # {"passed": bool | None, "checks": {...}}; None only with checks["not_assessable"]
     #                            ("bot_challenge", "journey_error", "navigation_error", "page_unreadable",
-    #                            "cart_unreadable", "final_page_unreadable", "cart_price_ambiguous",
-    #                            "cart_items_unreadable", "cart_price_unreadable") or checks["error"];
+    #                            "text_helper_unavailable", "cart_unreadable", "final_page_unreadable",
+    #                            "cart_price_ambiguous", "cart_items_unreadable", "cart_price_unreadable") or
+    #                            checks["error"];
     #                            checks["navigation_error"] = {url, error}: the journey ended on a page that did
     #                            not load
     steps_path: str  # "steps.jsonl"
@@ -324,6 +333,14 @@ class JourneyRecord(TypedDict, total=False):
     finished_at: str | None
     optimal_pages: NotRequired[int | None]  # Lostness R: minimum distinct pages, start page included (optimal_steps
     #                                         is then the minimum number of interactions, for FAI.ACTIONS_RATIO)
+    policy_requested: NotRequired[str | None]  # what the caller asked for ("auto" | "host" | "typesafe"); policy is
+    #                                            the resolved pilot
+    text_helper: NotRequired[str | None]  # text model of TYPE_TEXT under policy "typesafe"; None: no
+    #                                       TEXT_MODEL_API_KEY, so fill actions were withheld from Jev
+    model_calls: NotRequired[dict]  # {choose: decisions requested (TypeSafe requests, or host decisions), text: text
+    #                                 helper calls, stale_or_refused: decisions that executed nothing}
+    timing_ms: NotRequired[dict]  # {decision, text, site (execution + settle of executed steps), wall}
+    usage: NotRequired[dict]  # {input_tokens, output_tokens} summed over the decisions ({} for host)
 
 
 # ---------------------------------------------------------------- scores
@@ -412,3 +429,6 @@ class RunRecord(TypedDict, total=False):
     status: str  # created | running | complete | partial | failed
     warnings: list[str]
     errors: list[str]
+    model_calls: NotRequired[dict]  # TypeSafe requests made for the run, merged by key: {"crawler_fallback":
+    #                                 {requests, latency_ms, input_tokens, model, stages}, "judge_jev": {requests,
+    #                                 latency_ms, input_tokens, model}}

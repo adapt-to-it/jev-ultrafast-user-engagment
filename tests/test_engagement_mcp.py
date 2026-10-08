@@ -3,7 +3,9 @@ flow (a stand-in audit that stores the golden run's pages, so no browser), a rea
 the fixture shop (headless Chromium; skipped without it), error handling, idle journeys and the stdio entry point.
 
 Clients talk JSON-RPC to the server: in-process over memory streams (mode="legacy") or over stdio to the installed
-jev-engage-mcp script. Nothing calls a paid API or the public internet; judges are scripted.
+jev-engage-mcp script. Nothing calls a paid API or the public internet; judges are scripted, and Jev (TypeSafe) is a
+stand-in for jev_ultrafast.model.post_json that checks every request body and answers like systemone. The model keys
+of the developer's environment are removed for every test (with them, policy "auto" would pay for real journeys).
 """
 
 import copy
@@ -24,9 +26,10 @@ import anyio
 import pytest
 from mcp import Client, StdioServerParameters
 
+from jev_ultrafast import model as typesafe
 from jev_ultrafast.engagement import audit as audit_module
 from jev_ultrafast.engagement import journey as journey_module
-from jev_ultrafast.engagement import judgments
+from jev_ultrafast.engagement import judges, judgments, mcp_server
 from jev_ultrafast.engagement.chrome import find_chromium
 from jev_ultrafast.engagement.collectors import PageCollector
 from jev_ultrafast.engagement.mcp_server import RESULT_CHARS, build_server
@@ -38,11 +41,24 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNS = Path(__file__).with_name("fixtures") / "runs"
 GOLDEN = json.loads((RUNS / "audit_complete.json").read_text(encoding="utf-8"))
 SHOP = GOLDEN["site"]["start_url"]
-TOOLS = {"audit_shop", "wait_run", "get_run", "run_journey", "journey_act", "journey_finish", "get_judgment_tasks",
-         "submit_judgments", "finalize_judgments", "score_run", "get_report", "list_runs"}
+TOOLS = {"audit_shop", "wait_run", "get_run", "run_journey", "journey_act", "journey_finish", "judge_with_jev",
+         "get_judgment_tasks", "submit_judgments", "finalize_judgments", "score_run", "get_report", "list_runs"}
 READ_ONLY = {"wait_run", "get_run", "get_report", "list_runs"}  # get_judgment_tasks creates the tasks once
 PLUGIN_TOOL = "mcp__plugin_jev-engagement_engagement__"  # mcp__plugin_<plugin>_<server>__<tool>
-OPEN_WORLD = {"audit_shop", "run_journey", "journey_act", "journey_finish"}
+OPEN_WORLD = {"audit_shop", "run_journey", "journey_act", "journey_finish", "judge_with_jev"}  # judge: asks TypeSafe
+KEYS = ("TYPESAFE_API_KEY", "TYPESAFE_MODEL", "TEXT_MODEL_API_KEY", "TEXT_MODEL", "TEXT_MODEL_BASE_URL",
+        "JEV_ENGAGEMENT_ENV", "JEV_JUDGE_MIN_P")
+SYSTEMONE = "https://api.typesafe.ai/v1/systemone"
+JEV_MODEL = "jev-1.13.0"
+
+
+@pytest.fixture(autouse=True)
+def no_model_keys(monkeypatch):
+    """No test inherits a real key: policy "auto" would turn host journeys into paid TypeSafe runs, the audit would
+    ask Jev, and the stdio servers (env copied from os.environ) would load them too."""
+    for name in KEYS:  # setenv first, so teardown restores the original even after a test's env file set it
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
 
 
 class ToolFailed(Exception):
@@ -140,6 +156,9 @@ def test_tools_carry_names_annotations_and_the_rules_the_host_reads(service):
     assert by_name["get_judgment_tasks"].meta["anthropic/maxResultSizeChars"] == RESULT_CHARS
     assert by_name["audit_shop"].input_schema["properties"]["profiles"]["anyOf"][0]["minItems"] == 1
     assert "never a selector" in by_name["journey_act"].input_schema["properties"]["target"]["description"].lower()
+    policy = by_name["run_journey"].input_schema["properties"]["policy"]
+    assert policy["default"] == "auto" and policy["enum"] == ["auto", "host", "typesafe"]
+    assert by_name["judge_with_jev"].input_schema["required"] == ["run_id"]
     for phrase in ("never measured engagement", "predicted friction", "risk signals", "never place orders",
                    "offered element index"):
         assert phrase in instructions
@@ -155,7 +174,8 @@ def test_the_plugin_runs_its_own_server_and_names_only_tools_it_lists(service):
     assert server["command"] == "uv"
     assert server["args"] == ["run", "--frozen", "--no-dev", "--project", "${CLAUDE_PLUGIN_ROOT}", "jev-engage-mcp"]
     assert server["env"] == {"BH_TAB_MARKER": "0", "UV_PROJECT_ENVIRONMENT": "${CLAUDE_PLUGIN_DATA}/.venv",
-                             "JEV_ENGAGEMENT_ARTIFACTS": "${CLAUDE_PLUGIN_DATA}/engagement"}
+                             "JEV_ENGAGEMENT_ARTIFACTS": "${CLAUDE_PLUGIN_DATA}/engagement",
+                             "JEV_ENGAGEMENT_ENV": "${CLAUDE_PLUGIN_DATA}/.env"}  # keys: the server reads this file
     assert ":-" not in json.dumps(manifest) and not (ROOT / ".mcp.json").exists()
     marketplace = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     assert [(p["name"], p["source"]) for p in marketplace["plugins"]] == [(manifest["name"], "./")]
@@ -1117,3 +1137,317 @@ def test_finalize_by_default_keeps_each_tasks_own_sample_count(service, monkeypa
     final = session(build_server(svc), scenario)
     assert final["final"] == len(state["final"]) + 1 and final["pending_total"] == len(pending) - 1
     assert svc.finalize_judgments(run_id)["pending_total"] == len(pending) - 1
+
+
+# ---------------------------------------------------------------- Jev: pilot by default, judge, keys on the server
+
+
+def choice(ids, selected, p=0.9):
+    """A schema-valid systemone choice answer (model.validate_choice accepts it)."""
+    ids = list(ids)
+    rest = (1 - p) / (len(ids) - 1)
+    return {"type": "choice", "choice": selected, "probabilities": {i: p if i == selected else rest for i in ids},
+            "confidence": (p - 1 / len(ids)) / (1 - 1 / len(ids))}
+
+
+class JevJudgeStandIn:
+    """jev_ultrafast.model.post_json for the Jev judge: checks each request like systemone would (one page per
+    request, choice heads only, at most 255 options, label heads over the rubric's labels, evidence heads over the
+    offered snippet ids plus none, no URL or run id in the state) and answers with the first label. script: {task_id:
+    {"p", "rev", "evidence"}} for the answers that must escalate."""
+
+    def __init__(self, tasks: dict, script: dict, run_id: str):
+        self.tasks, self.script, self.run_id, self.pages = tasks, script, run_id, []
+
+    def __call__(self, url, key, body):
+        assert url == SYSTEMONE and key == "test-key" and set(body) == {"model", "state", "questions"}
+        assert "url" not in body["state"]["page"] and self.run_id not in json.dumps(body)
+        task_ids = {":".join(qid.split(":")[1:3]) for qid in body["questions"]}
+        assert len({self.tasks[t]["page_id"] for t in task_ids}) == 1  # one request per page
+        self.pages.append(self.tasks[next(iter(task_ids))]["page_id"])
+        answers = {}
+        for qid, question in body["questions"].items():
+            kind, task_id = qid.split(":")[0], ":".join(qid.split(":")[1:3])
+            task, plan = self.tasks[task_id], self.script.get(task_id, {})
+            assert question["type"] == "choice" and 2 <= len(question["criteria"]) <= 255
+            labels = list(task["labels"])
+            if kind == "label":
+                assert list(question["criteria"]) == labels
+                answers[qid] = choice(labels, labels[0], plan.get("p", 0.9))
+            elif kind == "label_rev":
+                assert list(question["criteria"]) == labels[::-1]
+                answers[qid] = choice(labels, plan.get("rev", labels[0]), plan.get("p", 0.9))
+            else:
+                snippets = [s["snippet_id"] for s in task["snippets"]]
+                assert kind == "evidence" and list(question["criteria"])[:-1] == snippets
+                answers[qid] = choice(question["criteria"], plan.get("evidence", snippets[0]), 0.8)
+        return {"model": JEV_MODEL, "answers": answers, "usage": {"input_tokens": 1200, "output_tokens": 0}}
+
+
+ESCALATE = {"trick_questions:mobile-cart-1": {"p": 0.55}, "trick_questions:mobile-checkout_entry-1": {"p": 0.55},
+            "social_proof:mobile-pdp-1": {"rev": "basic"},
+            "hidden_subscription:mobile-checkout_entry-1": {"evidence": "none"}}
+
+
+def test_jev_judges_its_rubrics_and_claude_judges_what_it_leaves(service, monkeypatch):
+    """judge_with_jev through the protocol: without a key nothing changes; with one, one request per page, the
+    accepted tasks are final with one sample, and the Claude rubrics plus Jev's escalations stay open for the host's
+    judges, who never see Jev's label. The judge's requests are counted in the run."""
+    monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit())
+    svc = service()
+    run_id = svc.audit_shop(SHOP, wait=True)["run_id"]
+    server = build_server(svc)
+
+    async def unavailable(client):
+        return await call(client, "judge_with_jev", run_id=run_id), await call(client, "get_run", run_id=run_id)
+    result, run = session(server, unavailable)
+    assert result["available"] is False and result["typesafe_key"] is False and result["requests"] == 0
+    assert run["judgments"] == {"prepared": False} and run["server"] == {"typesafe_key": False, "text_helper": None}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    rubrics = judgments.load_rubrics()
+    tasks = {t["task_id"]: t for t in judgments.make_tasks(svc.store.load(run_id))}
+    jev_tasks = {t for t in tasks if judgments.routing(tasks[t], rubrics) == "jev"}
+    stand_in = JevJudgeStandIn(tasks, ESCALATE, run_id)
+    monkeypatch.setattr(typesafe, "post_json", stand_in)
+
+    async def judged(client):
+        first = await call(client, "judge_with_jev", run_id=run_id)
+        again = await call(client, "judge_with_jev", run_id=run_id)  # nothing left for Jev: no request
+        pages, cursor = [], 0
+        while cursor is not None:
+            page = await call(client, "get_judgment_tasks", run_id=run_id, cursor=cursor)
+            pages.append(page)
+            cursor = page["next_cursor"]
+        return first, again, pages, await call(client, "get_run", run_id=run_id)
+    first, again, pages, run = session(server, judged)
+    jev_pages = {tasks[t]["page_id"] for t in jev_tasks}
+    assert first["available"] and first["requests"] == len(jev_pages) == len(stand_in.pages) == 4
+    assert sorted(stand_in.pages) == sorted(jev_pages) and first["model"] == JEV_MODEL
+    assert first["accepted"] == len(jev_tasks) - len(ESCALATE) == 7 and first["input_tokens"] == 4 * 1200
+    assert first["escalated"] == {"low_probability": 2, "position_flip": 1, "no_evidence": 1}
+    readings = {r["task_id"]: r for r in first["per_task"]}
+    assert set(readings) == jev_tasks and readings["social_proof:mobile-pdp-1"]["escalated"] == "position_flip"
+    assert readings["returns_clarity:mobile-pdp-1"] == {
+        "task_id": "returns_clarity:mobile-pdp-1", "rubric_id": "returns_clarity", "label": "clear",
+        "probability": 0.9, "evidence": [tasks["returns_clarity:mobile-pdp-1"]["snippets"][0]["snippet_id"]],
+        "final": True, "escalated": None}
+    open_ids = {t for t in tasks if t not in jev_tasks} | set(ESCALATE)
+    assert first["open_tasks"] == len(open_ids) == 9
+    assert again["requests"] == 0 and again["accepted"] == 0 and len(stand_in.pages) == 4
+    items = {t["task_id"]: t for page in pages for t in page["tasks"]}
+    for task_id, item in items.items():
+        assert item["judge"] == judgments.routing(tasks[task_id], rubrics)
+        assert item["final"] is (task_id not in open_ids), task_id
+        if task_id in ESCALATE:  # why, never Jev's label: the host's judges stay independent
+            assert item["escalation"] == {"from": "jev", "reason": readings[task_id]["escalated"]}
+        else:
+            assert "escalation" not in item
+    assert pages[0]["open_tasks"] == 9 and run["judgments"]["escalated"] == 4
+    assert run["model_calls"]["judge_jev"] == {"requests": 4, "latency_ms": first["latency_ms"],
+                                               "input_tokens": 4800, "model": JEV_MODEL}
+    assert run["server"] == {"typesafe_key": True, "text_helper": None}
+
+    for judge in ("j1", "j2", "j3"):
+        for page in pages:
+            open_page = {**page, "tasks": [t for t in page["tasks"] if not t["final"]]}
+            result = svc.submit_judgments(run_id, judge, "claude-sonnet-test", verdicts_for(open_page, "j1"))
+            assert result["rejected_total"] == 0 and result["accepted"] == len(open_page["tasks"])
+    final = svc.finalize_judgments(run_id)
+    assert final["final"] == len(tasks) and final["pending_total"] == 0
+    state = svc.store.load(run_id)["judgments"]
+    models = {f["task_id"]: f["models"] for f in state["final"]}
+    assert all(models[t] == [JEV_MODEL] for t in jev_tasks - set(ESCALATE))
+    assert all(models[t] == ["claude-sonnet-test"] for t in open_ids)
+    scored = svc.score_run(run_id)
+    assert scored["ers"]["llm_share"] > 0 and "con giudizi LLM" in scored["scope"]
+
+
+def test_judge_with_jev_then_claude_backend_keeps_jev_finals(service, monkeypatch):
+    """The CLI path: judge --backend jev, then judge --backend cli --samples 3 judges only what Jev left open; a task
+    Jev settled with one sample never trips the three-sample requirement."""
+    monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit())
+    svc = service()
+    run_id = svc.audit_shop(SHOP, wait=True)["run_id"]
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    tasks = {t["task_id"]: t for t in judgments.make_tasks(svc.store.load(run_id))}
+    monkeypatch.setattr(typesafe, "post_json", JevJudgeStandIn(tasks, ESCALATE, run_id))
+    jev = svc.judge_with(run_id, "jev", 3)
+    assert jev["backend"] == "jev" and jev["samples"] == 1 and jev["accepted"] == 7 and jev["open_tasks"] == 9
+    seen = []
+
+    def judge(self, batch):
+        seen.extend(t["task_id"] for t in batch)
+        return scripted_verdicts(self, batch)
+    monkeypatch.setattr(judges.ClaudeCliJudge, "judge", judge)
+    claude = svc.judge_with(run_id, "cli", 3, model="claude-test")
+    assert claude["rejected_total"] == 0 and claude["finalize"]["pending"] == 0
+    assert len(seen) == 3 * 9 and len(set(seen)) == 9  # three samples of each open task, nothing Jev settled
+    state = svc.store.load(run_id)["judgments"]
+    assert len(state["final"]) == len(tasks)
+    assert sum(1 for f in state["final"] if f["models"] == [JEV_MODEL] and f["samples"] == 1) == 7
+
+
+class PilotRunner(FakeRunner):
+    """FakeRunner that records the policy it was started with, and a typesafe run_auto (Jev chose until DONE)."""
+
+    def start(self, url, goal, *, oracle, policy="host", **kwargs):
+        self.policy = policy
+        started = super().start(url, goal, oracle=oracle)
+        self.store.update(self.run_id, lambda run: run["journey"].update(policy=policy, text_helper=None))
+        if policy == "typesafe":
+            return {"run_id": self.run_id, "status": "running"}
+        return started
+
+    def run_auto(self):
+        self.calls.append(("run_auto", None))
+        self.status = "done"
+
+    def finish(self, status=None):
+        result = super().finish(status)
+        costs = {"model_calls": {"choose": 4, "text": 0, "stale_or_refused": 0},
+                 "timing_ms": {"decision": 900, "text": 0, "site": 2100, "wall": 3500}}
+        self.store.update(self.run_id, lambda run: run["journey"].update(costs))
+        return result
+
+
+def test_run_journey_auto_lets_jev_pilot_when_the_server_has_its_key(service, monkeypatch):
+    """policy "auto" (the default): without TYPESAFE_API_KEY the host drives (observation returned); with it Jev
+    pilots in the background: next names wait_run then journey_finish, journey_act is refused, and journey_finish
+    returns the verdict with the pilot and what deciding cost. Both runs record what was requested."""
+    monkeypatch.setattr(journey_module, "JourneyRunner", PilotRunner)
+    FakeRunner.instances = []  # FakeRunner.__init__ records every runner there
+    svc = service()
+    server = build_server(svc)
+
+    async def host(client):
+        return await call(client, "run_journey", url=SHOP, goal="Trova scarpe", oracle="cart_not_empty")
+    hosted = session(server, host)
+    assert hosted["policy"] == "host" and hosted["policy_requested"] == "auto" and "observation" in hosted
+    assert FakeRunner.instances[-1].policy == "host"
+    assert svc.store.load(hosted["run_id"])["journey"]["policy_requested"] == "auto"
+    svc.journey_finish(hosted["run_id"], "done")
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+
+    async def jev(client):
+        started = await call(client, "run_journey", url=SHOP, goal="Trova scarpe", oracle="cart_not_empty")
+        run_id = started["run_id"]
+        waited = await call(client, "wait_run", run_id=run_id, timeout_s=20)
+        with pytest.raises(ToolFailed, match=r"policy typesafe by itself .*wait_run"):
+            await call(client, "journey_act", run_id=run_id, operation="WAIT", observation_id=1)
+        finished = await call(client, "journey_finish", run_id=run_id)
+        explicit = await call(client, "run_journey", url=SHOP, goal="Trova scarpe", oracle="cart_not_empty",
+                              policy="host")
+        return started, waited, finished, explicit
+    started, waited, finished, explicit = session(server, jev)
+    run_id = started["run_id"]
+    assert started["status"] == "running" and started["policy"] == "typesafe" and "observation" not in started
+    assert started["policy_requested"] == "auto" and started["text_helper"] is None
+    assert started["next"] == f"wait_run('{run_id}') until the journey finished, then journey_finish('{run_id}')"
+    assert FakeRunner.instances[1].policy == "typesafe" and ("run_auto", None) in FakeRunner.instances[1].calls
+    assert not waited["timed_out"] and waited["next"] == f"journey_finish('{run_id}')"
+    assert waited["journey"]["policy"] == "typesafe" and waited["journey"]["policy_requested"] == "auto"
+    assert finished["verification"]["passed"] is True and finished["policy"] == "typesafe"
+    assert finished["model_calls"] == {"choose": 4, "text": 0, "stale_or_refused": 0}
+    assert finished["timing_ms"]["decision"] == 900 and finished["text_helper"] is None
+    assert explicit["policy"] == "host" and explicit["policy_requested"] == "host"
+    with pytest.raises(ValueError, match="policy must be one of"):
+        svc.run_journey(SHOP, "Trova scarpe", "cart_not_empty", policy="random")
+
+
+def jev_pilot(calls: list):
+    """jev_ultrafast.model.post_json for model.choose on the fixture shop: checks the request (the loop's own
+    operation and target heads over observed indices) and picks like the test's host: reject consent, category, a
+    product, add to cart, the cart, DONE."""
+    def post(url, key, body):
+        assert url == SYSTEMONE and key == "test-key" and set(body) == {"model", "state", "questions"}
+        operations = body["questions"]["operation"]["criteria"]
+        assert {"CLICK", "DONE", "BLOCKED"} <= set(operations)
+        assert {q[:-len("_target")].upper() for q in body["questions"] if q != "operation"} <= set(operations)
+        elements = {e["label"]: e["index"] for e in body["state"]["elements"] if "CLICK" in e["operations"]}
+        page = body["state"]["page"]["url"]
+        calls.append(page)
+        wanted = next((label for label in ("Rifiuta tutti",) if label in elements), None)
+        if wanted is None and "index.html" in page:
+            wanted = "Scarpe da corsa"
+        elif wanted is None and "category.html" in page:
+            wanted = next((label for label in elements if label.startswith("Scarpa da corsa")), None)
+        elif wanted is None and "product.html" in page:
+            wanted = next((label for label in ("Vai al carrello", "Aggiungi al carrello") if label in elements), None)
+        operation = "DONE" if "cart.html" in page else "CLICK" if wanted in elements else "SCROLL_DOWN"
+        answers = {"operation": choice(operations, operation, 0.9)}
+        if operation == "CLICK":
+            targets = body["questions"]["click_target"]["criteria"]
+            assert set(targets) <= {e["index"] for e in body["state"]["elements"]}  # observed indices only
+            answers["click_target"] = choice(targets, elements[wanted], 0.9)
+        return {"model": JEV_MODEL, "answers": answers, "usage": {"input_tokens": 3000, "output_tokens": 0}}
+    return post
+
+
+def test_jev_pilots_a_journey_on_the_fixture_shop_by_default(chromium, shop_server, service, monkeypatch):
+    """The original loop as the default pilot: run_journey without a policy, with TYPESAFE_API_KEY on the server and no
+    text helper, runs Agent + model.choose (one request per decision) in the background; journey_finish verifies the
+    cart independently and reports decisions equal to the requests the stand-in received."""
+    monkeypatch.setattr(PageCollector, "net_quiet_s", 0.8)
+    monkeypatch.setattr(PageCollector, "lcp_quiet_s", 0.8)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    calls = []
+    monkeypatch.setattr(typesafe, "post_json", jev_pilot(calls))
+    svc = service(transport_factory=lambda: DirectTransport(chromium.ws_url))
+    server = build_server(svc)
+    url = shop_server.url("shop/index.html")
+    since = len(shop_server.requests)
+
+    async def scenario(client):
+        started = await call(client, "run_journey", url=url, goal="Aggiungi al carrello un prodotto",
+                             oracle="cart_not_empty", profile="desktop")
+        assert started["policy"] == "typesafe" and started["next"].startswith("wait_run(")
+        for _ in range(5):
+            waited = await call(client, "wait_run", run_id=started["run_id"], timeout_s=60)
+            if not waited["timed_out"]:
+                break
+        return await call(client, "journey_finish", run_id=started["run_id"])
+    finished = session(server, scenario)
+    assert finished["verification"]["passed"] is True, finished
+    assert finished["status"] == "done" and finished["policy"] == "typesafe" and finished["text_helper"] is None
+    assert finished["model_calls"]["choose"] == len(calls) >= 4 and finished["model_calls"]["text"] == 0
+    assert finished["model_calls"].get("failed", 0) == 0
+    assert finished["timing_ms"]["decision"] >= 0 and finished["steps"] >= 3
+    steps = svc.store.read_steps(finished["run_id"])
+    assert {s.get("policy") for s in steps if s.get("operation") != "NAVIGATION"} <= {"typesafe"}
+    assert "TYPE_TEXT" not in {s.get("operation") for s in steps}
+    requests = shop_server.requests[since:]
+    assert not [r for r in requests if r["method"] != "GET" or r["path"].startswith("/pay")]
+
+
+def test_the_env_file_reaches_the_server_without_overriding_its_environment(tmp_path, monkeypatch):
+    """JEV_ENGAGEMENT_ENV (plugin.json: ${CLAUDE_PLUGIN_DATA}/.env) is read at start with setdefault semantics: a
+    variable the server inherited wins; the host learns which keys were found, never a value."""
+    env = tmp_path / "keys.env"
+    env.write_text("# keys of the plugin\nTYPESAFE_API_KEY=ts-from-file\nexport TEXT_MODEL_API_KEY='tm-from-file'\n"
+                   "TEXT_MODEL=file-model\n", encoding="utf-8")
+    monkeypatch.setenv("JEV_ENGAGEMENT_ENV", str(env))
+    monkeypatch.setenv("TEXT_MODEL", "inherited-model")
+    assert mcp_server.load_keys() == {"typesafe_key": True, "text_helper": "inherited-model"}
+    assert os.environ["TYPESAFE_API_KEY"] == "ts-from-file" and os.environ["TEXT_MODEL_API_KEY"] == "tm-from-file"
+    monkeypatch.setenv("JEV_ENGAGEMENT_ENV", str(tmp_path / "missing.env"))
+    monkeypatch.delenv("TYPESAFE_API_KEY")
+    monkeypatch.delenv("TEXT_MODEL_API_KEY")
+    assert mcp_server.load_keys() == {"typesafe_key": False, "text_helper": None}  # a missing file is no error
+
+    script = Path(sys.executable).with_name("jev-engage-mcp")
+    if not script.exists():
+        pytest.skip("jev-engage-mcp is not installed in this environment")
+    runs = tmp_path / "runs"
+    run_id = RunStore(runs).new_run("audit", SHOP, {})
+    child = {**os.environ, "JEV_ENGAGEMENT_ARTIFACTS": str(runs), "JEV_ENGAGEMENT_ENV": str(env),
+             "TEXT_MODEL": "inherited-model"}
+
+    async def main():
+        async with Client(StdioServerParameters(command=str(script), env=child)) as client:
+            result = await client.call_tool("get_run", {"run_id": run_id})
+            return result.content[0].text
+    text = anyio.run(main)
+    assert json.loads(text)["server"] == {"typesafe_key": True, "text_helper": "inherited-model"}
+    assert "ts-from-file" not in text and "tm-from-file" not in text

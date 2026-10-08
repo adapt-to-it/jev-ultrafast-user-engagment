@@ -6,6 +6,11 @@ SIGTERM 100 ms later, then SIGKILL 400 ms after that; a closed terminal or a dro
 seals the runs in progress, kills the browsers at once, writes the marks and exits within that window; runs left behind
 by a process that died anyway are closed the same way at the next start. Either way an interrupted audit ends
 "failed" and an interrupted journey "abandoned" (its run "partial", or "failed" when it holds no page).
+
+Model keys stay on the server: the inherited environment, plus the KEY=value file named by JEV_ENGAGEMENT_ENV (the
+plugin sets ${CLAUDE_PLUGIN_DATA}/.env), loaded at start without overriding an inherited variable. With
+TYPESAFE_API_KEY, Jev pilots journeys (policy "auto"), judges the rubrics routed to it (judge_with_jev) and backs the
+audit crawler up; get_run()["server"] tells the host which keys were found, never their values.
 """
 
 import asyncio
@@ -19,6 +24,7 @@ import signal
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import anyio
@@ -41,9 +47,12 @@ Vocabulary: the scores are an engagement-readiness estimate from synthetic sessi
 Coverage grades are "Confidenza A/B/C (copertura N %)", not quality grades. A page that could not be reached is \
 "not assessable", never 0.
 
-Flow: audit_shop -> wait_run (repeat until complete/partial/failed) -> optional run_journey + journey_act ... + \
-journey_finish -> get_judgment_tasks (pages) -> judges -> submit_judgments -> finalize_judgments -> score_run (with \
-the journey run ids) -> get_report. One audit runs at a time; a journey next to an audit skews both runs' timings.
+Flow: audit_shop -> wait_run (repeat until complete/partial/failed) -> optional run_journey (policy auto: with \
+TYPESAFE_API_KEY on the server Jev, TypeSafe's choice model, pilots it by itself: wait_run until it finished, then \
+journey_finish; else you drive it with journey_act ... + journey_finish) -> judge_with_jev (Jev judges the rubrics \
+routed to it, one request per page) -> get_judgment_tasks (pages) -> your judges take the tasks still open (the \
+perception rubrics and Jev's escalations) -> submit_judgments -> finalize_judgments -> score_run (with the journey \
+run ids) -> get_report. One audit runs at a time; a journey next to an audit skews both runs' timings.
 
 Safety: the tools never place orders, never submit checkout or payment forms, never type into password, payment or \
 personal-data fields, and stop at the first checkout page. In journeys you choose only an offered operation and an \
@@ -54,6 +63,8 @@ READ = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_h
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
 IDEMPOTENT = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
 BROWSE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True)
+# judge_with_jev asks TypeSafe (outside); a second call judges nothing new
+ASK = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
 # Claude Code never defers this tool (the judges read their tasks with it) and never saves one of its pages to a file
 # (by default it does so above 50,000 characters, and the judge agent has no tool to read a file): a page holds at most
 # TASK_PAGE_CHARS of task text plus the rubrics it cites, well below RESULT_CHARS
@@ -160,7 +171,9 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
     @tool(READ, "Run summary")
     def get_run(run_id: RunId) -> Result:
         """Compact summary of a run: status, pages per stage and profile (type, LCP, CLS, KB), not assessable stages
-        with reasons, judgment progress, whether scores exist, warnings and errors."""
+        with reasons, judgment progress, whether scores exist, warnings and errors, the TypeSafe requests the run made
+        (model_calls; a journey's pilot, decisions and decision time in journey) and server: {typesafe_key: whether
+        Jev can pilot and judge here, text_helper: the text model for TYPE_TEXT or null}."""
         return service.get_run(run_id)
 
     @tool(BROWSE, "Start a journey")
@@ -175,9 +188,10 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
             description="cart_contains_item_under_price: {max_price}; pdp_reached: {query?, max_price?}; "
                         "search_results_shown: {query?}; cart_not_empty: none")] = None,
         profile: Profile = "mobile",
-        policy: Annotated[Literal["host", "typesafe"], Field(
-            description="host: you choose every step with journey_act; typesafe: TypeSafe chooses by itself "
-                        "(needs TYPESAFE_API_KEY on the server; poll wait_run)")] = "host",
+        policy: Annotated[Literal["auto", "host", "typesafe"], Field(
+            description="auto: TypeSafe (Jev) pilots when the server has TYPESAFE_API_KEY, else you pilot with "
+                        "journey_act; host: you choose every step with journey_act; typesafe: Jev chooses by itself "
+                        "(needs TYPESAFE_API_KEY on the server; poll wait_run, then journey_finish)")] = "auto",
         max_steps: Annotated[int, Field(ge=1, le=60, description="Step budget")] = 40,
         browser: Browser = "auto",
         optimal_steps: Annotated[int | None, Field(ge=1, description="Minimum interactions for the goal, if "
@@ -186,7 +200,10 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
                                                                      "included, if known (Lostness)")] = None,
         locale: Locale = "it",
     ) -> Result:
-        """Open the start page in a fresh isolated browser context with the device profile and return {run_id,
+        """Open the start page in a fresh isolated browser context with the device profile. The result names the
+        pilot (policy, policy_requested). Jev (policy typesafe) returns {run_id, status: "running", text_helper, next}
+        at once: call wait_run(run_id) while timed_out is true, then journey_finish(run_id) for the verdict, the step
+        count and what deciding cost (model_calls, timing_ms); never journey_act. You (policy host) get {run_id,
         status, observation}. The observation lists the offered elements (elements[].index with their operations;
         select options carry their own index such as "3:2"), the controls (SCROLL_UP, SCROLL_DOWN, WAIT, DONE,
         BLOCKED), page_type, visible text, guard_notes and observation_id. Drive it with journey_act using only
@@ -227,8 +244,22 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
     ) -> Result:
         """Verify the outcome with the independent oracle on the actual page state (DONE alone proves nothing),
         store the predicted-friction KPIs, close the browser. Returns verification {passed, checks}, the friction KPI
-        values and the steps path. Pass this run_id to score_run(audit_run_id, journey_run_ids=[...])."""
+        values, the steps path, the pilot (policy, text_helper) and what deciding cost (model_calls, timing_ms: decision
+        time is never counted as the shop's). For a journey Jev piloted it reads back what its own finish stored, once
+        wait_run says it finished. Pass this run_id to score_run(audit_run_id, journey_run_ids=[...])."""
         return service.journey_finish(run_id, status)
+
+    @tool(ASK, "Judge with Jev")
+    def judge_with_jev(run_id: RunId) -> Result:
+        """Let Jev (TypeSafe's choice model, on the server) judge the tasks of a finished audit whose rubrics are
+        routed to it (operational, closed-label questions): one request per page, labels chosen among the rubric's,
+        evidence chosen among the offered snippet ids (verbatim by construction), one sample per task. Call it before
+        get_judgment_tasks (it creates the tasks too). Accepted tasks become final; a task Jev is unsure about
+        (escalated: low_probability, position_flip, no_evidence, or a failed request) stays open for your judges with
+        the perception rubrics' tasks (open_tasks). available false (no TYPESAFE_API_KEY on the server): nothing
+        changed, your judges take every task. Returns requests, latency_ms, input_tokens, model, accepted, escalated
+        counts by reason, per_task readings and the finalize counts."""
+        return service.judge_with_jev(run_id)
 
     @tool(IDEMPOTENT, "Judgment tasks", meta=JUDGE_META)  # the first call creates the tasks (writes the run)
     def get_judgment_tasks(
@@ -247,7 +278,9 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
         quote must be copied verbatim from the cited snippet (>= 8 characters or the whole snippet). A page holds at
         most `limit` tasks and may end earlier when its snippets are long; page with next_cursor until it is null
         (brief and full reads page identically). open_tasks counts the tasks of the run that still need verdicts,
-        missing_samples the most verdicts any task of this page still needs."""
+        missing_samples the most verdicts any task of this page still needs. Each task names its rubric's judge (jev or
+        claude) and, when Jev passed it on, its escalation; judge every task that is not final and still lacks
+        samples."""
         return service.get_judgment_tasks(run_id, cursor, limit, rubric_id, brief=brief)
 
     @tool(WRITE, "Submit verdicts")
@@ -336,9 +369,23 @@ def _kill_browsers() -> None:
             pass
 
 
+def load_keys() -> dict:
+    """The env file named by JEV_ENGAGEMENT_ENV (KEY=value lines; a variable the server inherited wins), then which
+    model keys the server holds (service.server_keys: booleans and the text model's name, never a value)."""
+    from .cli import load_environment
+    from .service import server_keys
+
+    if path := os.environ.get("JEV_ENGAGEMENT_ENV"):
+        load_environment(Path(path).expanduser())
+    return server_keys()
+
+
 def main() -> None:
     logging.basicConfig(level=os.environ.get("JEV_ENGAGEMENT_LOG_LEVEL", "INFO").upper(), stream=sys.stderr,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    keys = load_keys()
+    log.info("TypeSafe key %s (Jev pilots and judges); text helper %s", "found" if keys["typesafe_key"] else
+             "missing", keys["text_helper"] or "missing (Jev cannot type: TYPE_TEXT is refused)")
     from .chrome import close_all, sweep_stale_profiles
 
     try:

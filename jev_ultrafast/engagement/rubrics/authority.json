@@ -1,7 +1,8 @@
 {
   "id": "authority",
-  "version": "rubrics.v1",
+  "version": "rubrics.v2",
   "kpi_id": "MPI.AUTHORITY",
+  "judge": "jev",
   "snippet_kinds": [
     "authority"
   ],

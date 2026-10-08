@@ -1,7 +1,8 @@
 {
   "id": "value_prop",
-  "version": "rubrics.v1",
+  "version": "rubrics.v2",
   "kpi_id": "CCL.VALUE_PROP_CLARITY",
+  "judge": "claude",
   "snippet_kinds": [
     "headline",
     "cta"

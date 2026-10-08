@@ -1,6 +1,6 @@
 """jev-engage: argument parsing, the typesafe-only journey rule, judge/score/report/list on a stored audit (scripted
-judges, no `claude -p`), an end-to-end audit of the fixture shop and a SIGTERM/SIGHUP during one (headless Chromium;
-skipped without it)."""
+judges, no `claude -p`; Jev through a stand-in for jev_ultrafast.model.post_json), an end-to-end audit of the fixture
+shop and a SIGTERM/SIGHUP during one (headless Chromium; skipped without it)."""
 
 import copy
 import json
@@ -13,13 +13,16 @@ from pathlib import Path
 
 import pytest
 
-from jev_ultrafast.engagement import chrome, cli, judges
+from jev_ultrafast import model as typesafe
+from jev_ultrafast.engagement import chrome, cli, judges, judgments
 from jev_ultrafast.engagement.collectors import PageCollector
 from jev_ultrafast.engagement.scoring import NAMES
 from jev_ultrafast.engagement.store import RunStore, iso_now
 
 GOLDEN = json.loads((Path(__file__).with_name("fixtures") / "runs" / "audit_complete.json").read_text(encoding="utf-8"))
 SHOP = "https://shop.example/"
+KEYS = ("TYPESAFE_API_KEY", "TYPESAFE_MODEL", "TEXT_MODEL_API_KEY", "TEXT_MODEL", "JEV_ENGAGEMENT_ENV",
+        "JEV_JUDGE_MIN_P")
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +30,9 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)  # no .env of the repository
     monkeypatch.setenv("JEV_ENGAGEMENT_ARTIFACTS", str(tmp_path / "runs"))
     monkeypatch.setenv("JEV_ENGAGEMENT_CACHE", str(tmp_path / "cache"))
-    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    for name in KEYS:  # no real key reaches a test (or the subprocesses that copy os.environ); restored afterwards
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
 
 
 def stored_audit() -> str:
@@ -51,6 +56,8 @@ def test_the_parser_reads_every_command():
     assert parse(["journey", SHOP, "--goal", "g", "--oracle", "cart_not_empty", "--profile", "desktop"]).profile \
         == "desktop"
     assert parse(["judge", "r", "--backend", "api", "--samples", "1"]).backend == "api"
+    assert parse(["judge", "r", "--backend", "jev"]).backend == "jev"
+    assert parse(["audit", SHOP, "--judge", "jev"]).judge == "jev"
     assert parse(["score", "r", "--journey", "a", "--journey", "b"]).journey == ["a", "b"]
     assert parse(["report", "r", "--format", "kpis"]).format == "kpis"
     assert parse(["list", "--host", "shop.example", "--limit", "5"]).limit == 5
@@ -135,11 +142,14 @@ def test_a_closed_pipe_ends_the_command_quietly(tmp_path):
 
 def test_dotenv_values_never_override_the_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("JEV_TEST_KEPT", "from the environment")
-    monkeypatch.setenv("JEV_TEST_ADDED", "placeholder")
-    monkeypatch.delenv("JEV_TEST_ADDED")
-    (tmp_path / ".env").write_text("# comment\nJEV_TEST_KEPT=from .env\nJEV_TEST_ADDED = 42\n", encoding="utf-8")
+    for name in ("JEV_TEST_ADDED", "JEV_TEST_QUOTED", "JEV_TEST_EXPORTED"):
+        monkeypatch.setenv(name, "placeholder")
+        monkeypatch.delenv(name)
+    (tmp_path / ".env").write_text("# comment\nJEV_TEST_KEPT=from .env\nJEV_TEST_ADDED = 42\n"
+                                   "JEV_TEST_QUOTED=\"a b=c\"\nexport JEV_TEST_EXPORTED='x'\n", encoding="utf-8")
     cli.load_environment()
     assert os.environ["JEV_TEST_KEPT"] == "from the environment" and os.environ["JEV_TEST_ADDED"] == "42"
+    assert os.environ["JEV_TEST_QUOTED"] == "a b=c" and os.environ["JEV_TEST_EXPORTED"] == "x"
 
 
 def test_list_and_report_of_nothing(capsys, monkeypatch):
@@ -288,3 +298,73 @@ def test_a_signal_during_an_audit_closes_the_browser_and_fails_the_run(signum, t
     assert run["status"] == "failed" and run["finished_at"], run["errors"]
     assert f"interrupted: the command received {name} while the run was in progress" in run["errors"]
     assert not list(runs.glob("*/*/owner.json"))
+
+
+# ---------------------------------------------------------------- Jev as judge
+
+
+def choice(ids, selected, p=0.9):
+    ids = list(ids)
+    rest = (1 - p) / (len(ids) - 1)
+    return {"type": "choice", "choice": selected, "probabilities": {i: p if i == selected else rest for i in ids},
+            "confidence": (p - 1 / len(ids)) / (1 - 1 / len(ids))}
+
+
+def jev_answers(url, key, body):
+    """systemone for the Jev judge: checks the request shape, then the first label and the first snippet; the label
+    of trick_questions comes with p 0.55, below the acceptance floor (escalated to Claude)."""
+    assert url == "https://api.typesafe.ai/v1/systemone" and key == "test-key"
+    assert set(body) == {"model", "state", "questions"} and "https://" not in json.dumps(body)
+    answers = {}
+    for qid, question in body["questions"].items():
+        assert question["type"] == "choice" and 2 <= len(question["criteria"]) <= 255
+        kind, rubric = qid.split(":")[:2]
+        labels = list(body["questions"][f"label:{':'.join(qid.split(':')[1:3])}"]["criteria"])
+        p = 0.55 if rubric == "trick_questions" else 0.9
+        answers[qid] = choice(question["criteria"], labels[0] if kind != "evidence" else
+                              next(iter(question["criteria"])), p if kind != "evidence" else 0.8)
+    return {"model": "jev-1.13.0", "answers": answers, "usage": {"input_tokens": 900, "output_tokens": 0}}
+
+
+def test_jev_judges_from_the_cli_and_a_claude_backend_takes_the_rest(monkeypatch, capsys):
+    """judge --backend jev: one TypeSafe request per page for the rubrics routed to Jev, one sample per task; the
+    open tasks (perception rubrics, escalations) are named and judge --backend cli then finalizes every task."""
+    run_id = stored_audit()
+    assert cli.main(["judge", run_id, "--backend", "jev"]) == 1  # no TYPESAFE_API_KEY: refused, nothing judged
+    assert "TYPESAFE_API_KEY" in capsys.readouterr().err and RunStore().load(run_id)["judgments"]["verdicts"] == []
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    requests = []
+    monkeypatch.setattr(typesafe, "post_json", lambda *args: requests.append(args[2]) or jev_answers(*args))
+    assert cli.main(["judge", run_id, "--backend", "jev"]) == 0
+    out = capsys.readouterr().out
+    state = RunStore().load(run_id)["judgments"]
+    rubrics = judgments.load_rubrics()
+    jev = [t for t in state["tasks"] if judgments.routing(t, rubrics) == "jev"]
+    escalated = [t for t in jev if t.get("escalation")]
+    assert len(requests) == len({t["page_id"] for t in jev}) and escalated
+    assert {t["rubric_id"] for t in escalated} == {"trick_questions"}
+    accepted, passed = len(jev) - len(escalated), len(escalated)
+    assert f"Giudizi (jev, jev-1.13.0, 1 campione): {accepted} verdetti accettati, {passed} task passati a Claude " \
+           f"(low_probability {passed}), {len(requests)} richieste TypeSafe" in out
+    open_tasks = len(state["tasks"]) - len(state["final"])
+    assert f"{open_tasks} task restano aperti" in out and f"jev-engage judge {run_id} --backend cli" in out
+
+    def scripted(self, tasks):
+        return [{"task_id": t["task_id"], "judge_id": self.judge_id, "model": self.model,
+                 "label": sorted(t["labels"])[0], "confidence": 0.8, "rationale": "Citazione sufficiente.",
+                 "evidence": [{"snippet_id": t["snippets"][0]["snippet_id"], "quote": t["snippets"][0]["text"][:30]}]}
+                for t in tasks]
+    monkeypatch.setattr(judges.ClaudeCliJudge, "judge", scripted)
+    assert cli.main(["judge", run_id, "--backend", "cli", "--model", "claude-sonnet-test", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["finalize"]["pending"] == 0 and result["accepted"] == 3 * open_tasks
+    state = RunStore().load(run_id)["judgments"]
+    assert len(state["final"]) == len(state["tasks"])
+    assert sum(1 for f in state["final"] if f["models"] == ["jev-1.13.0"]) == len(jev) - len(escalated)
+    assert cli.main(["score", run_id]) == 0 and "con giudizi LLM" in capsys.readouterr().out
+
+
+def test_audit_with_the_jev_judge_needs_its_key_before_any_work(capsys, monkeypatch):
+    monkeypatch.setattr(chrome, "sweep_stale_profiles", lambda root=None: pytest.fail("refused before any work"))
+    assert cli.main(["audit", SHOP, "--judge", "jev"]) == 1
+    assert "TYPESAFE_API_KEY" in capsys.readouterr().err and RunStore().list_runs() == []

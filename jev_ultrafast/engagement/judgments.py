@@ -1,7 +1,10 @@
 """Closed-label LLM judgments over page snippets: tasks, verdict validation, majority finalisation and a cache.
 
-The server never asks a model by itself in the plugin flow: the host (or a fallback judge from judges.py) returns
-verdicts, and every evidence quote must be a verbatim substring of the snippet it cites.
+Each rubric names its judge ("judge": "jev" | "claude"). Jev (TypeSafe, judges.judge_with_jev) answers the operational
+rubrics with one sample per task, chosen labels and evidence chosen among the offered snippet ids; a task Jev is not
+sure about is escalated and judged like a Claude task. Claude (the MCP host's subagents, or a fallback judge from
+judges.py) answers the perception rubrics and the escalations with three samples. Every evidence quote must be a
+verbatim substring of the snippet it cites.
 """
 
 import hashlib
@@ -15,9 +18,13 @@ from collections import Counter
 from pathlib import Path
 
 from .kpis import KPIS
+from .store import iso_now
 
 RUBRICS_DIR = Path(__file__).with_name("rubrics")
-RUBRICS_VERSION = "rubrics.v1"
+RUBRICS_VERSION = "rubrics.v2"
+JUDGES = ("jev", "claude")  # rubric["judge"]: "jev" = Jev first, Claude for the tasks Jev escalates
+JEV_JUDGE_ID = "jev"  # judge_id of Jev's verdicts (judges.JevJudge)
+RETRY_REASONS = ("request_failed", "invalid_response")  # escalations without a Jev reading: Jev may try again
 MAX_SNIPPET_CHARS = 600
 MAX_RATIONALE_CHARS = 280
 MAX_QUOTES = 8
@@ -163,6 +170,56 @@ def ensure_tasks(run, *, samples_required=3) -> list:
     state.setdefault("verdicts", [])
     state.setdefault("final", [])
     return state["tasks"]
+
+
+def routing(task, rubrics=None) -> str:
+    """"jev" or "claude": the judge the task's rubric names, read at judge time (never copied into tasks). A task made
+    under another rubrics version, or of an unknown rubric, goes to Claude."""
+    rubric = (rubrics or load_rubrics()).get(task.get("rubric_id")) or {}
+    if rubric.get("version") != task.get("rubric_version") or rubric.get("judge") not in JUDGES:
+        return "claude"
+    return rubric["judge"]
+
+
+def settle(run, task_ids, *, samples_required=1) -> int:
+    """Lower samples_required of the given open tasks (a Jev verdict is one sample); never raises it, never touches a
+    final task. Returns how many tasks changed; finalize() then decides them as usual."""
+    state = run.get("judgments") or {}
+    final = {f["task_id"] for f in state.get("final") or []}
+    wanted, changed = set(task_ids), 0
+    for task in state.get("tasks") or []:
+        if task["task_id"] in wanted and task["task_id"] not in final and task.get("samples_required", 3) > (
+                samples_required):
+            task["samples_required"] = samples_required
+            changed += 1
+    return changed
+
+
+def retryable(task) -> bool:
+    """True when the task carries no escalation, or one without a Jev reading (RETRY_REASONS: the request failed or
+    the answer was invalid), which Jev may replace. low_probability, position_flip and no_evidence are Jev's reading
+    of the task: permanent."""
+    escalation = task.get("escalation")
+    return escalation is None or isinstance(escalation, dict) and escalation.get("reason") in RETRY_REASONS
+
+
+def escalate(run, escalations: dict) -> int:
+    """Mark open tasks as passed to Claude: task["escalation"] = {from, model, label, probability, reason, at}.
+
+    No verdict is stored and samples_required is kept, so the host judges the task like any open one. A final task
+    and a task escalated with Jev's reading are left as they are; an escalation without a reading (retryable) is
+    replaced. Returns how many tasks were marked."""
+    state = run.get("judgments") or {}
+    final = {f["task_id"] for f in state.get("final") or []}
+    marked = 0
+    for task in state.get("tasks") or []:
+        reading = escalations.get(task["task_id"])
+        if isinstance(reading, dict) and task["task_id"] not in final and retryable(task):
+            task["escalation"] = {"from": reading.get("from") or "jev",
+                                  **{k: reading.get(k) for k in ("model", "label", "probability", "reason")},
+                                  "at": iso_now()}
+            marked += 1
+    return marked
 
 
 def prepared(run) -> bool:
@@ -312,14 +369,15 @@ def required_samples(task, override=None) -> int:
 def finalize(run, *, samples_required=None) -> dict:
     """Majority label per task with enough verdicts; ties or agreement < 2/3 -> uncertain.
 
-    Each task needs its own samples_required verdicts; samples_required may lower that for every task (early
+    Each task needs its own samples_required verdicts; samples_required may lower that for every open task (early
     finalisation) but never raise it (ValueError). Finality is terminal: a task finalised by an earlier call keeps its
-    stored result (submit() refuses further verdicts for it), whatever samples_required a later call uses.
+    stored result (submit() refuses further verdicts for it), whatever samples_required a later call uses, so a final
+    task settled by Jev (one sample) never fails a later finalize(samples_required=3).
     """
     state = run.setdefault("judgments", {})
     tasks = state.get("tasks") or []
-    required = {t["task_id"]: required_samples(t, samples_required) for t in tasks}
     existing = {f["task_id"]: f for f in state.get("final") or []}
+    required = {t["task_id"]: required_samples(t, samples_required) for t in tasks if t["task_id"] not in existing}
     by_task = {}
     for verdict in state.get("verdicts") or []:
         by_task.setdefault(verdict["task_id"], []).append(verdict)

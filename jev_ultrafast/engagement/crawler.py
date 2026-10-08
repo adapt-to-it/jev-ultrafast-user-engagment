@@ -60,6 +60,26 @@ A stage that cannot be reached is recorded as NotAssessable with its reason, and
 reason that stopped the funnel); a bot challenge stops the funnel with reason "bot_challenge". A page loaded in a tab
 that replaced a lost one (timeout, crash) records the tab's number in probes["tab"] (2, 3, ...): per-tab state such as
 sessionStorage starts over there.
+
+Jev fallback (discover_funnel(jev_fallback=True): audit.py turns it on when TYPESAFE_API_KEY is set; off, nothing of
+this runs and nothing above changes): where the lexicon finds no listing link, no product link, no cart link, or no
+add-to-cart, variant or checkout control, Jev is asked once, the way the agent loop asks it (jev_ultrafast.model.choose
+with a fixed generic goal, GOALS), over the observed click actions CheckoutGuard allows, minus what the lookup's own
+offer leaves out (never a control the lexicon reads as removing, buying now, logging in...: Crawl.link_offer,
+add_offer, the checkout CTA's and the variant option's filters); only a CLICK and its target head are consumed, so Jev
+picks an observed element index, never a selector or text. A link's href is then loaded like a lexicon candidate
+(same filters), an element without a usable href is clicked once; the stage's own test still decides (is_listing,
+is_product, is_cart; for the checkout CTA Jev chose: a checkout page type, a checkout URL or an account gate, else the
+page is "extra" and the stage "checkout_cta_not_found"), and the funnel goes on deterministically. Link lookups ask on
+the top of their start page (reloaded as "extra" when the tab has left it; under a blocking consent banner only links
+are offered: no click under the banner), click lookups where the lexicon missed (the add-to-cart by the product's
+price). One request per lookup (a GOALS key) and profile, at most 6 per profile: a second miss sends nothing
+("fallback_exhausted"); a control Jev chose that met a stale page is picked again by its label on the one re-observe,
+without a request. Nothing is asked when max_pages has no room for the page it would lead to ("max_pages"), and the
+NotAssessable reasons of a lookup that found nothing are those without the fallback. The guest path, consent, overlays,
+the search probe, repeats and the deception tests are never asked. Every lookup is recorded in
+PageRecord.probes["jev_fallback"] (a list) of the page it was asked on, with a note; a click it chose is logged with
+note "jev_fallback".
 """
 
 import re
@@ -68,6 +88,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
+from .. import model
 from ..browser import StalePage, session_gone
 from .collectors import AuditError
 from .lexicon import compile_lexicon, lexicon_for
@@ -103,6 +124,22 @@ UNSENT = ("not_executed:", "not_observed", "control_not_found")  # click reasons
 DELIVERED = ("failed:", "uncertain_earlier", "sent_earlier")  # click reasons that mean it may have reached the page
 GONE = ("OutOfStock", "SoldOut", "Discontinued")  # schema.org availability of an item that cannot be bought
 _READ = object()  # Tab.act: read performance.timeOrigin now
+GOALS = {  # the Jev fallback's goals: fixed, generic, English; no site values (select_variant: an observed label)
+    "plp": "Open a product category listing page of this shop: a page that lists several products of one category. "
+           "Do not open the cart, the checkout, an account page or an information page.",
+    "pdp": "Open the page of one single product (its product page with a price and an add-to-cart control).",
+    "cart": "Open the shopping cart page: the page listing the items already added to the cart. Do not add or remove "
+            "items.",
+    "add_to_cart": "Add the product shown on this page to the shopping cart with the one control that does it. Do not "
+                   "buy now and do not pay.",
+    "select_variant": "Select the product option '{option}' on this page.",
+    "checkout_entry": "Go from this cart page to the checkout (its first step). Do not remove items, change "
+                      "quantities or select options. Do not pay and do not place an order.",
+}
+SERVES = {"plp": "plp", "pdp": "pdp", "cart": "cart", "add_to_cart": "cart", "select_variant": "cart",
+          "checkout_entry": "checkout_entry"}  # the funnel stage a lookup serves
+# jev_fallback reasons given before any request (nothing was asked); a reason given after one is never one of these
+NO_REQUEST = ("no_click_actions", "fallback_exhausted", "not_observed", "max_pages", "consent_blocking")
 
 
 def _norm(text) -> str:
@@ -133,6 +170,23 @@ def _href(page: dict, action: dict) -> str | None:
     """The raw href snapshot.js observed on the action's element (CheckoutGuard's guard tuple), or None."""
     guard = (page.get("guards") or {}).get(str(action.get("node")))
     return guard[GUARD_HREF] if isinstance(guard, list) and len(guard) > GUARD_HREF and guard[GUARD_HREF] else None
+
+
+def _page_rect(page: dict, action: dict) -> dict | None:
+    """An observed action's rect (viewport coordinates) in page coordinates at the page's scroll, for pick(near=)."""
+    r = action.get("rect") or {}
+    if not isinstance(r.get("y"), (int, float)):
+        return None
+    return {"y": r["y"] + ((page.get("scroll") or {}).get("y") or 0), "h": r.get("h") or 0}
+
+
+def unlabelled(lx: dict, *keys: str):
+    """accept(action, page): an action whose label none of the lexicon keys reads (a Jev lookup's offer leaves the
+    controls that remove, buy now, check out, log in... out)."""
+    def accept(action: dict, page: dict) -> bool:
+        label = " ".join(str(action.get("label") or "").split())
+        return not any(key in lx and lx[key].search(label) for key in keys)
+    return accept
 
 
 def _type(record: PageRecord | None) -> str | None:
@@ -343,6 +397,34 @@ def product_candidates(record: PageRecord | None, guard) -> list[str]:
     return list(dict.fromkeys(urls))
 
 
+def jev_pick(page: dict, guard, page_type: str | None, goal: str, accept=None) -> tuple[dict | None, dict]:
+    """Ask Jev which observed element to click for goal: one jev_ultrafast.model.choose request (the agent loop's own:
+    operation head and target heads) over the click actions guard.filter_actions allows (accept: only those it
+    accepts); only a CLICK and its target are consumed, DONE or BLOCKED is no element. (the action, the answer's
+    record) or (None, the record with its reason: "no_click_actions" (nothing asked), "jev_error" (with the time it
+    took, no usage), "jev_done", "jev_blocked")."""
+    allowed = [a for a in guard.filter_actions(page, page_type)[0] if a.get("kind") == "click"
+               and (accept is None or accept(a, page))]
+    if not allowed:
+        return None, {"reason": "no_click_actions"}
+    state = {**page, **{key: page.get(key) or "" for key in ("url", "title", "text")}, "actions": allowed}
+    started = time.perf_counter()
+    try:
+        decision = model.choose(state, goal, [])
+    except (RuntimeError, ValueError, KeyError, TypeError) as exc:  # HTTP or connection; an invalid answer
+        return None, {"reason": "jev_error", "error": f"{type(exc).__name__}: {str(exc)[:160]}",
+                      "latency_ms": round((time.perf_counter() - started) * 1000)}  # no usage: no answer
+    meta = {key: decision.get(key) for key in ("operation", "target", "confidence", "target_confidence", "model",
+                                               "usage", "latency_ms")}
+    if decision["operation"] != "CLICK":
+        return None, {**meta, "reason": f"jev_{str(decision['operation']).lower()}"}
+    action = next((a for a in allowed if a.get("id") == decision["choice"]), None)
+    if action is None:
+        return None, {**meta, "reason": "jev_error"}
+    return action, {**meta, "label": str(action.get("label") or "")[:120], "href": _href(page, action),
+                    "probability": (decision.get("probabilities") or {}).get(decision["choice"]), "reason": None}
+
+
 class Tab:
     """One tab of a profile's browser context: page loads through the collector, and observed actions that pass
     CheckoutGuard, executed once and logged to steps.jsonl before their result is observed. The deception tests use
@@ -350,7 +432,8 @@ class Tab:
     applies (settings.consent). sent holds (url, timeOrigin, label) of every control sent to a document (timeOrigin
     None when it could not be read: was_sent), uncertain (url, label) of clicks that may have reached the page although
     Browser.act() failed: neither is sent again there. opened counts the browser tabs opened (a lost tab is replaced
-    by a new one)."""
+    by a new one). chooser (Crawl.chooser with the Jev fallback on, else None): click() asks it when pick() finds no
+    control, chooser(record, page, purpose, labels, accept) -> (an observed action or None, its probe or None)."""
 
     def __init__(self, collector, guard, *, profile: str, policy: str = "auto", source: str = "crawler"):
         self.collector, self.guard, self.profile, self.policy = collector, guard, profile, policy
@@ -363,6 +446,7 @@ class Tab:
         self.last_sent: tuple | None = None  # the key of the last control sent
         self.uncertain: set[tuple[str, str]] = set()
         self.after_dismiss: dict | None = None  # the fresh audit dismiss() read after its closes
+        self.chooser = None
 
     # ---------------------------------------------------------------- pages
     def lexicon(self, record: PageRecord | None) -> dict:
@@ -496,11 +580,12 @@ class Tab:
         return any(u == url and lb == label and (o == origin or o is None or origin is None) for u, o, lb in self.sent)
 
     def act(self, action: dict, page: dict, page_type: str | None, *, purpose: str, stage: str,
-            text: str | None = None, origin=_READ) -> tuple[bool, str | None]:
+            text: str | None = None, origin=_READ, note: str | None = None) -> tuple[bool, str | None]:
         """Guard, then one Browser.act(). (executed, reason). A StalePage means nothing was sent: not executed. A
         control sent to a document (page URL, origin = its performance.timeOrigin, label) is never sent to it again:
         "sent_earlier" (an unknown origin counts as the same document: was_sent); an act that failed after it may
-        have reached the page is never sent again on that page URL: "uncertain_earlier"."""
+        have reached the page is never sent again on that page URL: "uncertain_earlier". note goes to the step
+        ("jev_fallback": Jev chose the control)."""
         url, label = str(page.get("url") or ""), _norm(action.get("label"))
         if (url, label) in self.uncertain:
             return False, "uncertain_earlier"
@@ -525,27 +610,38 @@ class Tab:
             self.uncertain.add((url, label))
             self.sent.add(sent)
             self.log(action, page, purpose=purpose, stage=stage, status="error", text=text,
-                     note=f"{type(exc).__name__}: {str(exc)[:200]}")
+                     note="; ".join(filter(None, (note, f"{type(exc).__name__}: {str(exc)[:200]}"))))
             if isinstance(exc, ConnectionError) or (isinstance(exc, RuntimeError) and session_gone(exc)):
                 raise  # a gone session or a closed transport stops the funnel
             return False, f"failed:{type(exc).__name__}"
         self.sent.add(sent)
-        self.log(action, page, purpose=purpose, stage=stage, status="executed", text=text)
+        self.log(action, page, purpose=purpose, stage=stage, status="executed", text=text, note=note)
         return True, None
 
     def click(self, record: PageRecord, *, purpose: str, stage: str, labels=(), key: str | None = None,
               rect: dict | None = None, roles=None, kinds=("click",), clear: bool = False,
-              strict: bool = False, accept=None) -> dict:
+              strict: bool = False, accept=None, offer=None) -> dict:
         """Observe, pick (accept: pick()), guard, act once. {"executed", "reason", "label", "href", "origin"}, href:
         the observed href of the control picked. Nothing sent (StalePage, or a
         page that could not be observed): once more after clear_way() when clear (late overlays), with
         "stale_reobserved": 1 and what clear_way() did in "cleared"; a second StalePage is a failure. A control
         already sent to this document is not sent again ("sent_earlier"), nor one whose earlier click on this page
-        failed after it may have been delivered ("uncertain_earlier")."""
+        failed after it may have been delivered ("uncertain_earlier"). No control picked: self.chooser (the Jev
+        fallback) may choose one among the observed clicks that accept and offer (the lookup's own filter, for Jev's
+        offer only) both take ("jev_fallback": True; never for a select). Jev's element that met a stale page is
+        picked again on the re-observed page by its label (the one nearest to where it was), without a second
+        request, and its outcome updates the same probe; gone: "control_not_found"."""
         result: dict = {"executed": False, "reason": "not_observed"}
+        jev, chosen = None, None  # Jev's probe, and its element's (label, page rect), once Jev chose one
+
+        def offered(action: dict, page: dict) -> bool:
+            return (accept is None or accept(action, page)) and (offer is None or offer(action, page))
+
         for attempt in range(2):
             if attempt:
                 result["stale_reobserved"] = 1
+                if jev is not None:
+                    jev["stale_reobserved"] = 1
                 if clear:
                     audit, cleared = self.clear_way(record, stage=stage)
                     if cleared:
@@ -557,12 +653,25 @@ class Tab:
             page = self.observe()
             if page is None:
                 continue
-            action = self.pick(page, self.lexicon(record), labels=labels, key=key, near=rect, roles=roles,
-                               kinds=kinds, strict=strict, accept=accept)
+            if chosen is None:
+                action = self.pick(page, self.lexicon(record), labels=labels, key=key, near=rect, roles=roles,
+                                   kinds=kinds, strict=strict, accept=accept)
+                if action is None and self.chooser is not None and "click" in kinds:
+                    action, probe = self.chooser(record, page, purpose, labels, offered)
+                    if action is not None:
+                        jev, chosen = probe, (str(action.get("label") or ""), _page_rect(page, action))
+            else:  # the stale re-observe of Jev's element: its label again, never a new request
+                action = self.pick(page, self.lexicon(record), labels=[chosen[0]], near=chosen[1], accept=offered)
+                if action is None:
+                    jev.update(executed=False, reason="control_not_found")
             if action is None:
                 return {**result, "reason": "control_not_found"}
             origin = self.value("performance.timeOrigin")
-            executed, reason = self.act(action, page, _type(record), purpose=purpose, stage=stage, origin=origin)
+            executed, reason = self.act(action, page, _type(record), purpose=purpose, stage=stage, origin=origin,
+                                        note="jev_fallback" if jev is not None else None)
+            if jev is not None:
+                jev.update(executed=executed, reason=reason)
+                result["jev_fallback"] = True
             result.update(executed=executed, reason=reason, label=str(action.get("label") or "")[:120],
                           href=_href(page, action), origin=origin)
             if executed or not str(reason).startswith("not_executed:"):
@@ -763,7 +872,7 @@ class Stop(Exception):
 
 
 class Crawl:
-    def __init__(self, collector, settings, *, profile: str, guard, progress=None):
+    def __init__(self, collector, settings, *, profile: str, guard, progress=None, jev_fallback: bool = False):
         self.collector, self.settings, self.profile, self.guard = collector, settings, profile, guard
         self.say = progress or (lambda message: None)
         self.tab = Tab(collector, guard, profile=profile, policy=settings.consent)
@@ -773,6 +882,9 @@ class Crawl:
         deepest = max(STAGES.index(s) for s in settings.stages)
         self.wanted = STAGES[:deepest + 1]
         self.last_error = "not_found"
+        self.jev = jev_fallback
+        self.fallbacks: dict[str, int] = {}  # Jev lookups asked, per GOALS key: one request each
+        self.tab.chooser = self.chooser if jev_fallback else None
 
     # ---------------------------------------------------------------- bookkeeping
     def page_id(self, stage: str) -> str:
@@ -890,6 +1002,177 @@ class Crawl:
         record["stage"] = "extra"
         record.setdefault("notes", []).append(f"{stage} candidate rejected: classified as {_type(record)}")
 
+    # ---------------------------------------------------------------- Jev fallback
+    def ask(self, record: PageRecord, page: dict | None, purpose: str, goal: str, accept=None, *,
+            refused: str | None = None) -> tuple[dict | None, dict]:
+        """One Jev request for the lookup purpose (a GOALS key) on the observed page (jev_pick), recorded in record's
+        probes["jev_fallback"] and notes; a lookup already asked sends nothing ("fallback_exhausted"), nor one the
+        caller refused before asking (refused: a NO_REQUEST reason such as "max_pages"). (the action Jev chose or
+        None, its probe: {stage, purpose, goal, model, latency_ms, usage, operation, target, label, href,
+        probability, confidence, executed, reason})."""
+        if self.fallbacks.get(purpose):
+            action, meta = None, {"reason": "fallback_exhausted"}
+        elif refused:
+            action, meta = None, {"reason": refused}
+        elif page is None:
+            action, meta = None, {"reason": "not_observed"}
+        else:
+            self.say(f"{self.profile}: Jev fallback ({purpose})")
+            action, meta = jev_pick(page, self.guard, _type(record), goal, accept)
+        self.fallbacks[purpose] = self.fallbacks.get(purpose, 0) + 1
+        probe = {"stage": SERVES[purpose], "purpose": purpose, "goal": goal, **meta, "executed": False}
+        record.setdefault("probes", {}).setdefault("jev_fallback", []).append(probe)
+        chose = f"Jev chose '{probe['label']}'" if action is not None else f"no element ({meta['reason']})"
+        record.setdefault("notes", []).append(f"jev_fallback {purpose}: the lexicon found nothing; {chose}")
+        return action, probe
+
+    def chooser(self, record: PageRecord, page: dict, purpose: str, labels=(), accept=None) -> tuple[dict | None,
+                                                                                                   dict | None]:
+        """Tab.chooser: Jev's pick for a click lookup the lexicon missed (add to cart, variant option, checkout CTA;
+        select_variant names the option audit.js reported); any other click (the guest path included: rule d needs a
+        control the lexicon reads as "guest") is never asked."""
+        if purpose not in ("add_to_cart", "select_variant", "checkout_entry"):
+            return None, None
+        goal = GOALS[purpose].format(option=next((str(label) for label in labels if label), ""))
+        return self.ask(record, page, purpose, goal, accept)
+
+    def fallback_link(self, stage: str, start: PageRecord, *, home: PageRecord | None = None,
+                      here: bool = False) -> PageRecord | None:
+        """With the Jev fallback on, the page of stage ("plp", "pdp", "cart") reached through the element Jev picks on
+        start's page (GOALS[stage]), else None (the caller keeps its own reason; only what stops the funnel anywhere
+        stops it here: a bot challenge, a lost session). No room in max_pages for the page (and for the reload of
+        start when needed): nothing asked (probe reason "max_pages"). The tab goes back to start (reloaded as "extra"
+        when it has left it, unless here: the current document is start) and to its top; one observation, one request
+        over the offer (link_offer). The element's href is loaded like a lexicon candidate (visit(): same site, no
+        checkout, no cart-action URL); one without a usable href ("#", a script, a button) is clicked once and its
+        navigation collected; under a blocking consent banner only links are offered (a GET, never a click under the
+        banner; none: "consent_blocking", nothing asked). The page is then accepted by the stage's own test
+        (accept_link)."""
+        if not self.jev or self.fallbacks.get(stage):
+            return None
+        asked = start
+        url = start.get("final_url") or start.get("url") or ""
+        reload = not here and _url(self.tab.value("location.href")) != _url(url)
+        if len(self.pages) + 1 + reload > self.settings.max_pages:  # no page for it: the caller's reason stands
+            self.ask(start, None, stage, GOALS[stage], refused="max_pages")
+            return None
+        if reload:
+            try:
+                asked = self.tab.load(url, stage="extra", page_id=self.page_id("extra"))
+            except (TimeoutError, RuntimeError):
+                self.tab.lost()
+                return None
+            self.keep(asked, stage)
+            asked.setdefault("notes", []).append(f"reloaded for the Jev fallback ({stage})")
+            if failed_navigation(asked):
+                self.errored(asked, stage, "the reload")
+                return None
+            self.close_overlays(asked, "extra")
+        blocked = blocking_banner(self.tab.fresh_audit() or _audit(asked))
+        self.tab.value("window.scrollTo(0, 0), scrollY")
+        page = self.tab.observe()
+        action, probe = self.ask(asked, page, stage, GOALS[stage], self.link_offer(stage, asked, blocked))
+        if blocked and probe["reason"] == "no_click_actions":
+            probe["reason"] = "consent_blocking"
+        if action is None:
+            return None
+        here_url = page.get("url") or url
+        href = str(probe.get("href") or "").strip()
+        target = _url(href, here_url)
+        if href and target is None and not href.lower().startswith("javascript:"):  # mailto:, tel:, ...: no page
+            probe["reason"] = "guard_refused:url"
+            return None
+        if target is not None and target != _url(here_url):  # "#" resolves to the page itself: clicked instead
+            cleaned, dropped = clean_cart_url(target)
+            if cleaned is None or (dropped and stage != "cart"):  # a GET that could change the cart is never loaded
+                probe["reason"] = "guard_refused:url"
+                return None
+            probe["url"] = target = cleaned  # the cart link without its cart-action keys (cart_url())
+            record = self.visit(stage, target)
+            if record is None:
+                probe["reason"] = self.last_error
+                return None
+            probe["executed"] = True
+        else:  # max_pages has room for its page (checked above); the offer had no such element under a banner
+            origin = self.tab.value("performance.timeOrigin")
+            executed, reason = self.tab.act(action, page, _type(asked), purpose=f"open_{stage}",
+                                            stage=start.get("stage") or stage, origin=origin, note="jev_fallback")
+            probe.update(executed=executed, reason=reason)
+            if not executed:
+                return None
+            probe["effect"] = self.tab.await_effect(origin, expect_navigation=True,
+                                                    timeout=self.settings.settle_timeout_s)
+            if probe["effect"] != "navigated":
+                probe["reason"] = "no_navigation"
+                return None
+            try:
+                record = self.after_click(stage)
+            except Stop as error:
+                if error.reason == "bot_challenge":
+                    raise
+                if error.reason == "timeout":  # a stuck tab: the next load opens a new one (as visit() does)
+                    self.tab.lost()
+                probe["reason"] = error.reason  # a failed navigation: the stage keeps the caller's reason
+                return None
+            target = _url(record.get("final_url"))
+            if target is None or clean_cart_url(target) != (target, []) or not self.guard.same_site(target):
+                target = None  # no repeat through a GET of that URL
+        if self.accept_link(stage, record, target, home):
+            return record
+        probe["reason"] = "not_found"  # the page is kept as "extra" with the reason in its notes
+        return None
+
+    def link_offer(self, stage: str, record: PageRecord, blocked: bool):
+        """accept(action, page) for a link lookup's offer: under a blocking consent banner (blocked) only a link to
+        another page (loaded with a GET); for the cart never a control the lexicon reads as adding, buying now,
+        removing or checking out, nor a link to a checkout URL (cart_url()'s rule), so a "buy now" that adds and
+        jumps to the checkout is never offered."""
+        no_action = unlabelled(self.tab.lexicon(record), "add_to_cart", "buy_now", "remove", "checkout")
+
+        def accept(action: dict, page: dict) -> bool:
+            href = _href(page, action)
+            target = _url(href, page.get("url") or "") if href else None
+            if blocked and (target is None or target == _url(page.get("url"))):
+                return False
+            if stage == "cart":
+                return no_action(action, page) and not (target and self.guard.is_checkout({"url": target}, None))
+            return True
+        return accept
+
+    def add_offer(self, record: PageRecord, audit: dict):
+        """accept(action, page) for the add-to-cart lookup's offer: never a control inside a product card's CTA (a
+        related product's "Aggiungi"), one the lexicon reads as buying now, checking out or removing, nor a link to
+        another page whose GET changes no cart (header cart link, breadcrumbs); a cart-action link stays."""
+        in_card = own_controls([c for c in audit.get("ctas") or [] if isinstance(c, dict) and c.get("in_card")], audit)
+        named = unlabelled(self.tab.lexicon(record), "buy_now", "checkout", "remove")
+
+        def accept(action: dict, page: dict) -> bool:
+            if in_card(action, page) or not named(action, page):
+                return False
+            href = _href(page, action)
+            target = _url(href, page.get("url") or "") if href else None
+            return target is None or target == _url(page.get("url")) or clean_cart_url(target) != (target, [])
+        return accept
+
+    def accept_link(self, stage: str, record: PageRecord, url: str | None, home: PageRecord | None) -> bool:
+        """The page Jev's element led to, accepted by the same test as a lexicon candidate: a listing that is not the
+        home page (repeats, overlays closed), a product page (unavailable: kept as the product page, as the last
+        candidate is), a cart page; else demoted to "extra". url: repeats reload it (None: no repeats)."""
+        if stage == "plp" and home is not None and landed_home(record, home):
+            record["stage"] = "extra"
+            record.setdefault("notes", []).append("plp candidate rejected: it landed on the home page")
+            return False
+        if not {"plp": is_listing, "pdp": is_product, "cart": is_cart}[stage](record):
+            self.demote(record, stage)
+            return False
+        if stage == "pdp" and (signal := unavailable(_audit(record), self.tab.lexicon(record))):
+            record.setdefault("notes", []).append(f"pdp candidate unavailable: {signal}")
+        if stage != "cart" and url:
+            self.repeat(record, stage, url)
+        if stage == "plp":
+            self.close_overlays(record, "plp")
+        return True
+
     # ---------------------------------------------------------------- funnel
     def run(self) -> None:
         try:
@@ -942,9 +1225,10 @@ class Crawl:
         return record
 
     def listing(self, home: PageRecord) -> PageRecord | None:
-        """The first category link that leads to a listing; none: plp is not assessable, products come from home. A
-        link that lands on the home page (an empty or seasonal category redirected to "/") is no listing, however
-        the home page is classified: the next candidate is tried."""
+        """The first category link that leads to a listing; none: Jev's pick on the home page (fallback_link), else
+        plp is not assessable and products come from home. A link that lands on the home page (an empty or seasonal
+        category redirected to "/") is no listing, however the home page is classified: the next candidate is
+        tried."""
         loaded = False
         for url in listing_candidates(home, self.guard, self.tab.lexicon(home))[:CANDIDATES]:
             record = self.visit("plp", url)
@@ -960,13 +1244,17 @@ class Crawl:
                 self.close_overlays(record, "plp")
                 return record
             self.demote(record, "plp")
-        self.mark("plp", "not_found" if loaded or not self.counts.get("plp") else self.last_error)
+        reason = "not_found" if loaded or not self.counts.get("plp") else self.last_error
+        if (record := self.fallback_link("plp", home, home=home)) is not None:
+            return record
+        self.mark("plp", reason)
         return None
 
     def product(self, listing: PageRecord | None, home: PageRecord) -> PageRecord:
         """The first candidate that is a buyable product page. Unavailable ones (unavailable()) are kept as "extra";
         when every product candidate is unavailable, the first one is the product page (PDP KPIs are still measured;
-        add_to_cart() then stops with "out_of_stock" before any click)."""
+        add_to_cart() then stops with "out_of_stock" before any click). No product page at all: Jev's pick on the
+        listing (else home) page (fallback_link)."""
         urls = product_candidates(listing, self.guard) + product_candidates(home, self.guard)
         self.last_error = "not_found"
         fallback = None
@@ -989,16 +1277,25 @@ class Crawl:
             record["stage"] = "pdp"
             self.repeat(record, "pdp", url)
             return record
-        raise Stop("pdp", self.last_error, then="pdp_not_found")
+        reason = self.last_error
+        if (record := self.fallback_link("pdp", listing or home, home=home)) is not None:
+            return record
+        raise Stop("pdp", reason, then="pdp_not_found")
 
     def cart(self, product: PageRecord) -> PageRecord:
+        """Add to cart, then the cart page: the page the click opened, else the cart link's page (cart_url), else
+        Jev's pick on the page the tab shows (fallback_link)."""
+        current = product
         if self.add_to_cart(product) == "navigated":  # e.g. a shop that opens the cart after adding
             record = self.after_click("cart")
             if is_cart(record):  # the same acceptance as a cart URL's page: its cart link is that page again
                 return self.contents(product, record)
             self.demote(record, "cart")
+            current = record
         url = self.cart_url(product)
         if url is None:
+            if (record := self.fallback_link("cart", current, here=True)) is not None:
+                return self.contents(product, record)
             raise Stop("cart", "not_found", then="cart_not_found")
         record = self.visit("cart", url)
         if record is None:
@@ -1010,16 +1307,24 @@ class Crawl:
 
     @staticmethod
     def contents(product: PageRecord, cart: PageRecord) -> PageRecord:
-        """An executed add-to-cart click is no proof that something was added: the cart lines say it."""
+        """An executed add-to-cart click is no proof that something was added: the cart lines say it. item_recognised:
+        a cart line names the item added (deception.same_item with its title); None when no line title or no item
+        title could be read."""
+        from .deception import same_item  # deception imports this module
+
         probe = (product.get("probes") or {}).get("add_to_cart")
         if probe is not None:
             lines = (_audit(cart).get("cart") or {}).get("line_items") or []
-            probe.update(cart_lines=len(lines), cart_empty=cart_empty(_audit(cart)))
+            titles = [line["title"] for line in lines if isinstance(line, dict) and line.get("title")]
+            probe.update(cart_lines=len(lines), cart_empty=cart_empty(_audit(cart)), item_recognised=any(
+                same_item(title, probe.get("title")) for title in titles) if titles and probe.get("title") else None)
         return cart
 
     def add_to_cart(self, product: PageRecord) -> str:
         """Click the observed add-to-cart control once (after picking a required variant). Returns the click's effect
-        ("navigated", "quiet", "timeout")."""
+        ("navigated", "quiet", "timeout"). A control audit.js did not find is a Jev lookup when the fallback is on
+        (no lexicon pick then: a related product's "Aggiungi al carrello" is not this product's control), asked by
+        the product's price (the add-to-cart sits by it) over add_offer()."""
         self.say(f"{self.profile}: add to cart")
         probe: dict = {"executed": False, "page_id": product["page_id"], "url": product.get("final_url")}
         product.setdefault("probes", {})["add_to_cart"] = probe
@@ -1042,23 +1347,32 @@ class Crawl:
         price = pdp.get("price") or {}
         probe.update(title=pdp.get("title") or (pdp.get("structured") or {}).get("name"), price=price.get("value"),
                      currency=price.get("currency"))
-        if not control.get("present"):
+        present = bool(control.get("present"))
+        if not present and not self.jev:
             probe["reason"] = "add_to_cart_not_found"
             raise Stop("cart", "add_to_cart_failed")
-        clicked = self.tab.click(product, purpose="add_to_cart", stage="pdp", labels=[control.get("label")],
-                                 key="add_to_cart", rect=control.get("rect"), clear=True)
+        rect = control.get("rect") or (None if present else price.get("rect"))  # Jev is asked by the price
+        clicked = self.tab.click(product, purpose="add_to_cart", stage="pdp", labels=[control.get("label")] if present
+                                 else (), key="add_to_cart" if present else None, rect=rect, clear=True,
+                                 offer=self.add_offer(product, audit) if self.jev else None)
         probe.update(executed=clicked["executed"], reason=clicked["reason"], label=clicked.get("label"))
         probe["overlays"] += clicked.get("cleared") or []
         if clicked.get("stale_reobserved"):
             probe["stale_reobserved"] = 1
+        if clicked.get("jev_fallback"):
+            probe["jev_fallback"] = True
         if not clicked["executed"]:
+            if not present and clicked["reason"] == "control_not_found" and not clicked.get("jev_fallback"):
+                probe["reason"] = "add_to_cart_not_found"  # neither audit.js nor Jev found one
             raise Stop("cart", "consent_blocking" if clicked["reason"] == "consent_blocking" else "add_to_cart_failed")
         probe["effect"] = self.tab.await_effect(clicked["origin"], expect_navigation=False, timeout=8.0)
         return probe["effect"]
 
     def select_variant(self, product: PageRecord, audit: dict, probe: dict) -> dict:
         """A variant group with no selected option (audit.js: selected false) gets its first available option, one
-        observed click or select, never retried; the audit is then read again (the price may change)."""
+        observed click or select, never retried; the audit is then read again (the price may change). Jev's lookup
+        (the fallback on, a click the lexicon missed) is offered only the controls inside that option's audit.js rect
+        (own_controls; no rect: nothing offered, nothing asked)."""
         groups = (audit.get("pdp") or {}).get("variant_groups") or []
         group = next((g for g in groups if isinstance(g, dict) and g.get("selected") is False), None)
         if group is None:
@@ -1070,8 +1384,11 @@ class Crawl:
             raise Stop("cart", "variant_required")
         kinds = ("select",) if group.get("kind") == "select" else ("click",)
         clicked = self.tab.click(product, purpose="select_variant", stage="pdp", labels=[option], kinds=kinds,
-                                 rect=group.get("rect"), clear=True)
+                                 rect=group.get("rect"), clear=True,
+                                 offer=own_controls([group], audit) if self.jev else None)
         variant.update(executed=clicked["executed"], reason=clicked["reason"])
+        if clicked.get("jev_fallback"):
+            variant["jev_fallback"] = True
         probe["overlays"] += clicked.get("cleared") or []
         if not clicked["executed"]:
             raise Stop("cart", "consent_blocking" if clicked["reason"] == "consent_blocking" else "variant_required")
@@ -1131,8 +1448,9 @@ class Crawl:
         control = (audit.get("cart") or {}).get("checkout_cta") or {}
         if not control.get("present"):
             control = {}  # audit.js saw none: any observed control that the lexicon reads as "checkout"
+        offer = unlabelled(self.tab.lexicon(cart), "login", "register", "remove", "add_to_cart") if self.jev else None
         clicked = self.tab.click(cart, purpose="checkout_entry", stage="cart", labels=[control.get("label")],
-                                 key="checkout", rect=control.get("rect"), clear=True)
+                                 key="checkout", rect=control.get("rect"), clear=True, offer=offer)
         probe.update({k: v for k, v in clicked.items() if k not in ("origin", "cleared")}, via="checkout_cta")
         probe["overlays"] += clicked.get("cleared") or []
         if not clicked["executed"]:
@@ -1144,12 +1462,27 @@ class Crawl:
         probe["effect"] = effect
         if effect != "navigated":
             raise Stop("checkout_entry", "no_navigation")
-        self.entered()
+        record = self.entered()
+        if clicked.get("jev_fallback") and not self.arrived(record):  # Jev's control led elsewhere: no checkout
+            self.demote(record, "checkout_entry")
+            jev = next(p for p in reversed(cart["probes"]["jev_fallback"]) if p.get("purpose") == "checkout_entry")
+            jev["reason"] = probe["reason"] = "not_found"
+            raise Stop("checkout_entry", "checkout_cta_not_found")
 
-    def entered(self) -> None:
+    def entered(self) -> PageRecord:
+        """The page the checkout click opened, kept as checkout_entry; the lexicon's control (its label is the
+        evidence) keeps whatever page it opened, with a note when it is not classified as a checkout."""
         record = self.after_click("checkout_entry")
         if not self.guard.should_stop(_type(record)):
             record.setdefault("notes", []).append(f"checkout entry classified as {_type(record)}")
+        return record
+
+    def arrived(self, record: PageRecord) -> bool:
+        """The page Jev's checkout control opened is the checkout entry: the checkout page type, a checkout URL, or
+        an account gate (forms.login_required: a checkout that asks for an account first)."""
+        kind = _type(record)
+        return self.guard.should_stop(kind) or self.guard.is_checkout({"url": record.get("final_url") or ""}, kind) \
+            or bool((_audit(record).get("forms") or {}).get("login_required"))
 
     def guest_path(self, cart: PageRecord, audit: dict, probe: dict) -> str | None:
         """When the cart offers a guest path (forms.guest_option), take it as a first-time buyer would: one observed
@@ -1189,16 +1522,17 @@ class Crawl:
         return effect
 
 
-def discover_funnel(collector, settings, *, profile: str, guard, progress=None) -> tuple[list[PageRecord],
-                                                                                          list[NotAssessable]]:
+def discover_funnel(collector, settings, *, profile: str, guard, progress=None,
+                    jev_fallback: bool = False) -> tuple[list[PageRecord], list[NotAssessable]]:
     """Walk the funnel up to the deepest stage of settings.stages for one profile, inside collector's context.
 
     Returns (pages, not_assessable). Rejected listing or product candidates, failed loads and bot challenges are kept
     with stage "extra"; settings.repeats > 1 reloads the accepted home, listing and product pages
-    (PageRecord.repeat_of). An unexpected error ends the funnel with reason "error: ..." for the stages left. The tab
-    is closed before returning.
+    (PageRecord.repeat_of). jev_fallback: Jev picks the element of a lookup the lexicon missed (module docstring;
+    TYPESAFE_API_KEY needed); off, no request is ever made. An unexpected error ends the funnel with reason
+    "error: ..." for the stages left. The tab is closed before returning.
     """
-    crawl = Crawl(collector, settings, profile=profile, guard=guard, progress=progress)
+    crawl = Crawl(collector, settings, profile=profile, guard=guard, progress=progress, jev_fallback=jev_fallback)
     try:
         crawl.run()
     except Exception as exc:  # keep what was collected; the stages left get the error as their reason

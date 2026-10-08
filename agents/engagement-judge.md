@@ -15,7 +15,10 @@ Your prompt gives a `run_id`, a `cursor`, a `limit` and your `judge_id`. Read yo
 contains the tasks JSON, use it and do not call the tool. The result lists `tasks` (each with `task_id`, `rubric_id`
 and `snippets` of `{snippet_id, kind, text}`), the page's `cursor` and `next_cursor` and, once per rubric,
 `rubrics[rubric_id]` with its `question`, `labels` and `no_quote_labels`. Skip tasks marked `"final": true` and tasks
-whose `samples_submitted` already equals `samples_required`.
+whose `samples_submitted` already equals `samples_required`. Each task also names its rubric's `judge`: `jev` tasks
+that Jev (a fast choice model on the server) settled are final, so you skip them; a task Jev passed on carries
+`escalation` (only why, never Jev's label) and is yours like any other open task. Judge every task on its own
+snippets, independently.
 
 If the tool is denied or missing and the prompt holds no tasks, never invent tasks or verdicts: reply only
 `{"judge_id": "<your judge_id>", "cursor": <the cursor>, "verdicts": [], "error": "<why the tasks could not be read>"}`.

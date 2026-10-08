@@ -2,6 +2,8 @@
 
 Human output is Italian; --json prints the service's JSON instead. Journeys from the CLI use policy "typesafe"
 (TYPESAFE_API_KEY, plus TEXT_MODEL_API_KEY for text fields): host-driven journeys exist only through the MCP server.
+--judge jev (judge --backend jev) lets Jev judge the rubrics routed to it, one TypeSafe request per page; the tasks it
+leaves open (the perception rubrics and its escalations) wait for a Claude backend (judge --backend cli).
 Exit status: 0 on success, 1 when the run failed or a step could not be done, 2 for invalid arguments, 141 when
 the reader of the output went away (| head), 128 + the signal number when interrupted (130 Ctrl-C, 143 SIGTERM, 129
 SIGHUP): an interruption unwinds like Ctrl-C, so the browser is closed and the run marked failed (a journey
@@ -25,6 +27,9 @@ ORACLES = ("cart_contains_item_under_price", "cart_not_empty", "pdp_reached", "s
 NO_TYPESAFE = ("Il journey da CLI usa la policy typesafe e richiede TYPESAFE_API_KEY (più TEXT_MODEL_API_KEY per i "
                "campi di testo), in .env o nell'ambiente. I journey guidati dall'host (Claude Code) sono disponibili "
                "solo tramite il server MCP del plugin jev-engagement.")
+NO_JEV = ("Il giudice Jev (--judge jev, --backend jev) richiede TYPESAFE_API_KEY, in .env o nell'ambiente; senza, "
+          "usa un giudice Claude (cli, api, openai).")
+JUDGES = ("cli", "api", "openai", "jev")
 
 
 class Failure(Exception):
@@ -58,13 +63,17 @@ def _trap_signals() -> dict:
 
 
 def load_environment(path: Path | None = None) -> None:
-    """KEY=value lines of ./.env into the environment, without overriding what is already set."""
+    """KEY=value lines of ./.env (or path) into the environment, without overriding what is already set; an
+    "export " prefix and quotes around the whole value are dropped."""
     path = path or Path.cwd() / ".env"
     if path.is_file():
         for line in path.read_text(encoding="utf-8").splitlines():
             if "=" in line and not line.lstrip().startswith("#"):
                 key, value = line.split("=", 1)
-                os.environ.setdefault(key.strip(), value.strip())
+                key, value = key.strip().removeprefix("export ").strip(), value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                    value = value[1:-1]
+                os.environ.setdefault(key, value)
 
 
 def _choices(allowed):
@@ -148,8 +157,9 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--consent", choices=("auto", "reject", "accept", "none"), default="auto")
     audit.add_argument("--repeats", type=_integer(1, 5), default=1, help="caricamenti per pagina (mediane), 1-5")
     audit.add_argument("--max-pages", type=_integer(1))
-    audit.add_argument("--judge", choices=("none", "cli", "api", "openai"), default="none",
-                       help="giudizi LLM: cli = claude -p con l'abbonamento Claude")
+    audit.add_argument("--judge", choices=("none", *JUDGES), default="none",
+                       help="giudizi LLM: cli = claude -p con l'abbonamento Claude; jev = Jev (TypeSafe) sulle "
+                            "rubriche assegnate a Jev, un campione per task")
     audit.add_argument("--samples", type=_integer(1, 5), default=3, help="campioni per task di giudizio, 1-5")
     audit.add_argument("--judge-model", help="modello dei giudici")
     audit.add_argument("--journey-profile", choices=list(DEVICE_PROFILES), default="mobile")
@@ -160,7 +170,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     judge = sub.add_parser("judge", parents=[common], help="giudizi LLM sui task di una run di audit")
     judge.add_argument("run_id")
-    judge.add_argument("--backend", choices=("cli", "api", "openai"), default="cli")
+    judge.add_argument("--backend", choices=JUDGES, default="cli",
+                       help="jev: Jev (TypeSafe) sulle rubriche assegnate a Jev; poi cli/api/openai per il resto")
     judge.add_argument("--samples", type=_integer(1, 5), default=3, help="campioni per task di giudizio, 1-5")
     judge.add_argument("--model")
 
@@ -184,6 +195,12 @@ def _check(args, parser) -> None:
     """Option combinations argparse cannot express: an invalid one is an argument error (exit 2)."""
     if getattr(args, "chrome_arg", None) and args.browser not in ("auto", "launch"):
         parser.error("--chrome-arg vale solo per un Chromium lanciato (--browser auto o launch)")
+
+
+def _needs_jev(backend: str) -> None:
+    """The Jev judge needs TYPESAFE_API_KEY: refused before any audit or browser (exit 1)."""
+    if backend == "jev" and not os.environ.get("TYPESAFE_API_KEY"):
+        raise Failure(NO_JEV)
 
 
 def _transport_factory(args):
@@ -334,6 +351,7 @@ def _emit(args, result, printer) -> None:
 
 def _audit(args, parser) -> int:
     journey = _journey_options(args, parser)
+    _needs_jev(args.judge)
     service = _service(args)
     try:
         audited = service.audit_shop(args.url, args.profiles, args.stages, args.browser, args.locale, args.consent,
@@ -378,6 +396,11 @@ def _print_journey(result: dict) -> None:
     outcome = "superata" if passed else "non superata" if passed is False else "non valutabile"
     print(f"Journey {result['run_id']}: {JOURNEY_STATUS.get(result.get('status'), result.get('status'))}, "
           f"{result.get('steps')} passi, verifica indipendente {outcome}")
+    calls, timing = result.get("model_calls") or {}, result.get("timing_ms") or {}
+    if result.get("policy") == "typesafe" and calls:
+        text = result.get("text_helper") or "non disponibile (TEXT_MODEL_API_KEY assente: Jev non può scrivere)"
+        print(f"  pilota Jev: {calls.get('choose')} decisioni in {_num((timing.get('decision') or 0) / 1000, 2)} s "
+              f"(escluse dal tempo del sito), aiuto testuale {text}")
     for kpi, value in (result.get("friction") or {}).items():
         print(f"  {kpi:28} {_num(value, 2)}")
     print(f"  passi: {result.get('steps_path')}")
@@ -385,12 +408,31 @@ def _print_journey(result: dict) -> None:
 
 def _print_judgments(result: dict) -> None:
     final = result.get("finalize") or {}
+    if result.get("backend") == "jev":
+        _print_jev(result, final)
+        return
     samples = f"{result['samples']} {'campione' if result['samples'] == 1 else 'campioni'}"
     print(f"Giudizi ({result['backend']}, {result['model']}, {samples}): "
           f"{result['accepted']} verdetti accettati, {result['rejected_total']} scartati, "
           f"{final.get('decided', 0)} task decisi, {final.get('uncertain', 0)} incerti")
     for error in result.get("errors") or []:
         print(f"  errore del giudice: {error}")
+
+
+def _print_jev(result: dict, final: dict) -> None:
+    if not result.get("available"):
+        print(f"Giudizi Jev non disponibili: {NO_JEV}")
+        return
+    escalated = sum((result.get("escalated") or {}).values())
+    reasons = ", ".join(f"{reason} {n}" for reason, n in (result.get("escalated") or {}).items())
+    print(f"Giudizi (jev, {result['model']}, 1 campione): {result['accepted']} verdetti accettati, "
+          f"{escalated} task passati a Claude{f' ({reasons})' if reasons else ''}, {result['requests']} richieste "
+          f"TypeSafe in {_num(result['latency_ms'] / 1000, 2)} s, {final.get('decided', 0)} task decisi")
+    for error in result.get("errors") or []:
+        print(f"  errore del giudice: {error}")
+    if result.get("open_tasks"):
+        print(f"  {result['open_tasks']} task restano aperti (rubriche di percezione e passaggi a Claude): "
+              f"jev-engage judge {result['run_id']} --backend cli")
 
 
 def _journey(args, parser) -> int:
@@ -408,6 +450,7 @@ def _journey(args, parser) -> int:
 
 
 def _judge(args, parser) -> int:
+    _needs_jev(args.backend)
     service = _service(args)
     result = service.judge_with(args.run_id, args.backend, args.samples, model=args.model)
     _emit(args, result, _print_judgments)

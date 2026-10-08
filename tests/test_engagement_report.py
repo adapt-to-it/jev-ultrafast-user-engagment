@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from jev_ultrafast.engagement import report
+from jev_ultrafast import model as typesafe
+from jev_ultrafast.engagement import judges, judgments, report
 from jev_ultrafast.engagement.kpis import KPI_LIST
 from jev_ultrafast.engagement.scoring import load_anchors, score_run
 
@@ -70,9 +71,14 @@ def test_audit_report_content():
     assert data["headline"]["ers"] == overall["ers"]["score"] and data["headline"]["published"] is True
     assert data["headline"]["profiles"] == {
         p: s["ers"]["score"] for p, s in score_run(run)["profiles"].items()}
-    assert data["versions"] == {"schema": "engagement.v1", "anchors": "anchors.v1", "rubrics": "rubrics.v1",
+    assert data["versions"] == {"schema": "engagement.v1", "anchors": "anchors.v1", "rubrics": "rubrics.v2",
                                 "profiles": "profiles.v1", "report": "report.v1"}
-    assert data["judgments"] == {"tasks": 16, "verdicts": 48, "final": 16, "models": ["claude-sonnet-5-5"]}
+    # the golden run was judged without a TypeSafe key: Claude's three samples on every rubric, nothing escalated
+    assert data["judgments"] == {"tasks": 16, "verdicts": 48, "final": 16, "models": ["claude-sonnet-5-5"],
+                                 "by_model": {"claude-sonnet-5-5": 16}, "single_sample": 0, "escalated": 0,
+                                 "escalated_final": 0, "jev_kpis": [], "jev_models": [], "claude_kpis": sorted(
+                                     {t["kpi_id"] for t in run["judgments"]["tasks"]})}
+    assert data["model_calls"] == {} and "Richieste TypeSafe" not in html
     assert {r["kpi_id"] for r in data["not_assessable"] if r["kpi_id"]} == set()  # complete audit
     assert data["not_assessable"][0] == {"stage": "checkout_entry", "profile": "desktop", "kpi_id": None,
                                          "reason": "timeout"}
@@ -91,7 +97,7 @@ def test_audit_report_content():
     assert "preferisco pagare di più" in html and "Aggiungi Protezione spedizione" in html  # risk evidence
     assert "Confronto per profilo" in html and '<th class="num">desktop</th><th class="num">mobile</th>' in html
     assert "prefers-color-scheme: dark" in html
-    for version in ("anchors.v1", "rubrics.v1", "profiles.v1", "engagement.v1"):
+    for version in ("anchors.v1", "rubrics.v2", "profiles.v1", "engagement.v1"):
         assert version in html
     assert "Percorso dell'agente" not in html
     assert data["journeys"] == [] and data["caveats"] == {}
@@ -719,3 +725,145 @@ def test_known_warning_patterns_are_shown_in_italian(warning, text):
     run = load("audit_complete")
     run["warnings"] = [warning]
     assert report.e(text) in build(run)[1]
+
+
+# ---------------------------------------------------------------- Jev and Claude judges, Jev as pilot
+
+
+def jev_choice(ids, selected, p=0.9):
+    ids = list(ids)
+    rest = (1 - p) / (len(ids) - 1)
+    return {"choice": selected, "probabilities": {i: p if i == selected else rest for i in ids},
+            "confidence": (p - 1 / len(ids)) / (1 - 1 / len(ids))}
+
+
+def mixed_run(monkeypatch, tmp_path):
+    """The golden audit judged again: Jev answers its rubrics with the golden majority label (a request stand-in, no
+    network) and flips the reversed head on the golden's uncertain task, which Claude's three golden samples then
+    decide; Claude's rubrics keep their golden samples."""
+    run = load("audit_complete")
+    golden = run["judgments"]
+    finals = {f["task_id"]: f for f in golden["final"]}
+    run["judgments"] = {}
+
+    def post(url, key, body):
+        assert url == judges.SYSTEMONE and key == "test-key" and "https://" not in json.dumps(body["state"])
+        answers = {}
+        for qid, question in body["questions"].items():
+            kind, rubric, page, *label = qid.split(":")
+            final, labels = finals[f"{rubric}:{page}"], list(question["criteria"])
+            chosen = final["label"] or list(body["questions"][f"label:{rubric}:{page}"]["criteria"])[0]
+            if kind == "label":
+                answers[qid] = jev_choice(labels, chosen)
+            elif kind == "label_rev":
+                answers[qid] = jev_choice(labels, chosen if final["label"] else labels[0])
+            elif label == [chosen]:
+                answers[qid] = jev_choice(labels, (final["evidence"] or [{"snippet_id": labels[0]}])[0]["snippet_id"])
+        return {"model": "jev-1.13.0", "answers": answers, "usage": {"input_tokens": 900, "output_tokens": 0}}
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    monkeypatch.setenv("JEV_ENGAGEMENT_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setattr(typesafe, "post_json", post)
+    summary = judges.judge_with_jev(run, use_cache=False)
+    open_tasks = set(summary["finalize"]["pending"])
+    for judge_id in ("j1", "j2", "j3"):
+        mine = [v for v in golden["verdicts"] if v["judge_id"] == judge_id and v["task_id"] in open_tasks]
+        assert judgments.submit(run, judge_id, "claude-sonnet-5-5", mine, cache=False)["rejected"] == []
+    assert judgments.finalize(run)["pending"] == []
+    return run, summary
+
+
+def test_report_names_who_judged_with_jev_and_claude(monkeypatch, tmp_path):
+    run, summary = mixed_run(monkeypatch, tmp_path)
+    assert summary["requests"] == 4 and summary["escalated"] == {"position_flip": 1}  # four pages hold Jev tasks
+    data, html = build(run)
+    jev_kpis = ["DPR.HIDDEN_SUBSCRIPTION", "DPR.TRICK_QUESTIONS", "MPI.AUTHORITY", "MPI.SOCIAL_PROOF_RICH",
+                "TRI.RETURNS_CLARITY"]
+    assert data["judgments"] == {"tasks": 16, "verdicts": 10 + 6 * 3, "final": 16,
+                                 "models": ["claude-sonnet-5-5", "jev-1.13.0"],
+                                 "by_model": {"claude-sonnet-5-5": 6, "jev-1.13.0": 10}, "single_sample": 10,
+                                 "escalated": 1, "escalated_final": 1, "jev_kpis": jev_kpis,
+                                 "jev_models": ["jev-1.13.0"],
+                                 "claude_kpis": ["CCL.VALUE_PROP_CLARITY", "DPR.CONFIRMSHAMING"]}
+    assert data["model_calls"]["judge_jev"]["requests"] == 4 and "<p>Richieste TypeSafe: giudice Jev 4.</p>" in html
+    sentence = (f"I giudizi di {', '.join(jev_kpis)} sono scelte del modello TypeSafe Jev (jev-1.13.0) fra etichette "
+                "chiuse, con l'evidenza scelta fra gli snippet offerti e un controllo di stabilità a ordine invertito, "
+                "un campione per task; i giudizi di CCL.VALUE_PROP_CLARITY, DPR.CONFIRMSHAMING (e il task che Jev ha "
+                "passato a Claude) sono la maggioranza di più campioni dello stesso modello con lo stesso prompt, con "
+                "citazioni verificate parola per parola sul testo della pagina: la maggioranza controlla la "
+                "stabilità, non un accordo fra valutatori indipendenti. Modelli dei valutatori: claude-sonnet-5-5, "
+                "jev-1.13.0.")
+    assert report.e(sentence) in html and "che sono campioni dello stesso modello" not in html
+    rows = {(r["kpi_id"], r["page_id"]): r for r in judgments.observations_from_final(run) if r["source"] == "judged"}
+    assert rows[("MPI.SOCIAL_PROOF_RICH", "mobile-home-1")]["reason"] == "judgment_uncertain"  # Claude's samples
+    assert rows[("DPR.TRICK_QUESTIONS", "mobile-cart-1")]["value"] == 0.8  # one Jev sample: agreement 1.0
+    assert rows[("DPR.TRICK_QUESTIONS", "mobile-cart-1")]["evidence"]["models"] == ["jev-1.13.0"]
+    assert score_run(run)["overall"]["ers"]["llm_share"] > 0  # Jev's verdicts are judged rows like Claude's
+
+    only_jev = copy.deepcopy(run)  # no Claude final at all: the sentence ends after Jev's part
+    state = only_jev["judgments"]
+    claude = {t["task_id"] for t in state["tasks"] if judgments.routing(t) == "claude" or t.get("escalation")}
+    state["final"] = [f for f in state["final"] if f["task_id"] not in claude]
+    state["tasks"] = [t for t in state["tasks"] if t["task_id"] not in claude]
+    _, html = build(only_jev)
+    assert report.e("un campione per task. Modelli dei valutatori: claude-sonnet-5-5, jev-1.13.0.") not in html
+    assert report.e("ordine invertito, un campione per task. Modelli dei valutatori: jev-1.13.0.") in html
+
+    escalated_only = copy.deepcopy(run)  # Claude judged only Jev's escalation
+    state = escalated_only["judgments"]
+    state["final"] = [f for f in state["final"] if judgments.routing(
+        next(t for t in state["tasks"] if t["task_id"] == f["task_id"])) == "jev"]
+    _, html = build(escalated_only)
+    assert report.e("; il giudizio del task che Jev ha passato a Claude è la maggioranza di più campioni") in html
+
+    pending = copy.deepcopy(run)  # Claude has not judged yet: the escalation is pending, no Claude sample exists
+    state = pending["judgments"]
+    state["final"] = [f for f in state["final"] if f["task_id"] not in claude]
+    escalated = [t["task_id"] for t in state["tasks"] if t.get("escalation")]
+    state["verdicts"] = [v for v in state["verdicts"] if v["judge_id"] == judges.JEV_JUDGE_ID]
+    assert len(escalated) == 1 and escalated[0] not in {f["task_id"] for f in state["final"]}
+    data, html = build(pending)
+    assert (data["judgments"]["escalated"], data["judgments"]["escalated_final"]) == (1, 0)
+    assert report.e("ordine invertito, un campione per task. Modelli dei valutatori: jev-1.13.0.") in html
+    assert "passato a Claude" not in html and "maggioranza di più campioni" not in html
+    some = copy.deepcopy(run)  # Claude's rubrics decided, the escalation still pending: only Claude's KPIs named
+    state = some["judgments"]
+    state["final"] = [f for f in state["final"] if f["task_id"] not in escalated]
+    _, html = build(some)
+    assert report.e("; i giudizi di CCL.VALUE_PROP_CLARITY, DPR.CONFIRMSHAMING sono la maggioranza") in html
+    assert "passato a Claude" not in html
+
+
+def test_journey_card_names_the_pilot_and_its_decision_time():
+    run = load("journey_run")
+    _, html = build(run, steps=steps())
+    assert "pilota:" not in html  # a run recorded before model calls were persisted
+    run["journey"].update(policy="typesafe", policy_requested="auto", text_helper="deepseek-chat",
+                          model_calls={"choose": 7, "text": 1, "stale_or_refused": 1},
+                          timing_ms={"decision": 3240, "text": 410, "site": 12430, "wall": 18000},
+                          usage={"input_tokens": 61000, "output_tokens": 0})
+    data, html = build(run, steps=steps())
+    line = ("pilota: Jev (TypeSafe) · decisioni 7 (3,2 s, escluse dal tempo del sito) · testi generati 1, "
+            "deepseek-chat · tempo del sito 12,4 s")
+    assert f'<p class="muted">{report.e(line)}</p>' in html
+    assert data["journey"]["model_calls"]["choose"] == 7 and data["journey"]["policy_requested"] == "auto"
+    assert data["journey"]["timing_ms"]["site"] == 12430 and data["journey"]["text_helper"] == "deepseek-chat"
+    run["journey"].update(policy="host", text_helper=None, model_calls={"choose": 5, "text": 0}, timing_ms={})
+    _, html = build(run, steps=steps())
+    assert f'<p class="muted">{report.e("pilota: agente host · decisioni 5")}</p>' in html
+
+
+def test_text_helper_and_jev_fallback_reasons_are_shown_in_italian():
+    run = load("journey_run")
+    run["journey"]["verification"] = {"passed": None, "checks": {"oracle": "cart_not_empty",
+                                                                 "not_assessable": "text_helper_unavailable"}}
+    _, html = build(run, steps=steps())
+    assert "Verifica non valutabile: aiuto testuale non disponibile: TYPE_TEXT non offerto." in html
+    warning = "mobile: plp found through the Jev fallback: not reproducible across runs"
+    text = ("mobile: fase listing di categoria trovata con il fallback Jev (elemento scelto dal modello): non "
+            "riproducibile tra run diverse")
+    assert report.warning_text(warning) == text and report.warning_text("mobile: plp found through the Jev "
+                                                                        "fallback") == text
+    for code in ("jev_blocked", "jev_done", "jev_error", "no_click_actions", "fallback_exhausted"):
+        assert report.reason_label(code).startswith("fallback Jev")
+    assert report.reason_label("jev_" + "Dettaglio dinamico") == "fallback Jev: Dettaglio dinamico"  # f"jev_{op}"

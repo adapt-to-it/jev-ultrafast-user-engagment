@@ -1,7 +1,8 @@
 {
   "id": "social_proof",
-  "version": "rubrics.v1",
+  "version": "rubrics.v2",
   "kpi_id": "MPI.SOCIAL_PROOF_RICH",
+  "judge": "jev",
   "snippet_kinds": [
     "testimonial"
   ],

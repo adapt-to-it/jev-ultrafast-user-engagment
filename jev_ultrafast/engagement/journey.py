@@ -43,15 +43,30 @@ Agent a guarded view of one tab in an isolated browser context with the device p
 - The Agent's no-progress stop (three actions in a row that changed nothing) ends a typesafe run (blocked: the only
   brake on a model looping on a dead control). The host owns DONE and BLOCKED: it is told in the next observation's
   guard notes and chooses again, within the step budget, so repeated dead clicks stay countable (FAI.RAGE_EVENTS).
+- Policy "typesafe" is the Jev loop as it is (Agent + model.choose, one request per decision); TYPE_TEXT values come
+  from the text LLM (model.field_text). Without TEXT_MODEL_API_KEY no text is guessed and no text request is sent:
+  TYPE_TEXT stays offered, and when Jev chooses it the Agent's text policy refuses before any input (a refused
+  TYPE_TEXT attempt in steps.jsonl, note TEXT_WITHHELD, warning text_helper_unavailable); fill actions are then
+  withheld from Jev for the rest of the run. journey["text_helper"] names the text model (text_model(); None: no key;
+  "host": the host types its own text).
 - finish() verifies the outcome with an independent oracle (oracles.py) on the actual page state, never on DONE,
   stores the friction observations (friction.py) in the run and always releases the context, the transport and a
   Chromium it launched. A host ends a running journey as "done" or "blocked" only; the other statuses are the
   runner's. Without a passing oracle a journey is not assessable (its failure is not the site's) when it ended in an
   error (harness, credentials, model provider: journey_error), on a page the browser did not load (navigation_error:
   DNS, TLS, a proxy or a dead host end on the same page and the run cannot tell which; the net error is recorded,
-  repeats are the remedy; a start page that never loaded leaves the run failed), or after the guard withheld
-  controls of a page audit.js could not read (page_unreadable); nor is an outcome the oracle cannot read without a
-  guess.
+  repeats are the remedy; a start page that never loaded leaves the run failed), after the guard withheld controls
+  of a page audit.js could not read (page_unreadable), or after Jev chose TYPE_TEXT and no text helper could write
+  it (text_helper_unavailable: the oracle failed; a keyless run whose pilot never chose to type is assessed as any
+  other); nor is an outcome the oracle cannot read without a guess (the oracle's own reason stays).
+- finish() (close() for an abandoned run) stores what deciding cost: journey["model_calls"] {choose: decisions
+  (TypeSafe requests answered with a valid choice, or host choices), text: text helper calls (0 for the host),
+  stale_or_refused: decisions that went stale or were refused before input (the guard, a withheld TYPE_TEXT; DONE,
+  BLOCKED and a failed text helper call are not counted), failed: TypeSafe calls that ended without a valid decision
+  (an HTTP or connection error after post_json's own retries, which are not seen, or an invalid answer), model: the
+  TypeSafe model of the latest decision (typesafe only)}, journey["timing_ms"] {decision, text, site: execution +
+  settle of the executed steps, wall: start() to the end} and journey["usage"] (TypeSafe tokens summed; {} for the
+  host).
 
 Time attributed to the site is page-side (vitals.js clock): execution plus settle per step. The execution clock starts
 after the harness's freshness check (a snapshot.js read), right before the input is dispatched. Decision latency
@@ -134,6 +149,8 @@ FINISH_JS = "[performance.timeOrigin, location.href]"
 NO_PROGRESS = "no progress: three actions in a row changed nothing; choose another element or BLOCKED"
 UNREAD = ("page type unknown (the page audit failed): handled as a checkout page, only links away, scrolling and "
           "waiting are offered")
+TEXT_WITHHELD = "TYPE_TEXT withheld: no text helper key (TEXT_MODEL_API_KEY) on the server"
+TEXT_HELPER = "deepseek-chat"  # model.field_text's default TEXT_MODEL (pinned by an offline test)
 DRAINED = ("Page.", "Network.", "Runtime.", "Log.")  # Target.* events stay for the collector's frame watcher
 LONG_LIVED = ("EventSource", "WebSocket")
 FIELDS = ("fill", "select")  # what can make a page a checkout without a URL change: its form fields
@@ -141,6 +158,15 @@ FIELDS = ("fill", "select")  # what can make a page a checkout without a URL cha
 
 class GuardRefused(Exception):
     """CheckoutGuard refused an action right before input; nothing was executed."""
+
+
+class _TextWithheld(Exception):
+    """Jev chose TYPE_TEXT in a typesafe run without a text helper: no value is asked for or guessed, nothing typed.
+    Its message is TEXT_WITHHELD; label names the field Jev chose."""
+
+    def __init__(self, label: str):
+        super().__init__(TEXT_WITHHELD)
+        self.label = label
 
 
 class _NotVerified(Exception):
@@ -170,6 +196,18 @@ def _read_key(page: dict) -> tuple:
     fields = frozenset((a.get("kind"), " ".join(str(a.get("label") or "").split()))
                        for a in page.get("actions") or [] if a.get("kind") in FIELDS)
     return page.get("url"), _document(page), fields
+
+
+def text_model() -> str | None:
+    """The model model.field_text sends TYPE_TEXT requests to (TEXT_MODEL, default TEXT_HELPER, read as field_text
+    reads it), or None without TEXT_MODEL_API_KEY: no value is then asked for and none is guessed."""
+    return os.environ.get("TEXT_MODEL", TEXT_HELPER) if os.environ.get("TEXT_MODEL_API_KEY") else None
+
+
+def _tokens(decisions: list[dict], key: str) -> int | float:
+    """A usage count (TypeSafe input_tokens / output_tokens) summed over decisions; missing values count 0."""
+    values = [(d.get("usage") or {}).get(key) for d in decisions]
+    return sum(v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool))
 
 
 def personal_text(text: str | None) -> str | None:
@@ -367,6 +405,12 @@ class JourneyRunner:
         self._audited: tuple | None = None  # the _read_key() of the latest page type read
         self._unread = False  # the latest observation's audit failed: its page is handled as a checkout page
         self._withheld = False  # controls the guard would otherwise allow were withheld on an unread page
+        self._text_helper: str | None = None  # where TYPE_TEXT values come from (journey["text_helper"])
+        self._text_withheld = False  # Jev chose TYPE_TEXT without a text helper: fills withheld from then on
+        self._choices: list[dict] = []  # the host's validated choices (HostPolicy.last): its decisions
+        self._idle = 0  # decisions that went stale or were refused before input (_log_attempt)
+        self._failed = 0  # TypeSafe calls that ended without a valid decision (model_calls.failed)
+        self._clock: float | None = None  # time.monotonic() at start(): timing_ms.wall
         self._notes: list[str] = []
         self._boundary = False
         self._challenge = False  # an anti-bot page: no evasion, the journey is not assessable
@@ -416,22 +460,30 @@ class JourneyRunner:
             if parts is None or parts.scheme not in ("http", "https") or not parts.hostname:
                 raise ValueError(f"Expected an http(s) start URL, got {url!r}")
             self.policy = policy
+            # typesafe: model.field_text writes TYPE_TEXT values (None without its key: a chosen TYPE_TEXT is refused);
+            # host: the host supplies each value itself
+            self._text_helper = text_model() if policy == "typesafe" else HostPolicy.model
             self.run_id = self.store.new_run("journey", url, self._settings_record(profile))
+            self._clock = time.monotonic()
             self.journey = {
                 "goal": goal.strip(), "oracle": oracle, "oracle_params": params, "profile": profile, "policy": policy,
                 "max_steps": max_steps, "status": "running", "verification": None, "steps_path": "steps.jsonl",
                 "optimal_steps": optimal_steps, "optimal_pages": optimal_pages, "started_at": iso_now(),
-                "finished_at": None,
+                "finished_at": None, "text_helper": self._text_helper,
             }
             self.store.update(self.run_id, lambda run: run.update(journey=dict(self.journey), status="running"))
             self.status = "running"
             try:
                 self._launch(url, profile)
                 self.host = HostPolicy() if policy == "host" else None
-                # TypeSafe is looked up at call time: model.choose through the Agent's module, like the Agent does
-                chooser = self.host or (lambda page, goal, history: agent_loop.choose(page, goal, history))
-                self.agent = Agent(url, goal, browser=self.proxy, policy=self._gated(chooser),
-                                   text_policy=self.host.text if self.host else None)
+                if self.host is not None:
+                    text_policy = self.host.text
+                elif self._text_helper is None:  # TYPE_TEXT stays offered; a chosen one is refused before any input
+                    text_policy = self._withhold_text
+                else:
+                    text_policy = None  # model.field_text, as the Agent uses it
+                self.agent = Agent(url, goal, browser=self.proxy, policy=self._gated(self.host or self._jev),
+                                   text_policy=text_policy)
             except BaseException as exc:
                 self._error(exc)
                 self._close()
@@ -494,6 +546,7 @@ class JourneyRunner:
                 if self.status == "running":
                     self.status = "error"
                     self._warn("closed before finish(): no verification")
+                self.journey.update(self._costs())
                 self._save(run_status="partial")
                 self._result = {"run_id": self.run_id, "status": self.status, "verification": None}
 
@@ -557,6 +610,7 @@ class JourneyRunner:
                 return {"executed": False, "stale": True, "refused": None, "page_changed": None,
                         "step_metrics": None, "status": self.status, "observation": self.observation()}
             self.host.set(operation, target, text, observation_id=observation_id)
+            self._choices.append(dict(self.host.last))  # a host decision (model_calls.choose, timing_ms.decision)
             self.agent.pending_text = None  # the host supplies each value: no cached text from a stale attempt
             return self._step()
 
@@ -623,6 +677,9 @@ class JourneyRunner:
                     reason = "navigation_error"
                 elif self._withheld and verification["passed"] is False:  # the guard withheld controls (unread page)
                     reason = "page_unreadable"
+                elif self._text_withheld and verification["passed"] is False:
+                    # Jev chose TYPE_TEXT and nothing could be typed; an unreadable outcome keeps the oracle's reason
+                    reason = "text_helper_unavailable"
             if reason:
                 if verification["passed"] is False:
                     checks["oracle_passed"] = False
@@ -634,7 +691,7 @@ class JourneyRunner:
             observations = friction.metrics(steps, optimal_steps=self.journey.get("optimal_steps"),
                                             optimal_pages=self.journey.get("optimal_pages"), success=passed,
                                             profile=self.journey["profile"], unverified=unverified)
-            self.journey.update(verification=verification, finished_at=iso_now())
+            self.journey.update(verification=verification, finished_at=iso_now(), **self._costs())
             if self._start_failed and self._executed == 0 and passed is not True:
                 run_status = "failed"  # the start page never loaded: nothing of the shop was measured
             else:
@@ -705,8 +762,12 @@ class JourneyRunner:
                 self._log_attempt(stale=True, note=f"{exc}: the page changed since the observation; nothing ran")
         except StalePage as exc:
             return self._recover(exc, stale=True)["stale"], None
-        except GuardRefused as exc:
-            self._log_attempt(guard_blocked=True, note=f"refused by the checkout guard: {exc}")
+        except (GuardRefused, _TextWithheld) as exc:
+            withheld = isinstance(exc, _TextWithheld)  # Jev chose TYPE_TEXT and no text helper can write it
+            self._log_attempt(guard_blocked=True,
+                              note=str(exc) if withheld else f"refused by the checkout guard: {exc}")
+            if withheld:  # logged first: the record names the field Jev chose
+                self._withhold_fills(exc.label)
             agent.state["status"] = "ready"
             self._stale_run += 1
             if self.policy == "typesafe" and self._stale_run >= MAX_STALE:
@@ -717,7 +778,7 @@ class JourneyRunner:
             self._recover(exc, stale=False)
         except ValueError as exc:
             if self._pending is None and not self._ran():
-                # budgets, an invalid model answer, a missing text credential: nothing executed
+                # budgets, an invalid model or text-helper answer: nothing executed
                 budget = len(agent.state["decisions"]) >= MAX_STEPS * 2 or len(agent.state["history"]) >= MAX_STEPS
                 self.status = "budget_exhausted" if budget else "error"
                 self._warn(f"stopped: {exc}")
@@ -752,6 +813,32 @@ class JourneyRunner:
                 raise _Stopped(reason)
             return policy(page, goal, history)
         return decide
+
+    def _jev(self, page: dict, goal: str, history: list) -> dict:
+        """TypeSafe as the Agent's policy: model.choose, looked up at call time through the Agent's module like the
+        Agent does. A call that ends without a valid decision is counted (model_calls.failed), then raised as is."""
+        try:
+            return agent_loop.choose(page, goal, history)
+        except Exception:
+            self._failed += 1
+            raise
+
+    def _withhold_text(self, context: dict):
+        """The Agent's text policy in a typesafe run without TEXT_MODEL_API_KEY: called after the Agent's freshness
+        check and before any input, it refuses (no value is asked for or guessed, nothing is typed)."""
+        raise _TextWithheld(str((context.get("field") or {}).get("label") or ""))
+
+    def _withhold_fills(self, label: str) -> None:
+        """After Jev chose TYPE_TEXT with no text helper: fill actions are removed from the current page in place (it
+        stays fresh, so the next request on it offers no TYPE_TEXT) and from every later observation (_observe)."""
+        page = self.agent.state["page"]
+        page["actions"] = [a for a in page.get("actions") or [] if a.get("kind") != "fill"]
+        self._notes.insert(0, TEXT_WITHHELD)
+        if not self._text_withheld:
+            self._text_withheld = True
+            self._warn(f"text_helper_unavailable: Jev chose TYPE_TEXT into '{label[:80]}' on "
+                       f"{str(page.get('url') or '')[:200]}; no TEXT_MODEL_API_KEY: nothing typed, fill actions "
+                       "withheld from here on")
 
     def _stop_checks(self) -> None:
         """The run stops by itself on an anti-bot page, at the checkout boundary (on any site), on another site, on a
@@ -904,6 +991,10 @@ class JourneyRunner:
         self._broken = None if web else url  # chrome-error:// and the like: the page did not load, nothing to leave
         if self._broken is not None:
             self._watch(self.transport.events(self.tab.session, "Network."))  # the failed request, if not seen yet
+        if self._text_withheld and any(a.get("kind") == "fill" for a in kept):
+            # Jev chose TYPE_TEXT and no text helper could write it (_withhold_fills): not offered again
+            kept = [a for a in kept if a.get("kind") != "fill"]
+            notes.insert(0, TEXT_WITHHELD)
         if self._left is not None:
             notes.insert(0, f"left the shop for {url[:120]}: the journey stopped here")
         elif self._broken is not None:
@@ -1225,6 +1316,29 @@ class JourneyRunner:
         text_ms = sum(t.get("latency_ms") or 0 for t in texts)
         return None if latency is None and not texts else round((latency or 0) + text_ms, 1)
 
+    def _costs(self) -> dict:
+        """What deciding cost, kept apart from the site's time: model_calls, timing_ms and usage of the journey record.
+        typesafe: the Agent's decisions (one TypeSafe request each), the TypeSafe calls that failed, the model of the
+        latest decision and the text helper calls; host: its validated choices, no text model call and no token
+        usage. stale_or_refused: the decisions _log_attempt logged (stale, or refused before input)."""
+        state = self.agent.state if self.agent is not None else {}
+        host = self.host is not None
+        decisions = self._choices if host else state.get("decisions") or []
+        texts = [] if host else state.get("text_calls") or []
+        site = sum(float(s.get("execution_ms") or 0.0) + float(s.get("settle_ms") or 0.0)
+                   for s in self.steps if friction.executed(s))
+        usage = {} if host else {key: _tokens(decisions, key) for key in ("input_tokens", "output_tokens")}
+        calls = {"choose": len(decisions), "text": len(texts), "stale_or_refused": self._idle, "failed": self._failed}
+        if not host:  # the versioned model TypeSafe answered with (the report's pilot line), e.g. "jev-1.13.0"
+            calls["model"] = decisions[-1].get("model") if decisions else None
+        return {
+            "model_calls": calls,
+            "timing_ms": {"decision": round(sum(d.get("latency_ms") or 0 for d in decisions)),
+                          "text": round(sum(t.get("latency_ms") or 0 for t in texts)), "site": round(site),
+                          "wall": round((time.monotonic() - self._clock) * 1000) if self._clock is not None else None},
+            "usage": usage,
+        }
+
     def _metrics(self, step: dict) -> dict:
         since = step.get("since") or {}
         keys = ("first_response_ms", "first_request_ms", "mutations", "navigations", "requests", "errors",
@@ -1249,7 +1363,10 @@ class JourneyRunner:
                    "guard_notes": []})
 
     def _log_attempt(self, *, stale: bool = False, guard_blocked: bool = False, note: str = "") -> None:
-        """A decision that executed nothing (stale page or guard refusal): logged, not counted as a step."""
+        """A decision that executed nothing (a stale page, a guard refusal, a TYPE_TEXT withheld for want of a text
+        helper): logged, not counted as a step; model_calls.stale_or_refused counts it once a choice was made."""
+        if self.host is not None or self._attempt.get("decision") is not None:  # a choice was made (a request paid)
+            self._idle += 1
         decision = self._decision()
         page = self.agent.state["page"]
         action = next((a for a in page.get("actions") or [] if a.get("id") == decision.get("choice")), {})
@@ -1279,7 +1396,8 @@ class JourneyRunner:
         def update(run):
             if not_assessable:
                 run.setdefault("not_assessable", []).append(not_assessable)
-            run["journey"] = {k: v for k, v in self.journey.items() if k != "notes"}
+            # merged: keys another writer added (the service's policy_requested) stay
+            run["journey"] = {**(run.get("journey") or {}), **{k: v for k, v in self.journey.items() if k != "notes"}}
             run["warnings"] = list(dict.fromkeys([*run.get("warnings", []), *notes]))
             if run_status:
                 run["status"] = run_status
