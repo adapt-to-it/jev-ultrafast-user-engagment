@@ -1,0 +1,29 @@
+{
+  "id": "authority",
+  "version": "rubrics.v2",
+  "kpi_id": "MPI.AUTHORITY",
+  "judge": "jev",
+  "snippet_kinds": [
+    "authority"
+  ],
+  "stages": null,
+  "grouping": {
+    "per": "page",
+    "max_snippets": 8
+  },
+  "question": "Gli snippet contengono segnali di autorità verificabili, come certificazioni, premi, citazioni della stampa, approvazioni di esperti o di enti, identificativi regolatori? Scegli una sola etichetta secondo le descrizioni. Se l'etichetta non è 'absent', copia in evidence il segnale esatto, carattere per carattere, con il suo snippet_id.",
+  "labels": {
+    "present": "Almeno un segnale specifico e verificabile: nome dell'ente certificatore, del premio, della testata o dell'esperto, oppure un numero di certificazione.",
+    "weak": "Solo affermazioni generiche di autorevolezza senza nomi o riferimenti verificabili ('qualità certificata', 'scelto dagli esperti').",
+    "absent": "Nessun segnale di autorità negli snippet."
+  },
+  "no_quote_labels": [
+    "absent"
+  ],
+  "absent_when_no_snippets": true,
+  "values": {
+    "present": "present",
+    "weak": "weak",
+    "absent": "absent"
+  }
+}

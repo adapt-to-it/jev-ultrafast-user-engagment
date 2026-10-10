@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cassa | Passo Svelto</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="shop.css">
+</head>
+<!-- Account gate fixture "site2": a returning-customer login box beside the delivery form. The delivery form is the
+     way in for a new customer, so this is no gate (login_required false) although the login password is required. -->
+<body>
+  <header class="site-header">
+    <div class="bar"><a class="logo" href="index.html">Passo Svelto</a> <a href="cart.html">Torna al carrello</a></div>
+  </header>
+  <main class="wrap" id="main">
+    <h1>Cassa</h1>
+    <div class="layout">
+      <section class="login-box">
+        <h2>Sei già cliente? Accedi</h2>
+        <form method="post" action="/account/login">
+          <label>Email <input type="email" name="login_email" autocomplete="username" required></label>
+          <label>Password <input type="password" name="login_password" autocomplete="current-password" required></label>
+          <p><a href="/account/password">Password dimenticata?</a></p>
+          <button class="btn btn-secondary" type="submit">Accedi</button>
+        </form>
+      </section>
+      <section>
+        <h2>Dati di spedizione</h2>
+        <form method="post" action="/cassa/spedizione">
+          <label>Email <input type="email" name="email" autocomplete="email" required></label>
+          <label>Nome <input name="nome" autocomplete="given-name" required></label>
+          <label>Cognome <input name="cognome" autocomplete="family-name" required></label>
+          <label>Indirizzo <input name="indirizzo" autocomplete="address-line1" required></label>
+          <label>CAP <input name="cap" autocomplete="postal-code" required></label>
+          <label>Città <input name="citta" autocomplete="address-level2" required></label>
+          <label>Telefono <input type="tel" name="telefono" autocomplete="tel" required></label>
+          <button class="btn btn-primary" type="submit">Continua</button>
+        </form>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

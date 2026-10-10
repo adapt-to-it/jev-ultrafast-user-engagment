@@ -1,0 +1,35 @@
+{
+  "id": "hidden_subscription",
+  "version": "rubrics.v2",
+  "kpi_id": "DPR.HIDDEN_SUBSCRIPTION",
+  "judge": "jev",
+  "snippet_kinds": [
+    "subscription",
+    "fee_line",
+    "cta"
+  ],
+  "stages": [
+    "pdp",
+    "cart",
+    "checkout_entry"
+  ],
+  "grouping": {
+    "per": "page",
+    "max_snippets": 8
+  },
+  "question": "Gli snippet rivelano un addebito ricorrente (abbonamento, membership, rinnovo automatico, prova gratuita che diventa a pagamento) mentre una CTA o una voce di costo presenta lo stesso acquisto come gratuito o come pagamento singolo? Giudica solo il testo degli snippet: posizione ed evidenza grafica non sono note. Scegli una sola etichetta secondo le descrizioni. Se scegli 'present', copia in evidence il passaggio esatto che rivela l'addebito ricorrente, carattere per carattere, con il suo snippet_id.",
+  "labels": {
+    "present": "Un testo di abbonamento o una voce di costo rivela un addebito ricorrente o un rinnovo automatico, mentre una CTA o una voce di costo presenta lo stesso acquisto come gratuito o con un prezzo senza frequenza, senza dichiarare importo e frequenza dell'addebito ricorrente (per esempio una voce 'prova gratuita 0,00 €' insieme a 'poi 9,99 €/mese con rinnovo automatico').",
+    "absent": "Gli snippet non contengono alcuna formulazione di addebito ricorrente (abbonamento, membership, rinnovo automatico, prova che diventa a pagamento), oppure la CTA o la voce di costo stessa dichiara importo e frequenza dell'addebito ricorrente (per esempio 'Abbonati a 9,99 €/mese'). Una CTA di acquisto semplice come 'Aggiungi al carrello' da sola vale 'absent'.",
+    "unclear": "Compare una formulazione che potrebbe indicare un addebito ricorrente, ma gli snippet non bastano per stabilire se esiste o se l'acquisto è presentato come gratuito o singolo, per esempio perché nessuna CTA o voce di costo lo presenta."
+  },
+  "no_quote_labels": [
+    "absent",
+    "unclear"
+  ],
+  "values": {
+    "present": 0.8,
+    "absent": 0.0,
+    "unclear": null
+  }
+}

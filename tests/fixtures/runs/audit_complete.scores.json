@@ -1,0 +1,2473 @@
+{
+ "overall": {
+  "dpr": 99.09,
+  "dpr_coverage": [
+   1.0,
+   9,
+   9
+  ],
+  "ers": {
+   "coverage": 1.0,
+   "grade": "A",
+   "limiting_factor": "FAI",
+   "llm_share": 0.1,
+   "published": true,
+   "reason": null,
+   "score": 56.0
+  },
+  "kpis": {
+   "CCL.CHOICE_SUPPORT": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "CCL.CTA_SALIENCE": [
+    58,
+    63.33,
+    true,
+    true,
+    null,
+    "mobile"
+   ],
+   "CCL.FORM_LABELS": [
+    92.9,
+    71.6,
+    true,
+    true,
+    null,
+    null
+   ],
+   "CCL.HEADINGS": [
+    false,
+    0.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "CCL.INFO_SCENT_GENERIC": [
+    12.5,
+    63.75,
+    true,
+    true,
+    null,
+    null
+   ],
+   "CCL.PRIMARY_CTA_COUNT": [
+    1,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "CCL.READABILITY": [
+    58,
+    54.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "CCL.VALUE_PROP_CLARITY": [
+    "clear",
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "CCL.VISUAL_COMPLEXITY": [
+    48,
+    76.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "DPR.CONFIRMSHAMING": [
+    0.8,
+    null,
+    true,
+    true,
+    null,
+    null
+   ],
+   "DPR.CONSENT_ASYMMETRY": [
+    0.7,
+    null,
+    true,
+    true,
+    null,
+    null
+   ],
+   "DPR.COUNTDOWN_RESET": [
+    0.9,
+    null,
+    true,
+    true,
+    null,
+    null
+   ],
+   "DPR.FAKE_LOW_STOCK": [
+    0.3,
+    null,
+    true,
+    true,
+    null,
+    null
+   ],
+   "DPR.HIDDEN_SUBSCRIPTION": [
+    0.533,
+    null,
+    true,
+    true,
+    null,
+    null
+   ],
+   "DPR.NAGGING_OVERLAYS": [
+    0,
+    null,
+    true,
+    true,
+    null,
+    null
+   ],
+   "DPR.PRECHECKED_PAID_ADDONS": [
+    1,
+    null,
+    true,
+    true,
+    null,
+    null
+   ],
+   "DPR.SNEAK_INTO_BASKET": [
+    0,
+    null,
+    true,
+    true,
+    null,
+    null
+   ],
+   "DPR.TRICK_QUESTIONS": [
+    0.533,
+    null,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.A11Y_BASIC": [
+    3.5,
+    72.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.ACTIONS_RATIO": [
+    null,
+    null,
+    false,
+    false,
+    "no_journey",
+    null
+   ],
+   "FAI.ACTIONS_TO_GOAL": [
+    null,
+    null,
+    false,
+    false,
+    "no_journey",
+    null
+   ],
+   "FAI.AUTOCOMPLETE_ATTRS": [
+    57.1,
+    57.1,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.BACKTRACK_RATE": [
+    null,
+    null,
+    false,
+    false,
+    "no_journey",
+    null
+   ],
+   "FAI.BREADCRUMBS": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.CART_EDITABLE": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.CHECKOUT_FIELDS": [
+    14,
+    37.02,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.DEAD_CLICK_RATE": [
+    null,
+    null,
+    false,
+    false,
+    "no_journey",
+    null
+   ],
+   "FAI.FORCED_ACCOUNT": [
+    true,
+    0.0,
+    true,
+    true,
+    null,
+    "mobile"
+   ],
+   "FAI.GUEST_CHECKOUT": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.JOURNEY_SUCCESS": [
+    null,
+    null,
+    false,
+    false,
+    "no_journey",
+    null
+   ],
+   "FAI.LOSTNESS": [
+    null,
+    null,
+    false,
+    false,
+    "no_journey",
+    null
+   ],
+   "FAI.OVERLAY_COVERAGE": [
+    42,
+    44.0,
+    true,
+    true,
+    null,
+    "mobile"
+   ],
+   "FAI.OVERLAY_INTERRUPTIONS": [
+    2,
+    50.0,
+    true,
+    true,
+    null,
+    "mobile"
+   ],
+   "FAI.PDP_CTA_ABOVE_FOLD": [
+    false,
+    0.0,
+    true,
+    true,
+    null,
+    "mobile"
+   ],
+   "FAI.PDP_VARIANT_SELECTOR": [
+    "buttons",
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.PLP_FILTERS": [
+    2,
+    40.0,
+    true,
+    true,
+    null,
+    "mobile"
+   ],
+   "FAI.PLP_PAGINATION": [
+    "load_more",
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.PLP_RESULT_COUNT": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.PLP_SORT": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.RAGE_EVENTS": [
+    null,
+    null,
+    false,
+    false,
+    "no_journey",
+    null
+   ],
+   "FAI.SEARCH_AUTOCOMPLETE": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.SEARCH_VISIBLE": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.SEARCH_WIDTH": [
+    340,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.TARGET_SIZE_24": [
+    92.5,
+    90.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.TARGET_SIZE_44": [
+    55,
+    50.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.TIME_ON_TASK_SITE": [
+    null,
+    null,
+    false,
+    false,
+    "no_journey",
+    null
+   ],
+   "FAI.UNEXPECTED_NAV": [
+    null,
+    null,
+    false,
+    false,
+    "no_journey",
+    null
+   ],
+   "MPI.AUTHORITY": [
+    "present",
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "MPI.RECIPROCITY": [
+    2,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "MPI.SCARCITY_SIGNALS": [
+    1,
+    80.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "MPI.SOCIAL_PROOF_RICH": [
+    "rich",
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "MPI.URGENCY_SIGNALS": [
+    1,
+    30.0,
+    true,
+    true,
+    "credit_withheld:DPR.COUNTDOWN_RESET",
+    null
+   ],
+   "PERF.ACTION_RESPONSE_MS": [
+    null,
+    null,
+    false,
+    false,
+    "no_journey",
+    null
+   ],
+   "PERF.BYTES_JS": [
+    615,
+    64.0,
+    true,
+    true,
+    null,
+    "desktop"
+   ],
+   "PERF.BYTES_TOTAL": [
+    2250,
+    71.11,
+    true,
+    true,
+    null,
+    "desktop"
+   ],
+   "PERF.CLS": [
+    0.05,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "PERF.CLS_POST_INPUT": [
+    null,
+    null,
+    false,
+    false,
+    "no_journey",
+    null
+   ],
+   "PERF.CONSOLE_ERRORS": [
+    3,
+    60.0,
+    true,
+    true,
+    null,
+    "mobile"
+   ],
+   "PERF.FCP": [
+    1800,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "PERF.HTTP_ERRORS": [
+    1,
+    80.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "PERF.IMG_OVERSIZED": [
+    2.5,
+    66.67,
+    true,
+    true,
+    null,
+    "desktop"
+   ],
+   "PERF.INP_SYNTH": [
+    null,
+    null,
+    false,
+    false,
+    "no_journey",
+    null
+   ],
+   "PERF.LCP": [
+    2900,
+    86.67,
+    true,
+    true,
+    null,
+    "mobile"
+   ],
+   "PERF.LOAF_COUNT": [
+    2,
+    73.33,
+    true,
+    true,
+    null,
+    "mobile"
+   ],
+   "PERF.REQUESTS": [
+    76,
+    59.47,
+    true,
+    true,
+    null,
+    "desktop"
+   ],
+   "PERF.TBT_APPROX": [
+    380,
+    77.5,
+    true,
+    true,
+    null,
+    "mobile"
+   ],
+   "PERF.THIRD_PARTY_SHARE": [
+    32.5,
+    79.17,
+    true,
+    true,
+    null,
+    "desktop"
+   ],
+   "PERF.TTFB": [
+    650,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "PTI.FREE_SHIPPING_THRESHOLD": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "PTI.FUNNEL_PRICE_DELTA": [
+    3.2,
+    51.0,
+    true,
+    true,
+    null,
+    "mobile"
+   ],
+   "PTI.PRICE_JSONLD_MATCH": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "PTI.PRICE_VISIBLE_PDP": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "PTI.SHIPPING_COST_PRE_CHECKOUT": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "PTI.STRIKETHROUGH_LOWEST30": [
+    null,
+    null,
+    false,
+    false,
+    "not_applicable: nessun prezzo barrato",
+    null
+   ],
+   "PTI.UNEXPLAINED_FEES": [
+    1,
+    40.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "PTI.VAT_STATED": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.CONTACT_INFO": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.DELIVERY_TIME_STATED": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.HTTPS": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.JSONLD_RETURN_POLICY": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.JSONLD_SHIPPING": [
+    false,
+    0.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.LEGAL_ID": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.MIXED_CONTENT": [
+    0,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.PAYMENT_LOGOS": [
+    4,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.POLICY_LINKS": [
+    3,
+    75.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.RATING_BAND": [
+    "4.0-4.7",
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.RETURNS_CLARITY": [
+    "clear",
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.REVIEWS_PRESENT": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "TRI.REVIEW_COUNT": [
+    37,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ]
+  },
+  "signals": [
+   [
+    "DPR.COUNTDOWN_RESET",
+    0.9
+   ],
+   [
+    "DPR.PRECHECKED_PAID_ADDONS",
+    1
+   ],
+   [
+    "DPR.CONFIRMSHAMING",
+    0.8
+   ],
+   [
+    "DPR.HIDDEN_SUBSCRIPTION",
+    0.533
+   ],
+   [
+    "DPR.TRICK_QUESTIONS",
+    0.533
+   ],
+   [
+    "DPR.CONSENT_ASYMMETRY",
+    0.7
+   ],
+   [
+    "DPR.FAKE_LOW_STOCK",
+    0.3
+   ]
+  ],
+  "sub_indices": {
+   "CCL": {
+    "coverage": 1.0,
+    "grade": "A",
+    "limiting_kpis": [
+     "CCL.HEADINGS",
+     "CCL.READABILITY",
+     "CCL.CTA_SALIENCE"
+    ],
+    "llm_share": 0.19,
+    "score": 74.4
+   },
+   "FAI": {
+    "coverage": 1.0,
+    "grade": "A",
+    "limiting_kpis": [
+     "FAI.PDP_CTA_ABOVE_FOLD",
+     "FAI.FORCED_ACCOUNT",
+     "FAI.CHECKOUT_FIELDS"
+    ],
+    "llm_share": 0.0,
+    "score": 65.2
+   },
+   "MPI": {
+    "coverage": 1.0,
+    "grade": "A",
+    "limiting_kpis": [
+     "MPI.URGENCY_SIGNALS",
+     "MPI.SCARCITY_SIGNALS"
+    ],
+    "llm_share": 0.5,
+    "score": 87.1
+   },
+   "PERF": {
+    "coverage": 1.0,
+    "grade": "A",
+    "limiting_kpis": [
+     "PERF.REQUESTS",
+     "PERF.CONSOLE_ERRORS",
+     "PERF.BYTES_JS"
+    ],
+    "llm_share": 0.0,
+    "score": 82.0
+   },
+   "PTI": {
+    "coverage": 1.0,
+    "grade": "A",
+    "limiting_kpis": [
+     "PTI.UNEXPLAINED_FEES",
+     "PTI.FUNNEL_PRICE_DELTA"
+    ],
+    "llm_share": 0.0,
+    "score": 81.8
+   },
+   "TRI": {
+    "coverage": 1.0,
+    "grade": "A",
+    "limiting_kpis": [
+     "TRI.JSONLD_SHIPPING",
+     "TRI.POLICY_LINKS"
+    ],
+    "llm_share": 0.108,
+    "score": 95.3
+   }
+  }
+ },
+ "profiles": {
+  "desktop": {
+   "dpr": 96.65,
+   "dpr_coverage": [
+    0.894,
+    8,
+    9
+   ],
+   "ers": {
+    "coverage": 0.947,
+    "grade": "A",
+    "limiting_factor": "CCL",
+    "llm_share": 0.106,
+    "published": true,
+    "reason": null,
+    "score": 63.8
+   },
+   "kpis": {
+    "CCL.CHOICE_SUPPORT": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.CTA_SALIENCE": [
+     72,
+     86.67,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.FORM_LABELS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "CCL.HEADINGS": [
+     false,
+     0.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.INFO_SCENT_GENERIC": [
+     12.5,
+     63.75,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.PRIMARY_CTA_COUNT": [
+     1,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.READABILITY": [
+     58,
+     54.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.VALUE_PROP_CLARITY": [
+     "clear",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.VISUAL_COMPLEXITY": [
+     48,
+     76.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.CONFIRMSHAMING": [
+     null,
+     null,
+     false,
+     true,
+     "judgment_unclear",
+     null
+    ],
+    "DPR.CONSENT_ASYMMETRY": [
+     0.7,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.COUNTDOWN_RESET": [
+     0.9,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.FAKE_LOW_STOCK": [
+     0.3,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.HIDDEN_SUBSCRIPTION": [
+     0,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.NAGGING_OVERLAYS": [
+     0,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.PRECHECKED_PAID_ADDONS": [
+     1,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.SNEAK_INTO_BASKET": [
+     0,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.TRICK_QUESTIONS": [
+     0.533,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.A11Y_BASIC": [
+     3.5,
+     72.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.ACTIONS_RATIO": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.ACTIONS_TO_GOAL": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.AUTOCOMPLETE_ATTRS": [
+     null,
+     null,
+     false,
+     true,
+     "timeout",
+     null
+    ],
+    "FAI.BACKTRACK_RATE": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.BREADCRUMBS": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.CART_EDITABLE": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.CHECKOUT_FIELDS": [
+     null,
+     null,
+     false,
+     true,
+     "timeout",
+     null
+    ],
+    "FAI.DEAD_CLICK_RATE": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.FORCED_ACCOUNT": [
+     false,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.GUEST_CHECKOUT": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.JOURNEY_SUCCESS": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.LOSTNESS": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.OVERLAY_COVERAGE": [
+     22,
+     81.33,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.OVERLAY_INTERRUPTIONS": [
+     1,
+     80.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.PDP_CTA_ABOVE_FOLD": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.PDP_VARIANT_SELECTOR": [
+     "buttons",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.PLP_FILTERS": [
+     6,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.PLP_PAGINATION": [
+     "load_more",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.PLP_RESULT_COUNT": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.PLP_SORT": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.RAGE_EVENTS": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.SEARCH_AUTOCOMPLETE": [
+     null,
+     null,
+     false,
+     true,
+     "probe:failed:TimeoutError",
+     null
+    ],
+    "FAI.SEARCH_VISIBLE": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.SEARCH_WIDTH": [
+     420,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.TARGET_SIZE_24": [
+     92.5,
+     90.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.TARGET_SIZE_44": [
+     55,
+     50.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.TIME_ON_TASK_SITE": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.UNEXPECTED_NAV": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "MPI.AUTHORITY": [
+     "present",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "MPI.RECIPROCITY": [
+     2,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "MPI.SCARCITY_SIGNALS": [
+     1,
+     80.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "MPI.SOCIAL_PROOF_RICH": [
+     "rich",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "MPI.URGENCY_SIGNALS": [
+     1,
+     30.0,
+     true,
+     true,
+     "credit_withheld:DPR.COUNTDOWN_RESET",
+     null
+    ],
+    "PERF.ACTION_RESPONSE_MS": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "PERF.BYTES_JS": [
+     615,
+     64.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.BYTES_TOTAL": [
+     2250,
+     71.11,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.CLS": [
+     0.035,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.CLS_POST_INPUT": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "PERF.CONSOLE_ERRORS": [
+     2,
+     73.33,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.FCP": [
+     850,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.HTTP_ERRORS": [
+     1,
+     80.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.IMG_OVERSIZED": [
+     2.5,
+     66.67,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.INP_SYNTH": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "PERF.LCP": [
+     1700,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.LOAF_COUNT": [
+     0,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.REQUESTS": [
+     76,
+     59.47,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.TBT_APPROX": [
+     110,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.THIRD_PARTY_SHARE": [
+     32.5,
+     79.17,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.TTFB": [
+     330,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.FREE_SHIPPING_THRESHOLD": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.FUNNEL_PRICE_DELTA": [
+     0,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.PRICE_JSONLD_MATCH": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.PRICE_VISIBLE_PDP": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.SHIPPING_COST_PRE_CHECKOUT": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.STRIKETHROUGH_LOWEST30": [
+     null,
+     null,
+     false,
+     false,
+     "not_applicable: nessun prezzo barrato",
+     null
+    ],
+    "PTI.UNEXPLAINED_FEES": [
+     1,
+     40.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.VAT_STATED": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.CONTACT_INFO": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.DELIVERY_TIME_STATED": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.HTTPS": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.JSONLD_RETURN_POLICY": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.JSONLD_SHIPPING": [
+     false,
+     0.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.LEGAL_ID": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.MIXED_CONTENT": [
+     0,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.PAYMENT_LOGOS": [
+     4,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.POLICY_LINKS": [
+     3,
+     75.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.RATING_BAND": [
+     "4.0-4.7",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.RETURNS_CLARITY": [
+     "clear",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.REVIEWS_PRESENT": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.REVIEW_COUNT": [
+     37,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ]
+   },
+   "signals": [
+    [
+     "DPR.COUNTDOWN_RESET",
+     0.9
+    ],
+    [
+     "DPR.PRECHECKED_PAID_ADDONS",
+     1
+    ],
+    [
+     "DPR.TRICK_QUESTIONS",
+     0.533
+    ],
+    [
+     "DPR.CONSENT_ASYMMETRY",
+     0.7
+    ],
+    [
+     "DPR.FAKE_LOW_STOCK",
+     0.3
+    ]
+   ],
+   "sub_indices": {
+    "CCL": {
+     "coverage": 0.904,
+     "grade": "A",
+     "limiting_kpis": [
+      "CCL.HEADINGS",
+      "CCL.READABILITY",
+      "CCL.INFO_SCENT_GENERIC"
+     ],
+     "llm_share": 0.211,
+     "score": 79.6
+    },
+    "FAI": {
+     "coverage": 0.822,
+     "grade": "B",
+     "limiting_kpis": [
+      "FAI.TARGET_SIZE_44",
+      "FAI.A11Y_BASIC",
+      "FAI.OVERLAY_INTERRUPTIONS"
+     ],
+     "llm_share": 0.0,
+     "score": 94.2
+    },
+    "MPI": {
+     "coverage": 1.0,
+     "grade": "A",
+     "limiting_kpis": [
+      "MPI.URGENCY_SIGNALS",
+      "MPI.SCARCITY_SIGNALS"
+     ],
+     "llm_share": 0.5,
+     "score": 87.1
+    },
+    "PERF": {
+     "coverage": 1.0,
+     "grade": "A",
+     "limiting_kpis": [
+      "PERF.REQUESTS",
+      "PERF.BYTES_JS",
+      "PERF.IMG_OVERSIZED"
+     ],
+     "llm_share": 0.0,
+     "score": 89.4
+    },
+    "PTI": {
+     "coverage": 1.0,
+     "grade": "A",
+     "limiting_kpis": [
+      "PTI.UNEXPLAINED_FEES"
+     ],
+     "llm_share": 0.0,
+     "score": 90.0
+    },
+    "TRI": {
+     "coverage": 1.0,
+     "grade": "A",
+     "limiting_kpis": [
+      "TRI.JSONLD_SHIPPING",
+      "TRI.POLICY_LINKS"
+     ],
+     "llm_share": 0.108,
+     "score": 95.3
+    }
+   }
+  },
+  "mobile": {
+   "dpr": 99.09,
+   "dpr_coverage": [
+    0.947,
+    8,
+    9
+   ],
+   "ers": {
+    "coverage": 1.0,
+    "grade": "A",
+    "limiting_factor": "FAI",
+    "llm_share": 0.1,
+    "published": true,
+    "reason": null,
+    "score": 56.2
+   },
+   "kpis": {
+    "CCL.CHOICE_SUPPORT": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.CTA_SALIENCE": [
+     58,
+     63.33,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.FORM_LABELS": [
+     92.9,
+     71.6,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.HEADINGS": [
+     false,
+     0.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.INFO_SCENT_GENERIC": [
+     12.5,
+     63.75,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.PRIMARY_CTA_COUNT": [
+     1,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.READABILITY": [
+     58,
+     54.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.VALUE_PROP_CLARITY": [
+     "clear",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "CCL.VISUAL_COMPLEXITY": [
+     48,
+     76.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.CONFIRMSHAMING": [
+     0.8,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.CONSENT_ASYMMETRY": [
+     0.7,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.COUNTDOWN_RESET": [
+     0.9,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.FAKE_LOW_STOCK": [
+     0.3,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.HIDDEN_SUBSCRIPTION": [
+     0.533,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.NAGGING_OVERLAYS": [
+     null,
+     null,
+     false,
+     true,
+     "timeout",
+     null
+    ],
+    "DPR.PRECHECKED_PAID_ADDONS": [
+     1,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.SNEAK_INTO_BASKET": [
+     0,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "DPR.TRICK_QUESTIONS": [
+     0.533,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.A11Y_BASIC": [
+     3.5,
+     72.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.ACTIONS_RATIO": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.ACTIONS_TO_GOAL": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.AUTOCOMPLETE_ATTRS": [
+     57.1,
+     57.1,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.BACKTRACK_RATE": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.BREADCRUMBS": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.CART_EDITABLE": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.CHECKOUT_FIELDS": [
+     14,
+     37.02,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.DEAD_CLICK_RATE": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.FORCED_ACCOUNT": [
+     true,
+     0.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.GUEST_CHECKOUT": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.JOURNEY_SUCCESS": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.LOSTNESS": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.OVERLAY_COVERAGE": [
+     42,
+     44.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.OVERLAY_INTERRUPTIONS": [
+     2,
+     50.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.PDP_CTA_ABOVE_FOLD": [
+     false,
+     0.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.PDP_VARIANT_SELECTOR": [
+     "buttons",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.PLP_FILTERS": [
+     2,
+     40.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.PLP_PAGINATION": [
+     "load_more",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.PLP_RESULT_COUNT": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.PLP_SORT": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.RAGE_EVENTS": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.SEARCH_AUTOCOMPLETE": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.SEARCH_VISIBLE": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.SEARCH_WIDTH": [
+     340,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.TARGET_SIZE_24": [
+     92.5,
+     90.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.TARGET_SIZE_44": [
+     55,
+     50.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.TIME_ON_TASK_SITE": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "FAI.UNEXPECTED_NAV": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "MPI.AUTHORITY": [
+     "present",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "MPI.RECIPROCITY": [
+     2,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "MPI.SCARCITY_SIGNALS": [
+     1,
+     80.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "MPI.SOCIAL_PROOF_RICH": [
+     "rich",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "MPI.URGENCY_SIGNALS": [
+     1,
+     30.0,
+     true,
+     true,
+     "credit_withheld:DPR.COUNTDOWN_RESET",
+     null
+    ],
+    "PERF.ACTION_RESPONSE_MS": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "PERF.BYTES_JS": [
+     600,
+     65.71,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.BYTES_TOTAL": [
+     2100,
+     77.78,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.CLS": [
+     0.05,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.CLS_POST_INPUT": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "PERF.CONSOLE_ERRORS": [
+     3,
+     60.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.FCP": [
+     1800,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.HTTP_ERRORS": [
+     1,
+     80.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.IMG_OVERSIZED": [
+     1,
+     86.67,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.INP_SYNTH": [
+     null,
+     null,
+     false,
+     false,
+     "no_journey",
+     null
+    ],
+    "PERF.LCP": [
+     2900,
+     86.67,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.LOAF_COUNT": [
+     2,
+     73.33,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.REQUESTS": [
+     70,
+     68.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.TBT_APPROX": [
+     380,
+     77.5,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.THIRD_PARTY_SHARE": [
+     31,
+     81.67,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.TTFB": [
+     650,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.FREE_SHIPPING_THRESHOLD": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.FUNNEL_PRICE_DELTA": [
+     3.2,
+     51.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.PRICE_JSONLD_MATCH": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.PRICE_VISIBLE_PDP": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.SHIPPING_COST_PRE_CHECKOUT": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.STRIKETHROUGH_LOWEST30": [
+     null,
+     null,
+     false,
+     false,
+     "not_applicable: nessun prezzo barrato",
+     null
+    ],
+    "PTI.UNEXPLAINED_FEES": [
+     1,
+     40.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PTI.VAT_STATED": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.CONTACT_INFO": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.DELIVERY_TIME_STATED": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.HTTPS": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.JSONLD_RETURN_POLICY": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.JSONLD_SHIPPING": [
+     false,
+     0.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.LEGAL_ID": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.MIXED_CONTENT": [
+     0,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.PAYMENT_LOGOS": [
+     4,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.POLICY_LINKS": [
+     3,
+     75.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.RATING_BAND": [
+     "4.0-4.7",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.RETURNS_CLARITY": [
+     "clear",
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.REVIEWS_PRESENT": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "TRI.REVIEW_COUNT": [
+     37,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ]
+   },
+   "signals": [
+    [
+     "DPR.COUNTDOWN_RESET",
+     0.9
+    ],
+    [
+     "DPR.PRECHECKED_PAID_ADDONS",
+     1
+    ],
+    [
+     "DPR.CONFIRMSHAMING",
+     0.8
+    ],
+    [
+     "DPR.HIDDEN_SUBSCRIPTION",
+     0.533
+    ],
+    [
+     "DPR.TRICK_QUESTIONS",
+     0.533
+    ],
+    [
+     "DPR.CONSENT_ASYMMETRY",
+     0.7
+    ],
+    [
+     "DPR.FAKE_LOW_STOCK",
+     0.3
+    ]
+   ],
+   "sub_indices": {
+    "CCL": {
+     "coverage": 1.0,
+     "grade": "A",
+     "limiting_kpis": [
+      "CCL.HEADINGS",
+      "CCL.READABILITY",
+      "CCL.CTA_SALIENCE"
+     ],
+     "llm_share": 0.19,
+     "score": 74.4
+    },
+    "FAI": {
+     "coverage": 1.0,
+     "grade": "A",
+     "limiting_kpis": [
+      "FAI.PDP_CTA_ABOVE_FOLD",
+      "FAI.FORCED_ACCOUNT",
+      "FAI.CHECKOUT_FIELDS"
+     ],
+     "llm_share": 0.0,
+     "score": 65.2
+    },
+    "MPI": {
+     "coverage": 1.0,
+     "grade": "A",
+     "limiting_kpis": [
+      "MPI.URGENCY_SIGNALS",
+      "MPI.SCARCITY_SIGNALS"
+     ],
+     "llm_share": 0.5,
+     "score": 87.1
+    },
+    "PERF": {
+     "coverage": 1.0,
+     "grade": "A",
+     "limiting_kpis": [
+      "PERF.CONSOLE_ERRORS",
+      "PERF.BYTES_JS",
+      "PERF.REQUESTS"
+     ],
+     "llm_share": 0.0,
+     "score": 83.6
+    },
+    "PTI": {
+     "coverage": 1.0,
+     "grade": "A",
+     "limiting_kpis": [
+      "PTI.UNEXPLAINED_FEES",
+      "PTI.FUNNEL_PRICE_DELTA"
+     ],
+     "llm_share": 0.0,
+     "score": 81.8
+    },
+    "TRI": {
+     "coverage": 1.0,
+     "grade": "A",
+     "limiting_kpis": [
+      "TRI.JSONLD_SHIPPING",
+      "TRI.POLICY_LINKS"
+     ],
+     "llm_share": 0.108,
+     "score": 95.3
+    }
+   }
+  }
+ }
+}

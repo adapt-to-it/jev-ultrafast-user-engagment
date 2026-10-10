@@ -1,0 +1,25 @@
+{
+  "name": "jev-engagement",
+  "displayName": "Jev Engagement Readiness",
+  "version": "0.1.0",
+  "description": "Engagement-readiness audits of e-commerce shops: performance, key elements, predicted friction, trust, price transparency and dark-pattern risk signals, scored into versioned 0-100 indices. Estimates from synthetic sessions, not measured engagement; never places orders.",
+  "author": {
+    "name": "adapt-to-it",
+    "url": "https://github.com/adapt-to-it"
+  },
+  "repository": "https://github.com/adapt-to-it/jev-ultrafast-user-engagment",
+  "license": "MIT",
+  "keywords": ["e-commerce", "audit", "engagement-readiness", "dark-patterns", "web-performance", "mcp"],
+  "mcpServers": {
+    "engagement": {
+      "command": "uv",
+      "args": ["run", "--frozen", "--no-dev", "--project", "${CLAUDE_PLUGIN_ROOT}", "jev-engage-mcp"],
+      "env": {
+        "BH_TAB_MARKER": "0",
+        "UV_PROJECT_ENVIRONMENT": "${CLAUDE_PLUGIN_DATA}/.venv",
+        "JEV_ENGAGEMENT_ARTIFACTS": "${CLAUDE_PLUGIN_DATA}/engagement",
+        "JEV_ENGAGEMENT_ENV": "${CLAUDE_PLUGIN_DATA}/.env"
+      }
+    }
+  }
+}

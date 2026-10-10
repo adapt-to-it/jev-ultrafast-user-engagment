@@ -1,0 +1,1568 @@
+{
+ "overall": {
+  "dpr": 0.0,
+  "dpr_coverage": [
+   0.0,
+   0,
+   6
+  ],
+  "ers": {
+   "coverage": 0.116,
+   "grade": null,
+   "limiting_factor": "FAI",
+   "llm_share": 0.0,
+   "published": false,
+   "reason": "copertura complessiva 12 % sotto il minimo del 60 %; copertura sotto il minimo del 50 % per Prestazioni (23 %), Attrito previsto (34 %), Segnali di fiducia (0 %), Trasparenza di prezzi e costi (0 %), Chiarezza e carico cognitivo (0 %)",
+   "score": null
+  },
+  "kpis": {
+   "CCL.CHOICE_SUPPORT": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "CCL.CTA_SALIENCE": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "CCL.FORM_LABELS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "CCL.HEADINGS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "CCL.INFO_SCENT_GENERIC": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "CCL.PRIMARY_CTA_COUNT": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "CCL.READABILITY": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "CCL.VALUE_PROP_CLARITY": [
+    null,
+    null,
+    false,
+    false,
+    "not_judged",
+    null
+   ],
+   "CCL.VISUAL_COMPLEXITY": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "DPR.CONFIRMSHAMING": [
+    null,
+    null,
+    false,
+    false,
+    "not_judged",
+    null
+   ],
+   "DPR.CONSENT_ASYMMETRY": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "DPR.COUNTDOWN_RESET": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "DPR.FAKE_LOW_STOCK": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "DPR.HIDDEN_SUBSCRIPTION": [
+    null,
+    null,
+    false,
+    false,
+    "not_judged",
+    null
+   ],
+   "DPR.NAGGING_OVERLAYS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "DPR.PRECHECKED_PAID_ADDONS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "DPR.SNEAK_INTO_BASKET": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "DPR.TRICK_QUESTIONS": [
+    null,
+    null,
+    false,
+    false,
+    "not_judged",
+    null
+   ],
+   "FAI.A11Y_BASIC": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.ACTIONS_RATIO": [
+    1.5,
+    75.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.ACTIONS_TO_GOAL": [
+    6,
+    null,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.AUTOCOMPLETE_ATTRS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.BACKTRACK_RATE": [
+    0.0,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.BREADCRUMBS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.CART_EDITABLE": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.CHECKOUT_FIELDS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.DEAD_CLICK_RATE": [
+    20.0,
+    30.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.FORCED_ACCOUNT": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.GUEST_CHECKOUT": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.JOURNEY_SUCCESS": [
+    true,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.LOSTNESS": [
+    0.0,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.OVERLAY_COVERAGE": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.OVERLAY_INTERRUPTIONS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.PDP_CTA_ABOVE_FOLD": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.PDP_VARIANT_SELECTOR": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.PLP_FILTERS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.PLP_PAGINATION": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.PLP_RESULT_COUNT": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.PLP_SORT": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.RAGE_EVENTS": [
+    0,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.SEARCH_AUTOCOMPLETE": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.SEARCH_VISIBLE": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.SEARCH_WIDTH": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.TARGET_SIZE_24": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.TARGET_SIZE_44": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "FAI.TIME_ON_TASK_SITE": [
+    9900,
+    83.67,
+    true,
+    true,
+    null,
+    null
+   ],
+   "FAI.UNEXPECTED_NAV": [
+    0,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "MPI.AUTHORITY": [
+    null,
+    null,
+    false,
+    false,
+    "not_judged",
+    null
+   ],
+   "MPI.RECIPROCITY": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "MPI.SCARCITY_SIGNALS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "MPI.SOCIAL_PROOF_RICH": [
+    null,
+    null,
+    false,
+    false,
+    "not_judged",
+    null
+   ],
+   "MPI.URGENCY_SIGNALS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.ACTION_RESPONSE_MS": [
+    120,
+    99.11,
+    true,
+    true,
+    null,
+    null
+   ],
+   "PERF.BYTES_JS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.BYTES_TOTAL": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.CLS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.CLS_POST_INPUT": [
+    0,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "PERF.CONSOLE_ERRORS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.FCP": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.HTTP_ERRORS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.IMG_OVERSIZED": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.INP_SYNTH": [
+    96,
+    100.0,
+    true,
+    true,
+    null,
+    null
+   ],
+   "PERF.LCP": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.LOAF_COUNT": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.REQUESTS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.TBT_APPROX": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.THIRD_PARTY_SHARE": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PERF.TTFB": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PTI.FREE_SHIPPING_THRESHOLD": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PTI.FUNNEL_PRICE_DELTA": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PTI.PRICE_JSONLD_MATCH": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PTI.PRICE_VISIBLE_PDP": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PTI.SHIPPING_COST_PRE_CHECKOUT": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PTI.STRIKETHROUGH_LOWEST30": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PTI.UNEXPLAINED_FEES": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "PTI.VAT_STATED": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "TRI.CONTACT_INFO": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "TRI.DELIVERY_TIME_STATED": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "TRI.HTTPS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "TRI.JSONLD_RETURN_POLICY": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "TRI.JSONLD_SHIPPING": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "TRI.LEGAL_ID": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "TRI.MIXED_CONTENT": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "TRI.PAYMENT_LOGOS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "TRI.POLICY_LINKS": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "TRI.RATING_BAND": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "TRI.RETURNS_CLARITY": [
+    null,
+    null,
+    false,
+    false,
+    "not_judged",
+    null
+   ],
+   "TRI.REVIEWS_PRESENT": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ],
+   "TRI.REVIEW_COUNT": [
+    null,
+    null,
+    false,
+    true,
+    "no_observation",
+    null
+   ]
+  },
+  "signals": [],
+  "sub_indices": {
+   "CCL": {
+    "coverage": 0.0,
+    "grade": null,
+    "limiting_kpis": [],
+    "llm_share": 0.0,
+    "score": null
+   },
+   "FAI": {
+    "coverage": 0.338,
+    "grade": null,
+    "limiting_kpis": [
+     "FAI.DEAD_CLICK_RATE",
+     "FAI.ACTIONS_RATIO",
+     "FAI.TIME_ON_TASK_SITE"
+    ],
+    "llm_share": 0.0,
+    "score": 86.2
+   },
+   "MPI": {
+    "coverage": 0.0,
+    "grade": null,
+    "limiting_kpis": [],
+    "llm_share": 0.0,
+    "score": null
+   },
+   "PERF": {
+    "coverage": 0.231,
+    "grade": null,
+    "limiting_kpis": [
+     "PERF.ACTION_RESPONSE_MS"
+    ],
+    "llm_share": 0.0,
+    "score": 99.7
+   },
+   "PTI": {
+    "coverage": 0.0,
+    "grade": null,
+    "limiting_kpis": [],
+    "llm_share": 0.0,
+    "score": null
+   },
+   "TRI": {
+    "coverage": 0.0,
+    "grade": null,
+    "limiting_kpis": [],
+    "llm_share": 0.0,
+    "score": null
+   }
+  }
+ },
+ "profiles": {
+  "mobile": {
+   "dpr": 0.0,
+   "dpr_coverage": [
+    0.0,
+    0,
+    6
+   ],
+   "ers": {
+    "coverage": 0.116,
+    "grade": null,
+    "limiting_factor": "FAI",
+    "llm_share": 0.0,
+    "published": false,
+    "reason": "copertura complessiva 12 % sotto il minimo del 60 %; copertura sotto il minimo del 50 % per Prestazioni (23 %), Attrito previsto (34 %), Segnali di fiducia (0 %), Trasparenza di prezzi e costi (0 %), Chiarezza e carico cognitivo (0 %)",
+    "score": null
+   },
+   "kpis": {
+    "CCL.CHOICE_SUPPORT": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "CCL.CTA_SALIENCE": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "CCL.FORM_LABELS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "CCL.HEADINGS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "CCL.INFO_SCENT_GENERIC": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "CCL.PRIMARY_CTA_COUNT": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "CCL.READABILITY": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "CCL.VALUE_PROP_CLARITY": [
+     null,
+     null,
+     false,
+     false,
+     "not_judged",
+     null
+    ],
+    "CCL.VISUAL_COMPLEXITY": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "DPR.CONFIRMSHAMING": [
+     null,
+     null,
+     false,
+     false,
+     "not_judged",
+     null
+    ],
+    "DPR.CONSENT_ASYMMETRY": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "DPR.COUNTDOWN_RESET": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "DPR.FAKE_LOW_STOCK": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "DPR.HIDDEN_SUBSCRIPTION": [
+     null,
+     null,
+     false,
+     false,
+     "not_judged",
+     null
+    ],
+    "DPR.NAGGING_OVERLAYS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "DPR.PRECHECKED_PAID_ADDONS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "DPR.SNEAK_INTO_BASKET": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "DPR.TRICK_QUESTIONS": [
+     null,
+     null,
+     false,
+     false,
+     "not_judged",
+     null
+    ],
+    "FAI.A11Y_BASIC": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.ACTIONS_RATIO": [
+     1.5,
+     75.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.ACTIONS_TO_GOAL": [
+     6,
+     null,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.AUTOCOMPLETE_ATTRS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.BACKTRACK_RATE": [
+     0.0,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.BREADCRUMBS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.CART_EDITABLE": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.CHECKOUT_FIELDS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.DEAD_CLICK_RATE": [
+     20.0,
+     30.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.FORCED_ACCOUNT": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.GUEST_CHECKOUT": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.JOURNEY_SUCCESS": [
+     true,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.LOSTNESS": [
+     0.0,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.OVERLAY_COVERAGE": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.OVERLAY_INTERRUPTIONS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.PDP_CTA_ABOVE_FOLD": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.PDP_VARIANT_SELECTOR": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.PLP_FILTERS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.PLP_PAGINATION": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.PLP_RESULT_COUNT": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.PLP_SORT": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.RAGE_EVENTS": [
+     0,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.SEARCH_AUTOCOMPLETE": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.SEARCH_VISIBLE": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.SEARCH_WIDTH": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.TARGET_SIZE_24": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.TARGET_SIZE_44": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "FAI.TIME_ON_TASK_SITE": [
+     9900,
+     83.67,
+     true,
+     true,
+     null,
+     null
+    ],
+    "FAI.UNEXPECTED_NAV": [
+     0,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "MPI.AUTHORITY": [
+     null,
+     null,
+     false,
+     false,
+     "not_judged",
+     null
+    ],
+    "MPI.RECIPROCITY": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "MPI.SCARCITY_SIGNALS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "MPI.SOCIAL_PROOF_RICH": [
+     null,
+     null,
+     false,
+     false,
+     "not_judged",
+     null
+    ],
+    "MPI.URGENCY_SIGNALS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.ACTION_RESPONSE_MS": [
+     120,
+     99.11,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.BYTES_JS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.BYTES_TOTAL": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.CLS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.CLS_POST_INPUT": [
+     0,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.CONSOLE_ERRORS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.FCP": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.HTTP_ERRORS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.IMG_OVERSIZED": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.INP_SYNTH": [
+     96,
+     100.0,
+     true,
+     true,
+     null,
+     null
+    ],
+    "PERF.LCP": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.LOAF_COUNT": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.REQUESTS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.TBT_APPROX": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.THIRD_PARTY_SHARE": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PERF.TTFB": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PTI.FREE_SHIPPING_THRESHOLD": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PTI.FUNNEL_PRICE_DELTA": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PTI.PRICE_JSONLD_MATCH": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PTI.PRICE_VISIBLE_PDP": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PTI.SHIPPING_COST_PRE_CHECKOUT": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PTI.STRIKETHROUGH_LOWEST30": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PTI.UNEXPLAINED_FEES": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "PTI.VAT_STATED": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "TRI.CONTACT_INFO": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "TRI.DELIVERY_TIME_STATED": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "TRI.HTTPS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "TRI.JSONLD_RETURN_POLICY": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "TRI.JSONLD_SHIPPING": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "TRI.LEGAL_ID": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "TRI.MIXED_CONTENT": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "TRI.PAYMENT_LOGOS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "TRI.POLICY_LINKS": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "TRI.RATING_BAND": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "TRI.RETURNS_CLARITY": [
+     null,
+     null,
+     false,
+     false,
+     "not_judged",
+     null
+    ],
+    "TRI.REVIEWS_PRESENT": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ],
+    "TRI.REVIEW_COUNT": [
+     null,
+     null,
+     false,
+     true,
+     "no_observation",
+     null
+    ]
+   },
+   "signals": [],
+   "sub_indices": {
+    "CCL": {
+     "coverage": 0.0,
+     "grade": null,
+     "limiting_kpis": [],
+     "llm_share": 0.0,
+     "score": null
+    },
+    "FAI": {
+     "coverage": 0.338,
+     "grade": null,
+     "limiting_kpis": [
+      "FAI.DEAD_CLICK_RATE",
+      "FAI.ACTIONS_RATIO",
+      "FAI.TIME_ON_TASK_SITE"
+     ],
+     "llm_share": 0.0,
+     "score": 86.2
+    },
+    "MPI": {
+     "coverage": 0.0,
+     "grade": null,
+     "limiting_kpis": [],
+     "llm_share": 0.0,
+     "score": null
+    },
+    "PERF": {
+     "coverage": 0.231,
+     "grade": null,
+     "limiting_kpis": [
+      "PERF.ACTION_RESPONSE_MS"
+     ],
+     "llm_share": 0.0,
+     "score": 99.7
+    },
+    "PTI": {
+     "coverage": 0.0,
+     "grade": null,
+     "limiting_kpis": [],
+     "llm_share": 0.0,
+     "score": null
+    },
+    "TRI": {
+     "coverage": 0.0,
+     "grade": null,
+     "limiting_kpis": [],
+     "llm_share": 0.0,
+     "score": null
+    }
+   }
+  }
+ }
+}

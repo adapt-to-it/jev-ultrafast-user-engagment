@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Autenticazione | Passo Svelto</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="shop.css">
+</head>
+<!-- Account gate fixture "S2" (a PrestaShop 1.6 style first checkout step): an email-only "Crea un account" form
+     beside a login box, and no guest option. The email field only starts a registration: login_required true. -->
+<body>
+  <header class="site-header">
+    <div class="bar"><a class="logo" href="index.html">Passo Svelto</a> <a href="cart.html">Torna al carrello</a></div>
+  </header>
+  <main class="wrap" id="main">
+    <h1>Autenticazione</h1>
+    <ol class="steps"><li>1. Riepilogo</li><li aria-current="step">2. Accedi</li><li>3. Indirizzo</li><li>4. Spedizione</li><li>5. Pagamento</li></ol>
+    <div class="layout">
+      <form method="post" action="/autenticazione?create" id="create-account_form">
+        <h3>Crea un account</h3>
+        <p>Inserisci il tuo indirizzo email per creare un account.</p>
+        <label>Indirizzo email <input type="email" name="email_create" required></label>
+        <button class="btn btn-primary" type="submit" name="SubmitCreate">Crea un account</button>
+      </form>
+      <form method="post" action="/autenticazione" id="login_form">
+        <h3>Già registrato?</h3>
+        <label>Indirizzo email <input type="email" name="email" required></label>
+        <label>Password <input type="password" name="passwd" required></label>
+        <p><a href="/recupero-password">Hai dimenticato la password?</a></p>
+        <button class="btn btn-secondary" type="submit" name="SubmitLogin">Accedi</button>
+      </form>
+    </div>
+  </main>
+</body>
+</html>

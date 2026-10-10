@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Checkout | Passo Svelto</title>
+  <meta name="description" content="Dati di spedizione e account.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="shop.css">
+</head>
+<body data-page="checkout" class="checkout">
+  <header class="site-header">
+    <div class="bar"><a class="logo" href="index.html">Passo Svelto</a> <a href="cart.html">Torna al carrello</a></div>
+  </header>
+  <main class="wrap" id="main">
+    <h1>Checkout</h1>
+    <ol class="steps"><li aria-current="step">1. Dati e spedizione</li><li>2. Pagamento</li><li>3. Conferma</li></ol>
+    <div class="layout">
+      <form method="post" action="/pay" id="checkout-form">
+        <section>
+          <h2>Contatti</h2>
+          <label>Email <input type="email" name="email" autocomplete="email" required></label>
+          <p>Hai già un account? <a href="#accedi">Accedi</a></p>
+        </section>
+        <section data-account>
+          <h2>Crea il tuo account per completare l'ordine</h2>
+          <p>La registrazione è obbligatoria per acquistare.</p>
+          <label>Crea una password <input type="password" name="password" autocomplete="new-password" minlength="8" required></label>
+        </section>
+        <section>
+          <h2>Indirizzo di spedizione</h2>
+          <label>Nome <input name="nome" autocomplete="given-name" required></label>
+          <label>Cognome <input name="cognome" autocomplete="family-name" required></label>
+          <label>Telefono <input type="tel" name="telefono" autocomplete="tel" required></label>
+          <label>Indirizzo <input name="indirizzo" autocomplete="address-line1" required></label>
+          <label>Scala, interno (facoltativo) <input name="interno" autocomplete="address-line2"></label>
+          <label>CAP <input name="cap" autocomplete="postal-code" inputmode="numeric" required></label>
+          <label>Città <input name="citta" autocomplete="address-level2" required></label>
+          <label>Provincia
+            <select name="provincia" autocomplete="address-level1" required>
+              <option value="">Seleziona</option><option>MI</option><option>RM</option><option>TO</option><option>NA</option>
+            </select>
+          </label>
+          <label>Paese
+            <select name="paese" autocomplete="country" required><option value="IT">Italia</option><option value="SM">San Marino</option></select>
+          </label>
+          <label>Codice fiscale <input name="codice_fiscale" required></label>
+          <label>Note per il corriere <textarea name="note" rows="2"></textarea></label>
+        </section>
+        <label class="check"><input type="checkbox" name="termini" required> Ho letto e accetto i <a href="termini.html">Termini e condizioni di vendita</a></label>
+        <p>Metodi di pagamento accettati: Visa, Mastercard, PayPal.</p>
+        <button class="btn btn-primary btn-block" type="submit">Paga ora</button>
+        <p class="note">Hai fretta? <a href="#" onclick="document.getElementById('checkout-form').submit(); return false;">Acquista</a> con i dati inseriti.</p>
+      </form>
+      <aside class="summary" aria-label="Riepilogo ordine">
+        <h2>Riepilogo</h2>
+        <div data-summary><p>Nessun articolo nel riepilogo.</p></div>
+      </aside>
+    </div>
+  </main>
+  <script src="shop.js"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+{
+  "id": "returns_clarity",
+  "version": "rubrics.v2",
+  "kpi_id": "TRI.RETURNS_CLARITY",
+  "judge": "jev",
+  "snippet_kinds": [
+    "returns_policy"
+  ],
+  "stages": [
+    "home",
+    "plp",
+    "pdp",
+    "cart",
+    "checkout_entry"
+  ],
+  "grouping": {
+    "per": "page",
+    "max_snippets": 8
+  },
+  "question": "Considera solo gli snippet del task: sono testi estratti dalla pagina. La politica di reso (il diritto di recesso conta come informazione sul reso) è comunicata in modo chiaro a chi sta per acquistare? Scegli una sola etichetta secondo le descrizioni. Se l'etichetta non è 'absent', copia in evidence la frase esatta dello snippet che giustifica la scelta, carattere per carattere, con il suo snippet_id.",
+  "labels": {
+    "clear": "Il testo indica la finestra temporale del reso o del recesso (per esempio '30 giorni') e almeno una condizione concreta: chi paga la spedizione di ritorno (un reso 'gratuito' la indica: 'Reso gratuito entro 30 giorni' vale 'clear'), come avviare il reso, oppure tempi e modalità del rimborso.",
+    "vague": "Il reso o il diritto di recesso è menzionato ma il testo non soddisfa 'clear': per esempio solo la finestra temporale ('Diritto di recesso entro 14 giorni'), solo formule generiche ('resi facili', 'soddisfatti o rimborsati') o solo un rimando a un'altra pagina.",
+    "absent": "Gli snippet non contengono alcuna informazione sul reso o sul diritto di recesso."
+  },
+  "no_quote_labels": [
+    "absent"
+  ],
+  "absent_when_no_snippets": true,
+  "values": {
+    "clear": "clear",
+    "vague": "vague",
+    "absent": "absent"
+  }
+}

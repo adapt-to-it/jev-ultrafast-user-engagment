@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Novità | Passo Svelto</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="shop.css">
+</head>
+<body data-page="category">
+  <header class="site-header">
+    <div class="bar"><a class="logo" href="index.html">Passo Svelto</a> <a class="cart-link" href="cart.html">Carrello</a></div>
+  </header>
+  <main class="wrap" id="main">
+    <h1>Novità</h1>
+    <p data-count>Caricamento dei prodotti…</p>
+    <div class="grid" data-grid></div>
+  </main>
+  <script>
+    // A client-rendered listing: the product grid exists only once its API answers.
+    const euro = v => v.toFixed(2).replace('.', ',') + ' €';
+    fetch('api/products.json').then(r => r.json()).then(data => {
+      document.querySelector('[data-count]').textContent = `${data.items.length} prodotti`;
+      document.querySelector('[data-grid]').innerHTML = data.items.map(p => `<article class="card">
+        <a href="product.html?id=${p.id}"><img src="${p.image}" alt="${p.name}" width="160" height="120"></a>
+        <h3><a href="product.html?id=${p.id}">${p.name}</a></h3><p class="price">${euro(p.price)}</p></article>`).join('');
+    });
+  </script>
+</body>
+</html>

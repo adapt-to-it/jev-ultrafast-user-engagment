@@ -1,0 +1,34 @@
+{
+  "id": "social_proof",
+  "version": "rubrics.v2",
+  "kpi_id": "MPI.SOCIAL_PROOF_RICH",
+  "judge": "jev",
+  "snippet_kinds": [
+    "testimonial"
+  ],
+  "stages": [
+    "home",
+    "plp",
+    "pdp",
+    "cart"
+  ],
+  "grouping": {
+    "per": "page",
+    "max_snippets": 8
+  },
+  "question": "Gli snippet mostrano una riprova sociale più ricca del solo punteggio a stelle, cioè recensioni o testimonianze con testo specifico e con elementi di autenticità (autore o iniziali, data, acquisto verificato, foto dei clienti)? Scegli una sola etichetta secondo le descrizioni. Se l'etichetta non è 'absent', copia in evidence il passaggio esatto, carattere per carattere, con il suo snippet_id.",
+  "labels": {
+    "rich": "Almeno una recensione o testimonianza con testo specifico e almeno un elemento di autenticità: autore o iniziali, data, acquisto verificato, foto.",
+    "basic": "C'è riprova sociale ma non soddisfa 'rich': solo punteggi o conteggi, oppure recensioni o testimonianze senza testo specifico o senza elementi di autenticità (per esempio 'Ottimo! — Marco R.').",
+    "absent": "Nessuna riprova sociale negli snippet."
+  },
+  "no_quote_labels": [
+    "absent"
+  ],
+  "absent_when_no_snippets": true,
+  "values": {
+    "rich": "rich",
+    "basic": "basic",
+    "absent": "absent"
+  }
+}
