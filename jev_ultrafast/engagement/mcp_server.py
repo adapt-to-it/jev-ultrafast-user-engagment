@@ -215,8 +215,13 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
         optimal_pages: Annotated[int | None, Field(ge=1, description="Minimum distinct pages, start page "
                                                                      "included, if known (Lostness)")] = None,
         locale: Locale = "it",
+        consent: Annotated[Literal["auto", "reject", "accept", "none"],
+                           Field(description="Cookie banner policy applied to the start page before the first "
+                                             "observation, as in the audit; auto rejects when a reject control "
+                                             "exists; none leaves the banner to the pilot")] = "auto",
     ) -> Result:
-        """Open the start page in a fresh isolated browser context with the device profile. The result names the
+        """Open the start page in a fresh isolated browser context with the device profile; the server applies the
+        consent policy to its cookie banner first (those clicks are not journey steps). The result names the
         pilot (policy, policy_requested). Jev (policy typesafe) returns {run_id, status: "running", text_helper, next}
         at once: call wait_run(run_id) while timed_out is true, then journey_finish(run_id) for the verdict, the step
         count and what deciding cost (model_calls, timing_ms); never journey_act. You (policy host) get {run_id,
@@ -228,7 +233,7 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
         the step budget), else abandoned without verification. Follow the journey-driver rules: never personal or
         payment data, stop at checkout."""
         return service.run_journey(url, goal, oracle, oracle_params, profile, policy, max_steps, browser,
-                                   optimal_steps, optimal_pages, locale=locale)
+                                   optimal_steps, optimal_pages, locale=locale, consent=consent)
 
     @tool(BROWSE, "Act in a journey")
     def journey_act(

@@ -13,11 +13,19 @@ journey stop at the first checkout page and never fill or submit it.
 Fixture mode serves tests/fixtures on 127.0.0.1 (recording every request) and hides the shop's category links from the
 lexicon crawler (crawler.listing_candidates returns nothing), so the listing page is reached only through Jev's pick;
 Chromium gets a dead proxy, so nothing but the model requests leaves the machine. --url mode audits a real shop
-unchanged.
+unchanged. --consent (default auto, as in the audit and the plugin) is the cookie banner policy of the audit and of
+the journey's start page, where the runner applies it before Jev's first decision; the summary records the journey's
+setting (consent), the audit's (audit_consent: with --audit-run that audit's own settings.consent, which is then the
+journey's default; an explicit --consent that differs is printed and fails the info check
+journey_consent_matches_audit) and the consent step's outcome (journey.consent: choice, reason, clicks, via).
 
 Every TypeSafe and text-helper request goes through a recording wrapper of jev_ultrafast.model.post_json (and every
 answer through model.validate_choice), so the printed counts, latencies and tokens are measured independently of what
 the runs record, and the two are compared. --dump-requests writes each request with its answer (never the key).
+Without it, the summary's calls still hold, for each journey decision and crawler lookup, the operation Jev chose,
+every operation's probability and the offered element it picked (no page text); its paths are relative to the
+working directory (or start at "~") and the home directory is written as "~" in every other string, error messages
+included, so a committed summary names no home directory.
 --repeat N judges copies of the audit N more times (cache off, nothing stored) and prints the label agreement per task.
 A smoke never reuses a cached Jev verdict: the judge runs with the cache off (judge_with_jev(use_cache=False)) in a
 judge-cache directory of its own, new at every invocation, and the required check judge_reused_no_cached_verdict fails
@@ -160,6 +168,9 @@ class Recorder:
                         "questions": len(body.get("questions") or {}) if kind == "typesafe" else None,
                         "what": _what(body, kind), "model": result.get("model") if isinstance(result, dict) else None,
                         "error": error}
+                choice = _choice(body, result) if kind == "typesafe" else None
+                if choice:
+                    call["choice"] = choice
                 self.calls.append(call)
             if self.dump:  # the key travels in a header and is never written
                 record = {"url": url, **call, "request": body, "response": result}
@@ -179,6 +190,37 @@ class Recorder:
         return [c for c in self.calls if c["phase"] == phase and c["kind"] == kind]
 
 
+def _choice(body: dict, result) -> dict | None:
+    """For a choose request (a journey decision or a crawler lookup): the operation Jev picked, every operation's
+    probability and, for an operation with a target, the offered element it chose ("[8] Scarpe da corsa") and its
+    probability. No page text, so a journey that ended BLOCKED is readable from the summary alone. None for a judge
+    request or an answer without an operation head."""
+    try:
+        state = body.get("state") if isinstance(body.get("state"), dict) else {}
+        answer = ((result or {}).get("answers") or {}).get("operation") if isinstance(result, dict) else None
+        if "tasks" in state or not isinstance(answer, dict) or "choice" not in answer:
+            return None
+        probabilities = answer.get("probabilities") if isinstance(answer.get("probabilities"), dict) else {}
+        numeric = {k: v for k, v in probabilities.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        out = {"operation": answer["choice"],
+               "probabilities": {k: round(v, 3) for k, v in sorted(numeric.items(), key=lambda kv: -kv[1])}}
+    except (AttributeError, TypeError, ValueError):
+        return None
+    try:  # a malformed target head never drops the operation already read
+        head = f"{str(answer['choice']).lower()}_target"
+        target = result["answers"].get(head)
+        offered = ((body.get("questions") or {}).get(head) or {}).get("criteria") or {}
+        if isinstance(target, dict) and isinstance(target.get("choice"), str) and target["choice"] in offered:
+            chosen = target["choice"]
+            out["target"] = str((offered[chosen] or {}).get("element") or chosen)[:80]
+            heads = target.get("probabilities") if isinstance(target.get("probabilities"), dict) else {}
+            p = heads.get(chosen)
+            out["target_probability"] = round(p, 3) if isinstance(p, (int, float)) and not isinstance(p, bool) else None
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return out
+
+
 def _what(body: dict, kind: str) -> str:
     """One line about a request: the judged page and its heads, or the page Jev chose on."""
     state = body.get("state") if isinstance(body.get("state"), dict) else {}
@@ -192,6 +234,37 @@ def _what(body: dict, kind: str) -> str:
 
 
 # ---------------------------------------------------------------- helpers
+
+
+def shown_path(path) -> str:
+    """A path as smoke_summary.json records it: relative to the working directory when it lies inside it, else with
+    the home directory written as "~", else as it is: a committed summary never names a user's home."""
+    resolved = Path(path).expanduser().resolve()
+    for base, prefix in ((Path.cwd().resolve(), ""), (Path.home().resolve(), "~/")):
+        try:
+            return prefix + resolved.relative_to(base).as_posix()
+        except ValueError:
+            continue
+    return resolved.as_posix()
+
+
+def without_home(value):
+    """value (the summary, any JSON shape) with the home directory written as "~" in every string, error messages
+    included (a Chromium under ~/.cache that failed to start names its path)."""
+    homes = sorted({str(Path.home()), str(Path.home().resolve())} - {"", "/"}, key=len, reverse=True)
+    if not homes:  # no usable home directory
+        return value
+    pattern = re.compile("(?:" + "|".join(re.escape(h) for h in homes) + r")(?![\w.-])")
+
+    def scrub(item):
+        if isinstance(item, str):
+            return pattern.sub("~", item)
+        if isinstance(item, list):
+            return [scrub(i) for i in item]
+        if isinstance(item, dict):
+            return {k: scrub(v) for k, v in item.items()}
+        return item
+    return scrub(value)
 
 
 def quantile(values, q):
@@ -259,7 +332,7 @@ def run_audit(service, url, args, fixture: bool, summary: dict) -> str | None:
         crawler.listing_candidates = lambda *a, **k: []
     try:
         audited = service.audit_shop(url, profiles=[args.profile], browser=args.browser, locale=args.locale,
-                                     wait=True, progress=say, headless=not args.headed)
+                                     consent=args.consent, wait=True, progress=say, headless=not args.headed)
     finally:
         crawler.listing_candidates = original
     run_id = audited["run_id"]
@@ -355,16 +428,31 @@ def run_repeats(service, run_id, times: int, summary: dict) -> None:
     summary["repeat"] = {"runs": times + 1, "agreement": agreement, "stable": stable}
 
 
+def start_consent(run: dict) -> dict | None:
+    """The journey's consent step (journey.py): {choice, reason, clicks, via} of its start page's PageRecord.consent,
+    None when it did not run (consent none, a start page that did not load)."""
+    page = next((p for p in run.get("pages") or [] if str(p.get("page_id") or "").endswith("-journey-start")), {})
+    consent = page.get("consent")
+    return {k: consent.get(k) for k in ("choice", "reason", "clicks", "via")} if isinstance(consent, dict) else None
+
+
 def run_journey(service, url, args, params, summary: dict) -> dict:
-    heading(f"Journey (policy auto): {args.goal!r}, oracle {args.oracle}{f' {params}' if params else ''}")
+    heading(f"Journey (policy auto, consent {args.consent}): {args.goal!r}, oracle {args.oracle}"
+            f"{f' {params}' if params else ''}")
     finished = service.run_journey(url, args.goal, args.oracle, params, profile=args.profile, policy="auto",
-                                   max_steps=args.max_steps, browser=args.browser, locale=args.locale, wait=True,
-                                   headless=not args.headed)
+                                   max_steps=args.max_steps, browser=args.browser, locale=args.locale,
+                                   consent=args.consent, wait=True, headless=not args.headed)
     run_id = finished["run_id"]
     run = service.store.load(run_id)
     journey = run.get("journey") or {}
+    consent = start_consent(run)
+    print(f"  consent step: {json.dumps(consent, ensure_ascii=False) if consent else 'not run'}")
     for step in service.store.read_steps(run_id):
         flags = [k for k, v in (step.get("flags") or {}).items() if v]
+        if step.get("source"):  # the consent step's click: before the first decision, no pilot action
+            print(f"  {step['source']:>3} {step.get('operation'):10} {str(step.get('label') or '')[:50]:50} "
+                  f"{step.get('purpose')} {step.get('status')}")
+            continue
         print(f"  {step.get('step')!s:>3} {step.get('operation'):10} {str(step.get('label') or '')[:50]:50} "
               f"{step.get('page_type') or '-':9} decision {step.get('decision_latency_ms')} ms {' '.join(flags)}")
     verification = journey.get("verification") or {}
@@ -377,6 +465,7 @@ def run_journey(service, url, args, params, summary: dict) -> dict:
     summary["journey"] = {"run_id": run_id, "status": journey.get("status"), "run_status": run.get("status"),
                           **{k: journey.get(k) for k in ("policy", "policy_requested", "text_helper", "model_calls",
                                                          "timing_ms", "usage")},
+                          "consent": consent,  # the consent step's outcome; summary["consent"]: the setting
                           "verification": {"passed": verification.get("passed"),
                                            "not_assessable": (verification.get("checks") or {}).get("not_assessable")}}
     return summary["journey"]
@@ -391,7 +480,9 @@ def run_score(service, audit_id, journey_id, summary: dict) -> None:
     for warning in scored.get("warnings") or []:
         print(f"  warning: {warning}")
     print(f"report: {(scored.get('report') or {}).get('report_html')}")
-    summary["score"] = {"ers": ers, "confidence": scored.get("confidence"), "report": scored.get("report"),
+    report = {k: shown_path(v) if isinstance(v, str) and Path(v).is_absolute() else v
+              for k, v in (scored.get("report") or {}).items()}
+    summary["score"] = {"ers": ers, "confidence": scored.get("confidence"), "report": report,
                         "warnings": scored.get("warnings") or []}
 
 
@@ -439,6 +530,9 @@ def checks(summary: dict, recorder: Recorder, shop: ShopServer | None, fixture: 
               f"sent {sent} TypeSafe + {texts} text, run records {calls.get('choose')} decisions + "
               f"{calls.get('failed') or 0} failed + {calls.get('text')} text + {calls.get('text_failed') or 0} "
               "text failed")
+    if journey and summary.get("audit_consent"):  # info: a journey under another policy than the audit it joins
+        check("journey_consent_matches_audit", summary.get("consent") == summary["audit_consent"], False,
+              f"journey {summary.get('consent')}, audit {summary['audit_consent']}")
     if score:
         foreign = [w for w in score["warnings"] if w.startswith(FOREIGN_HOST)]
         check("journey_on_the_audit_host", not foreign, True, "; ".join(foreign))
@@ -468,6 +562,9 @@ def parse_args(argv=None):
     parser.add_argument("--browser", default="auto", help="auto | launch | harness | cdp:<DevTools URL>")
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--locale", default="it")
+    parser.add_argument("--consent", choices=("auto", "reject", "accept", "none"), default=None,
+                        help="cookie banner policy of the audit and of the journey's start page (default: auto; with "
+                             "--audit-run, that audit's own setting)")
     parser.add_argument("--max-steps", type=cli._integer(1, MAX_STEPS), default=30)  # checked before any request
     parser.add_argument("--artifacts", help="run directory root (default: a new temporary directory)")
     parser.add_argument("--audit-run", metavar="RUN_ID", help="judge and score this audit of --artifacts instead")
@@ -475,7 +572,10 @@ def parse_args(argv=None):
     parser.add_argument("--repeat", type=cli._integer(0), default=0, metavar="N",
                         help="judge N more copies (label agreement)")
     parser.add_argument("--dump-requests", type=Path, metavar="DIR", help="write each request and answer as JSON")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.consent_given = args.consent is not None  # an explicit --consent wins over an --audit-run audit's own policy
+    args.consent = args.consent or "auto"
+    return args
 
 
 def load_audit_run(args) -> tuple[dict | None, str | None]:
@@ -546,6 +646,14 @@ def main(argv=None) -> int:
     if problem or (wrong_site and "journey" not in args.skip):
         print(problem or wrong_site, file=sys.stderr)
         return 2
+    # the audit's own cookie banner policy (run.json settings.consent): with --audit-run it is the journey's default,
+    # so the journey scored into that audit starts as the audit's pages did; an explicit --consent may differ (said)
+    audit_consent = (audit.get("settings") or {}).get("consent") if audit else None
+    if audit_consent and not args.consent_given:
+        args.consent = audit_consent
+    elif audit_consent and args.consent != audit_consent and "journey" not in args.skip:
+        print(f"--consent {args.consent}: the journey's start page is handled otherwise than audit {args.audit_run} "
+              f"(consent {audit_consent}), which score_run merges it into", file=sys.stderr)
     try:
         cli.load_environment()  # ./.env, then the plugin's env file when JEV_ENGAGEMENT_ENV names one
     except (OSError, ValueError) as exc:  # the reason, never the file's content
@@ -581,7 +689,11 @@ def main(argv=None) -> int:
     summary = {"mode": mode, "audit_mode": audit_mode(args, args.audit_run) if args.audit_run else mode, "url": url,
                "started_at": datetime.now(UTC).isoformat(),
                "typesafe_model": os.environ.get("TYPESAFE_MODEL") or "jev-latest", "text_helper": keys["text_helper"],
-               "artifacts": str(artifacts), "judge_cache": str(cache), "errors": {}, "skipped": {}}
+               "consent": args.consent,  # the journey's (and this smoke's audit's) cookie banner policy
+               # the audit's own: --audit-run's stored setting (this summary is written into that audit's directory),
+               # else this smoke's (None: no audit)
+               "audit_consent": audit_consent if audit else args.consent if "audit" not in args.skip else None,
+               "artifacts": shown_path(artifacts), "judge_cache": shown_path(cache), "errors": {}, "skipped": {}}
     audit_id, journey_id = args.audit_run, None
 
     def phase(name, fn):
@@ -632,6 +744,11 @@ def main(argv=None) -> int:
     for call in recorder.of("judge"):  # one per judged page
         print(f"  judge request {call['n']}: {call['what']}, {call['questions']} heads, {call['latency_ms']} ms, "
               f"{call['input_tokens']} input tokens{', ' + call['error'] if call['error'] else ''}")
+    for call in recorder.calls:  # what Jev chose at each journey decision and crawler lookup
+        if call.get("choice"):
+            choice = call["choice"]
+            print(f"  {call['phase']} choice {call['n']}: {choice['operation']} {choice.get('target') or ''} "
+                  f"(operations {choice['probabilities']})")
     for call in recorder.calls:
         if call["latency_ms"] > SLOW_MS or (call["input_tokens"] or 0) > BIG_TOKENS:
             print(f"  warning: request {call['n']} ({call['phase']}, {call['what']}) took {call['latency_ms']} ms "
@@ -649,7 +766,7 @@ def main(argv=None) -> int:
     summary["passed"] = all(item["ok"] for item in summary["checks"] if item["required"])
     store = RunStore(artifacts)
     target = audit_id or journey_id
-    summary = json.loads(json.dumps(summary, ensure_ascii=False, default=str))
+    summary = without_home(json.loads(json.dumps(summary, ensure_ascii=False, default=str)))
     if target and store.path(target).is_dir():  # audit_mode keeps the audit's own record across --audit-run smokes
         store.write_json(target, SUMMARY, summary)
         where = store.path(target) / SUMMARY

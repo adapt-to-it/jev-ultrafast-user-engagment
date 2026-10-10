@@ -56,6 +56,8 @@ def test_the_parser_reads_every_command():
     assert audit.chrome_arg == ["--proxy-server=http://proxy:3128"] and audit.repeats == 2 and audit.json
     assert parse(["journey", SHOP, "--goal", "g", "--oracle", "cart_not_empty", "--profile", "desktop"]).profile \
         == "desktop"
+    assert parse(["journey", SHOP, "--goal", "g", "--oracle", "cart_not_empty"]).consent == "auto"
+    assert parse(["journey", SHOP, "--goal", "g", "--oracle", "cart_not_empty", "--consent", "none"]).consent == "none"
     assert parse(["judge", "r", "--backend", "api", "--samples", "1"]).backend == "api"
     assert parse(["judge", "r", "--backend", "jev"]).backend == "jev"
     assert parse(["audit", SHOP, "--judge", "jev"]).judge == "jev"
@@ -82,6 +84,7 @@ def test_the_parser_reads_every_command():
     ["audit", SHOP, "--goal", "g", "--oracle", "cart_contains_item_under_price", "--oracle-param", "max_prize=50"],
     ["journey", SHOP, "--goal", "g", "--oracle", "cart_contains_item_under_price", "--oracle-param", "max_price=x"],
     ["journey", SHOP, "--goal", "g", "--oracle", "cart_not_empty", "--oracle-param", "query=scarpe"],
+    ["journey", SHOP, "--goal", "g", "--oracle", "cart_not_empty", "--consent", "maybe"],
 ])
 def test_invalid_arguments_exit_with_2(argv, capsys, monkeypatch):
     monkeypatch.setattr(chrome, "sweep_stale_profiles", lambda root=None: pytest.fail("refused before any work"))
@@ -129,6 +132,34 @@ def test_a_journey_that_cannot_start_leaves_the_audit_printed_and_scored(capsys,
     assert code == 1 and started[0]["oracle_params"] == {"max_price": 49.9}
     assert out.startswith(f"Run {run_id}: ") and "Journey non avviato: the journey could not start" in out
     assert "Engagement readiness" in out and RunStore().load(run_id).get("scores")
+
+
+@pytest.mark.parametrize("argv, audit, journey", [
+    (["journey"], None, "auto"),  # the default, as in the audit, the service and the MCP tool
+    (["journey", "--consent", "none"], None, "none"),
+    (["audit"], "auto", "auto"),
+    (["audit", "--consent", "reject"], "reject", "reject"),  # audit --goal: the audit's own --consent
+])
+def test_the_consent_option_reaches_the_audit_and_the_journey(argv, audit, journey, capsys, monkeypatch):
+    from jev_ultrafast.engagement import service
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "not-used")
+    monkeypatch.setattr(chrome, "sweep_stale_profiles", lambda root=None: [])
+    run_id = stored_audit()
+    audits, journeys = [], []
+
+    def audited(self, url, profiles, stages, browser, locale, consent, *args, **kwargs):
+        audits.append(consent)
+        return self.get_run(run_id)
+
+    def no_journey(self, url, **options):
+        journeys.append(options)
+        raise RuntimeError("the journey could not start: TimeoutError: the start page did not load")
+    monkeypatch.setattr(service.EngagementService, "audit_shop", audited)
+    monkeypatch.setattr(service.EngagementService, "run_journey", no_journey)
+    assert cli.main([argv[0], SHOP, *argv[1:], "--goal", "Trova scarpe", "--oracle", "cart_not_empty"]) == 1
+    capsys.readouterr()
+    assert audits == ([audit] if audit else []) and [o["consent"] for o in journeys] == [journey]
 
 
 def test_an_audit_whose_jev_judge_failed_on_every_page_exits_1(capsys, monkeypatch):
@@ -529,6 +560,42 @@ def test_the_smoke_journey_runs_on_the_audit_run_site(tmp_path, monkeypatch, cap
     monkeypatch.setattr(smoke.mcp_server, "load_keys", lambda: {"typesafe_key": False, "text_helper": None})
     assert smoke.main([*argv, "--skip", "journey"]) == 2  # the journey is skipped: only the missing key stops it
     assert "TYPESAFE_API_KEY is missing" in capsys.readouterr().err
+
+
+def test_the_smoke_records_the_audit_runs_own_consent(tmp_path, monkeypatch):
+    """--audit-run writes smoke_summary.json into that audit's directory: its audit_consent is the audit's own
+    settings.consent (never the smoke's --consent), and without --consent the journey takes the audit's policy, so the
+    journey scored into it starts as the audit's pages did. An explicit --consent that differs is kept as the
+    journey's, and the info check journey_consent_matches_audit says so. No phase runs: nothing is requested."""
+    smoke = smoke_module()
+    store = RunStore(tmp_path / "art")
+    audit = store.new_run("audit", "https://shop.example/", {"consent": "reject"})
+    monkeypatch.setattr(smoke.cli, "load_environment", lambda: None)
+    monkeypatch.setattr(smoke.mcp_server, "load_keys", lambda: {"typesafe_key": True, "text_helper": None})
+    monkeypatch.setattr(typesafe, "post_json", lambda *a, **k: pytest.fail("no request: every phase is skipped"))
+    monkeypatch.setenv("JEV_ENGAGEMENT_CACHE", str(tmp_path / "cache"))  # main() sets it; restored after the test
+    skip = [arg for phase in ("audit", "judge", "journey", "score") for arg in ("--skip", phase)]
+
+    def summary(*argv):
+        assert smoke.main(["--audit-run", audit, "--artifacts", str(tmp_path / "art"), *skip, *argv]) == 0
+        return json.loads((store.path(audit) / "smoke_summary.json").read_text(encoding="utf-8"))
+    assert {k: summary()[k] for k in ("consent", "audit_consent")} == {"consent": "reject", "audit_consent": "reject"}
+    assert {k: summary("--consent", "auto")[k] for k in ("consent", "audit_consent")} == {
+        "consent": "auto", "audit_consent": "reject"}
+    assert (smoke.parse_args([]).consent, smoke.parse_args([]).consent_given) == ("auto", False)
+    assert smoke.parse_args(["--consent", "auto"]).consent_given is True  # kept over the audit's own policy
+
+    journey = {"policy": "typesafe", "model_calls": {"choose": 3}, "verification": {"passed": True,
+                                                                                    "not_assessable": None}}
+    recorder = smoke.Recorder(None)
+    for consent, ok in (("auto", False), ("reject", True)):
+        results = {c["name"]: c for c in smoke.checks({"journey": journey, "consent": consent,
+                                                        "audit_consent": "reject"}, recorder, None, False)}
+        match = results["journey_consent_matches_audit"]
+        assert (match["ok"], match["required"]) == (ok, False)
+        assert match["detail"] == f"journey {consent}, audit reject"
+    assert "journey_consent_matches_audit" not in {c["name"] for c in smoke.checks(
+        {"journey": journey, "consent": "auto", "audit_consent": None}, recorder, None, False)}
 
 
 def test_the_smoke_checks_count_the_run_and_refuse_a_foreign_journey():

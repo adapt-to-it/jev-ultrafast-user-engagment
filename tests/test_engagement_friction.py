@@ -370,6 +370,36 @@ def test_a_page_that_navigates_by_itself_between_steps_is_unexpected_and_visited
     assert alone["FAI.UNEXPECTED_NAV"]["value"] == 1 and alone["FAI.BACKTRACK_RATE"]["value"] == 0.0
 
 
+def consent_click(label="Rifiuta tutti", node=9):
+    """crawler.Tab.log's record of the journey's consent step (journey.py): a source, no step number."""
+    return {"source": "consent", "profile": "mobile", "stage": "extra", "purpose": "consent_reject",
+            "operation": "CLICK", "target": "e10", "label": label, "kind": "click", "role": "button", "node": node,
+            "text_len": None, "url_before": SHOP + "/", "status": "executed", "note": None,
+            "t_wall": "2026-10-10T10:00Z"}
+
+
+def test_the_consent_steps_clicks_are_no_pilot_actions():
+    """The consent step's clicks before the first decision (source "consent") are executed in the browser but are not
+    the pilot's: no KPI counts them, whatever their shape (a button click without measurement would otherwise be an
+    unmeasured interaction; three on one node a rage event)."""
+    assert friction.pilot(step()) and not friction.pilot(consent_click())
+    assert not friction.executed(consent_click()) and not friction.interaction(consent_click())
+    assert not friction.countable_click(consent_click())
+    pilot = [step(after="/plp"), step(before="/plp", after="/pdp", node=2), step("SCROLL_DOWN", role=None,
+                                                                                before="/pdp")]
+    clicks = [consent_click(), consent_click("Personalizza", 8), consent_click()]
+    kw = {"optimal_steps": 2, "optimal_pages": 3, "success": True, "profile": "mobile"}
+    assert friction.metrics([*clicks, *pilot], **kw) == friction.metrics(pilot, **kw)
+    out = rows([*clicks, *pilot], **kw)
+    assert out["FAI.ACTIONS_TO_GOAL"]["value"] == 2 and out["FAI.ACTIONS_RATIO"]["value"] == 1.0
+    assert out["FAI.TIME_ON_TASK_SITE"]["evidence"]["steps"] == 3 and out["FAI.RAGE_EVENTS"]["value"] == 0
+    assert out["FAI.DEAD_CLICK_RATE"]["evidence"] == {"dead": 0, "clicks": 2, "unmeasured": 0}
+    assert friction.visits([*clicks, *pilot]) == [SHOP + "/", SHOP + "/plp", SHOP + "/pdp"]
+    alone = rows(clicks, success=None)  # only the consent step ran: nothing of the pilot to measure
+    assert out["FAI.UNEXPECTED_NAV"]["value"] == 0 and not alone["FAI.UNEXPECTED_NAV"]["assessed"]
+    assert alone["FAI.DEAD_CLICK_RATE"]["reason"].startswith("not_applicable")
+
+
 def test_a_journey_that_executed_nothing_reports_process_kpis_as_not_applicable():
     out = rows([{"operation": "DONE", "decision_latency_ms": 900}], success=False)
     assert out["FAI.JOURNEY_SUCCESS"]["assessed"]

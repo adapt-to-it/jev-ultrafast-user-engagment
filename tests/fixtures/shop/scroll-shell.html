@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scarpa da corsa Aurora | Passo Svelto</title>
+  <link rel="icon" href="data:,">
+  <style>
+    /* an app shell: the window never scrolls, main is the scroller and holds the header too ("?window": the same page
+       scrolled by the window) */
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    html.window, html.window body { height: auto; overflow: visible; }
+    body { font: 16px/1.5 system-ui, sans-serif; color: #1d232b; background: #ffffff; }
+    main { height: 100vh; overflow: auto; scroll-behavior: smooth; }
+    html.window main { height: auto; overflow: visible; }
+    .top { display: flex; justify-content: space-between; height: 48px; padding: 0 16px; align-items: center; }
+    .buybox { padding: 0 16px; }
+    .filler { height: 1180px; }
+    .atc { display: block; box-sizing: border-box; width: 300px; height: 48px; margin: 0; border: 0;
+           background: #0b6b3a; color: #ffffff; font: 700 16px/48px system-ui, sans-serif; }
+    .related { padding: 0 16px; }
+    .related h2 { margin: 16px 0 8px; font-size: 18px; }
+    /* "Completa il look": three related products in one row, each with its own add-to-cart, close below the main one */
+    .cards { display: flex; gap: 8px; margin: 0; padding: 0; list-style: none; }
+    .card { width: 110px; border: 1px solid #e2e7ee; padding: 4px; }
+    .card h3 { margin: 4px 0; font-size: 14px; }
+    .card p { margin: 2px 0; }
+    .card button { width: 100px; height: 36px; font-size: 12px; }
+    .bottom { height: 900px; }
+  </style>
+  <script>if (new URLSearchParams(location.search).has('window')) document.documentElement.classList.add('window');</script>
+</head>
+<body data-page="product">
+  <main>
+    <header class="top"><a href="index.html">Passo Svelto</a><a href="cart.html">Il mio carrello</a></header>
+    <section class="buybox">
+      <h1>Scarpa da corsa Aurora</h1>
+      <p class="price">49,90 €</p>
+      <div class="filler"></div>
+      <button class="atc" id="add" type="button">Aggiungi al carrello</button>
+    </section>
+    <section class="related">
+      <h2>Completa il look</h2>
+      <ul class="cards">
+        <li class="card"><a href="product.html?id=3"><img src="img/shoe-c.svg" alt="Scarpa da corsa Brezza" width="100"
+          height="60"><h3>Brezza</h3></a><p>39,90 €</p><button type="button" data-related="1">Aggiungi al carrello</button></li>
+        <li class="card"><a href="product.html?id=7"><img src="img/shoe-c.svg" alt="Scarpa da corsa Onda" width="100"
+          height="60"><h3>Onda</h3></a><p>44,90 €</p><button type="button" data-related="2">Aggiungi al carrello</button></li>
+        <li class="card"><a href="product.html?id=9"><img src="img/shoe-a.svg" alt="Scarpa da camminata Sentiero"
+          width="100" height="60"><h3>Sentiero</h3></a><p>34,90 €</p><button type="button"
+          data-related="3">Aggiungi al carrello</button></li>
+      </ul>
+    </section>
+    <div class="bottom"></div>
+  </main>
+  <script>
+    // which add-to-cart was clicked: the page's own (MAIN) or a related product's (RELATED1-3)
+    document.getElementById('add').addEventListener('click', () => { document.title = 'MAIN'; });
+    document.querySelectorAll('[data-related]').forEach(b => b.addEventListener('click', () => {
+      document.title = 'RELATED' + b.dataset.related;
+    }));
+  </script>
+</body>
+</html>
