@@ -137,7 +137,7 @@ class _Live:
 def _start_time(pid: int) -> int | str | None:
     """The process start time, only ever compared for equality on the machine that recorded it: clock ticks since
     boot (/proc/<pid>/stat field 22) where /proc exists (Linux), else the start date `ps -o lstart=` prints (macOS
-    and the BSDs, to the second, in the C locale); None when neither can be read."""
+    and the BSDs, to the second, in UTC and the C locale); None when neither can be read."""
     try:
         return int(Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()[19])
     except (OSError, ValueError, IndexError):
@@ -148,11 +148,12 @@ def _start_time(pid: int) -> int | str | None:
 
 
 def _ps_start_time(pid: int) -> str | None:
-    """The start date `ps -o lstart=` prints for pid in the C locale ("Sat Oct 10 14:17:44 2026"), None when ps is
-    missing, fails or knows no such process."""
+    """The start date `ps -o lstart=` prints for pid ("Sat Oct 10 14:17:44 2026"), None when ps is missing, fails or
+    knows no such process. In UTC and the C locale: ps prints local time, so two processes with another TZ (a
+    terminal's export, a laptop that changed zone) would otherwise read one live owner as a reused pid."""
     try:
         out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=2,
-                             env={**os.environ, "LC_ALL": "C"})
+                             env={**os.environ, "LC_ALL": "C", "TZ": "UTC0"})
     except (OSError, subprocess.SubprocessError):
         return None
     return " ".join(out.stdout.split()) or None

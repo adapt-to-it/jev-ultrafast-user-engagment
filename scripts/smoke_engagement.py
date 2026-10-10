@@ -20,7 +20,8 @@ answer through model.validate_choice), so the printed counts, latencies and toke
 the runs record, and the two are compared. --dump-requests writes each request with its answer (never the key).
 Without it, the summary's calls still hold, for each journey decision and crawler lookup, the operation Jev chose,
 every operation's probability and the offered element it picked (no page text); its paths are relative to the
-working directory (or start at "~"), so a committed summary names no home directory.
+working directory (or start at "~") and the home directory is written as "~" in every other string, error messages
+included, so a committed summary names no home directory.
 --repeat N judges copies of the audit N more times (cache off, nothing stored) and prints the label agreement per task.
 A smoke never reuses a cached Jev verdict: the judge runs with the cache off (judge_with_jev(use_cache=False)) in a
 judge-cache directory of its own, new at every invocation, and the required check judge_reused_no_cached_verdict fails
@@ -196,20 +197,24 @@ def _choice(body: dict, result) -> dict | None:
         if "tasks" in state or not isinstance(answer, dict) or "choice" not in answer:
             return None
         probabilities = answer.get("probabilities") if isinstance(answer.get("probabilities"), dict) else {}
+        numeric = {k: v for k, v in probabilities.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
         out = {"operation": answer["choice"],
-               "probabilities": {k: round(v, 3) for k, v in sorted(probabilities.items(), key=lambda kv: -kv[1])
-                                 if isinstance(v, (int, float))}}
+               "probabilities": {k: round(v, 3) for k, v in sorted(numeric.items(), key=lambda kv: -kv[1])}}
+    except (AttributeError, TypeError, ValueError):
+        return None
+    try:  # a malformed target head never drops the operation already read
         head = f"{str(answer['choice']).lower()}_target"
         target = result["answers"].get(head)
         offered = ((body.get("questions") or {}).get(head) or {}).get("criteria") or {}
-        if isinstance(target, dict) and target.get("choice") in offered:
+        if isinstance(target, dict) and isinstance(target.get("choice"), str) and target["choice"] in offered:
             chosen = target["choice"]
             out["target"] = str((offered[chosen] or {}).get("element") or chosen)[:80]
-            p = (target.get("probabilities") or {}).get(chosen)
-            out["target_probability"] = round(p, 3) if isinstance(p, (int, float)) else None
-        return out
+            heads = target.get("probabilities") if isinstance(target.get("probabilities"), dict) else {}
+            p = heads.get(chosen)
+            out["target_probability"] = round(p, 3) if isinstance(p, (int, float)) and not isinstance(p, bool) else None
     except (AttributeError, TypeError, ValueError):
-        return None
+        pass
+    return out
 
 
 def _what(body: dict, kind: str) -> str:
@@ -237,6 +242,25 @@ def shown_path(path) -> str:
         except ValueError:
             continue
     return resolved.as_posix()
+
+
+def without_home(value):
+    """value (the summary, any JSON shape) with the home directory written as "~" in every string, error messages
+    included (a Chromium under ~/.cache that failed to start names its path)."""
+    homes = sorted({str(Path.home()), str(Path.home().resolve())} - {"", "/"}, key=len, reverse=True)
+    if not homes:  # no usable home directory
+        return value
+    pattern = re.compile("(?:" + "|".join(re.escape(h) for h in homes) + r")(?![\w.-])")
+
+    def scrub(item):
+        if isinstance(item, str):
+            return pattern.sub("~", item)
+        if isinstance(item, list):
+            return [scrub(i) for i in item]
+        if isinstance(item, dict):
+            return {k: scrub(v) for k, v in item.items()}
+        return item
+    return scrub(value)
 
 
 def quantile(values, q):
@@ -701,7 +725,7 @@ def main(argv=None) -> int:
     summary["passed"] = all(item["ok"] for item in summary["checks"] if item["required"])
     store = RunStore(artifacts)
     target = audit_id or journey_id
-    summary = json.loads(json.dumps(summary, ensure_ascii=False, default=str))
+    summary = without_home(json.loads(json.dumps(summary, ensure_ascii=False, default=str)))
     if target and store.path(target).is_dir():  # audit_mode keeps the audit's own record across --audit-run smokes
         store.write_json(target, SUMMARY, summary)
         where = store.path(target) / SUMMARY

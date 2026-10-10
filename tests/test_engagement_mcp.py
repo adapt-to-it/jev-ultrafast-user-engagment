@@ -790,15 +790,27 @@ def test_without_proc_the_start_time_comes_from_ps():
     another for a process started later, so a reused pid is still told apart; None for a pid that does not exist."""
     if shutil.which("ps") is None:
         pytest.skip("no ps on this machine")
+    time.sleep(1.1)  # ps prints to the second: the child starts in another second than this process
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
-        time.sleep(1.1)  # ps prints to the second
         mine, again = _ps_start_time(os.getpid()), _ps_start_time(os.getpid())
         assert mine and mine == again and _ps_start_time(child.pid) not in (None, mine)
     finally:
         child.kill()
         child.wait()
     assert _ps_start_time(child.pid) is None
+
+
+def test_the_ps_start_time_does_not_depend_on_the_callers_time_zone(monkeypatch):
+    """ps prints local time: an owner recorded under one TZ and read under another (a terminal's export, a laptop
+    that changed zone) must still be the same process, never a reused pid."""
+    if shutil.which("ps") is None:
+        pytest.skip("no ps on this machine")
+    seen = set()
+    for zone in ("UTC", "Europe/Rome", "Asia/Tokyo", "America/New_York"):
+        monkeypatch.setenv("TZ", zone)
+        seen.add(_ps_start_time(os.getpid()))
+    assert len(seen) == 1 and None not in seen
 
 
 def test_runs_of_a_process_that_died_are_marked_failed_not_waited_for(service, monkeypatch):
@@ -842,7 +854,9 @@ def test_runs_of_a_process_that_died_are_marked_failed_not_waited_for(service, m
     assert run["errors"] == [f"interrupted: owning process {dead} is gone"]
     assert f"abandoned: owning process {dead} is gone; closed without verification" in run["warnings"]
     assert svc.get_run(alive)["status"] == svc.get_run(elsewhere)["status"] == "running"
-    assert not any((svc.store.path(r) / "owner.json").exists() for r in (audit, journey, reused, landed))
+    assert not any((svc.store.path(r) / "owner.json").exists()
+                   for r in (audit, journey, landed, *([reused] if readable else [])))
+    assert readable or (svc.store.path(reused) / "owner.json").exists()  # unreadable: a live pid stays the owner
     with pytest.raises(ValueError, match="was interrupted"):
         svc.score_run(audit, [landed])  # an interrupted audit is never scored
     finished = store.new_run("audit", SHOP, {})
@@ -1954,6 +1968,13 @@ def test_the_smoke_summary_names_no_home_directory(tmp_path, monkeypatch):
     assert smoke.shown_path("artifacts/smoke-real/judge-cache-x") == "artifacts/smoke-real/judge-cache-x"
     assert smoke.shown_path(home / "elsewhere" / "report.html") == "~/elsewhere/report.html"
     assert smoke.shown_path(tmp_path / "other") == (tmp_path / "other").resolve().as_posix()  # neither: as it is
+    error = f"RuntimeError: Chromium exited with code 1: {home}/.cache/ms-playwright/chrome\nlog"
+    scrubbed = smoke.without_home({"errors": {"journey": error}, "checks": [{"detail": error}], "n": 1,
+                                   "other": f"{home}x/file"})  # another user's home is not this one
+    assert scrubbed == {"errors": {"journey": "RuntimeError: Chromium exited with code 1: ~/.cache/ms-playwright/"
+                                              "chrome\nlog"},
+                        "checks": [{"detail": "RuntimeError: Chromium exited with code 1: ~/.cache/ms-playwright/"
+                                              "chrome\nlog"}], "n": 1, "other": f"{home}x/file"}
 
 
 def test_the_smoke_records_what_jev_chose_without_page_text():
