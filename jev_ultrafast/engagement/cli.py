@@ -460,8 +460,13 @@ def _print_journey(result: dict) -> None:
         text = result.get("text_helper") or "non disponibile (TEXT_MODEL_API_KEY assente: Jev non può scrivere)"
         failed = calls.get("failed") or 0  # requests that brought no decision (HTTP error, invalid answer)
         extra = f" (+{failed} {'richiesta' if failed == 1 else 'richieste'} TypeSafe senza decisione)" if failed else ""
+        no_text = calls.get("text_failed") or 0  # text requests sent that brought no usable text
+        texts = calls.get("text") or 0
+        written = f", {texts} {'testo scritto' if texts == 1 else 'testi scritti'}" + (
+            f" (+{no_text} {'richiesta' if no_text == 1 else 'richieste'} senza testo)" if no_text else "")
         print(f"  pilota Jev: {calls.get('choose')} decisioni{extra} in "
-              f"{_num((timing.get('decision') or 0) / 1000, 2)} s (escluse dal tempo del sito), aiuto testuale {text}")
+              f"{_num((timing.get('decision') or 0) / 1000, 2)} s (escluse dal tempo del sito), aiuto testuale {text}"
+              f"{written if calls.get('text') or no_text else ''}")
     for kpi, value in (result.get("friction") or {}).items():
         print(f"  {kpi:28} {_num(value, 2)}")
     print(f"  passi: {result.get('steps_path')}")

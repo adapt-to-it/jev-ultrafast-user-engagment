@@ -864,6 +864,9 @@ def test_journey_card_names_the_pilot_and_its_decision_time():
     assert f'<p class="muted">{report.e(line)}</p>' in html
     assert data["journey"]["model_calls"]["choose"] == 7 and data["journey"]["policy_requested"] == "auto"
     assert data["journey"]["timing_ms"]["site"] == 12430 and data["journey"]["text_helper"] == "deepseek-chat"
+    run["journey"]["model_calls"].update(text=0, text_failed=2)  # sent, but no usable text came back
+    _, html = build(run, steps=steps())
+    assert report.e("decisioni non riuscite 2 · richieste di testo senza testo 2 · tempo del sito") in html
     run["journey"].update(policy="host", text_helper=None, model_calls={"choose": 5, "text": 0, "failed": 0},
                           timing_ms={})
     _, html = build(run, steps=steps())

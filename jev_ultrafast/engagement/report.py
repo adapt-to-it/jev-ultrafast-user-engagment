@@ -863,7 +863,8 @@ def _seconds(ms) -> str:
 def _pilot(journey) -> str:
     """The pilot line, when the run recorded its model calls and timing: who decided, how many decisions and how long
     they took (excluded from the site's time), the TypeSafe calls that gave no valid choice (model_calls.failed, not
-    in the decisions), and the site's own time."""
+    in the decisions), the texts written and the text requests that brought none (model_calls.text_failed), and the
+    site's own time."""
     calls, timing = journey.get("model_calls") or {}, journey.get("timing_ms") or {}
     if not calls and not timing:
         return ""
@@ -878,6 +879,8 @@ def _pilot(journey) -> str:
     if calls.get("text"):
         helper = f", {journey['text_helper']}" if journey.get("text_helper") else ""
         parts.append(f"testi generati {calls['text']}{helper}")
+    if calls.get("text_failed"):
+        parts.append(f"richieste di testo senza testo {calls['text_failed']}")
     if isinstance(timing.get("site"), (int, float)):
         parts.append(f"tempo del sito {_seconds(timing['site'])}")
     return f'<p class="muted">{e(" · ".join(parts))}</p>'
