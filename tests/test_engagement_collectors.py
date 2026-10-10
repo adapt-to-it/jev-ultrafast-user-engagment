@@ -518,7 +518,8 @@ def test_home_audit(run):
     assert {"Trail", "Abbigliamento", "Accessori", "Offerte"} <= {c["label"] for c in audit["nav"]["categories"]}
     consent = [o for o in audit["overlays"] if o["kind"] == "consent"]
     assert len(consent) == 1 and consent[0]["accept_labels"] and consent[0]["reject_labels"]
-    assert consent[0]["accept_area"] == consent[0]["reject_area"] and not consent[0]["blocking"]
+    # the same CSS for both buttons; the rounded areas may differ by a pixel between Chrome builds (20848 vs 20849)
+    assert abs(consent[0]["accept_area"] - consent[0]["reject_area"]) <= 2 and not consent[0]["blocking"]
     trust = audit["trust"]
     assert trust["contact"] == {**trust["contact"], "email": True, "phone": True, "address": True}
     assert "01234567897" in trust["vat_id"] and trust["policy_count"] == 4

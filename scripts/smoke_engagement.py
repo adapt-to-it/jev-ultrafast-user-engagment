@@ -18,6 +18,9 @@ unchanged.
 Every TypeSafe and text-helper request goes through a recording wrapper of jev_ultrafast.model.post_json (and every
 answer through model.validate_choice), so the printed counts, latencies and tokens are measured independently of what
 the runs record, and the two are compared. --dump-requests writes each request with its answer (never the key).
+Without it, the summary's calls still hold, for each journey decision and crawler lookup, the operation Jev chose,
+every operation's probability and the offered element it picked (no page text); its paths are relative to the
+working directory (or start at "~"), so a committed summary names no home directory.
 --repeat N judges copies of the audit N more times (cache off, nothing stored) and prints the label agreement per task.
 A smoke never reuses a cached Jev verdict: the judge runs with the cache off (judge_with_jev(use_cache=False)) in a
 judge-cache directory of its own, new at every invocation, and the required check judge_reused_no_cached_verdict fails
@@ -160,6 +163,9 @@ class Recorder:
                         "questions": len(body.get("questions") or {}) if kind == "typesafe" else None,
                         "what": _what(body, kind), "model": result.get("model") if isinstance(result, dict) else None,
                         "error": error}
+                choice = _choice(body, result) if kind == "typesafe" else None
+                if choice:
+                    call["choice"] = choice
                 self.calls.append(call)
             if self.dump:  # the key travels in a header and is never written
                 record = {"url": url, **call, "request": body, "response": result}
@@ -179,6 +185,33 @@ class Recorder:
         return [c for c in self.calls if c["phase"] == phase and c["kind"] == kind]
 
 
+def _choice(body: dict, result) -> dict | None:
+    """For a choose request (a journey decision or a crawler lookup): the operation Jev picked, every operation's
+    probability and, for an operation with a target, the offered element it chose ("[8] Scarpe da corsa") and its
+    probability. No page text, so a journey that ended BLOCKED is readable from the summary alone. None for a judge
+    request or an answer without an operation head."""
+    try:
+        state = body.get("state") if isinstance(body.get("state"), dict) else {}
+        answer = ((result or {}).get("answers") or {}).get("operation") if isinstance(result, dict) else None
+        if "tasks" in state or not isinstance(answer, dict) or "choice" not in answer:
+            return None
+        probabilities = answer.get("probabilities") if isinstance(answer.get("probabilities"), dict) else {}
+        out = {"operation": answer["choice"],
+               "probabilities": {k: round(v, 3) for k, v in sorted(probabilities.items(), key=lambda kv: -kv[1])
+                                 if isinstance(v, (int, float))}}
+        head = f"{str(answer['choice']).lower()}_target"
+        target = result["answers"].get(head)
+        offered = ((body.get("questions") or {}).get(head) or {}).get("criteria") or {}
+        if isinstance(target, dict) and target.get("choice") in offered:
+            chosen = target["choice"]
+            out["target"] = str((offered[chosen] or {}).get("element") or chosen)[:80]
+            p = (target.get("probabilities") or {}).get(chosen)
+            out["target_probability"] = round(p, 3) if isinstance(p, (int, float)) else None
+        return out
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def _what(body: dict, kind: str) -> str:
     """One line about a request: the judged page and its heads, or the page Jev chose on."""
     state = body.get("state") if isinstance(body.get("state"), dict) else {}
@@ -192,6 +225,18 @@ def _what(body: dict, kind: str) -> str:
 
 
 # ---------------------------------------------------------------- helpers
+
+
+def shown_path(path) -> str:
+    """A path as smoke_summary.json records it: relative to the working directory when it lies inside it, else with
+    the home directory written as "~", else as it is: a committed summary never names a user's home."""
+    resolved = Path(path).expanduser().resolve()
+    for base, prefix in ((Path.cwd().resolve(), ""), (Path.home().resolve(), "~/")):
+        try:
+            return prefix + resolved.relative_to(base).as_posix()
+        except ValueError:
+            continue
+    return resolved.as_posix()
 
 
 def quantile(values, q):
@@ -391,7 +436,9 @@ def run_score(service, audit_id, journey_id, summary: dict) -> None:
     for warning in scored.get("warnings") or []:
         print(f"  warning: {warning}")
     print(f"report: {(scored.get('report') or {}).get('report_html')}")
-    summary["score"] = {"ers": ers, "confidence": scored.get("confidence"), "report": scored.get("report"),
+    report = {k: shown_path(v) if isinstance(v, str) and Path(v).is_absolute() else v
+              for k, v in (scored.get("report") or {}).items()}
+    summary["score"] = {"ers": ers, "confidence": scored.get("confidence"), "report": report,
                         "warnings": scored.get("warnings") or []}
 
 
@@ -581,7 +628,7 @@ def main(argv=None) -> int:
     summary = {"mode": mode, "audit_mode": audit_mode(args, args.audit_run) if args.audit_run else mode, "url": url,
                "started_at": datetime.now(UTC).isoformat(),
                "typesafe_model": os.environ.get("TYPESAFE_MODEL") or "jev-latest", "text_helper": keys["text_helper"],
-               "artifacts": str(artifacts), "judge_cache": str(cache), "errors": {}, "skipped": {}}
+               "artifacts": shown_path(artifacts), "judge_cache": shown_path(cache), "errors": {}, "skipped": {}}
     audit_id, journey_id = args.audit_run, None
 
     def phase(name, fn):
@@ -632,6 +679,11 @@ def main(argv=None) -> int:
     for call in recorder.of("judge"):  # one per judged page
         print(f"  judge request {call['n']}: {call['what']}, {call['questions']} heads, {call['latency_ms']} ms, "
               f"{call['input_tokens']} input tokens{', ' + call['error'] if call['error'] else ''}")
+    for call in recorder.calls:  # what Jev chose at each journey decision and crawler lookup
+        if call.get("choice"):
+            choice = call["choice"]
+            print(f"  {call['phase']} choice {call['n']}: {choice['operation']} {choice.get('target') or ''} "
+                  f"(operations {choice['probabilities']})")
     for call in recorder.calls:
         if call["latency_ms"] > SLOW_MS or (call["input_tokens"] or 0) > BIG_TOKENS:
             print(f"  warning: request {call['n']} ({call['phase']}, {call['what']}) took {call['latency_ms']} ms "

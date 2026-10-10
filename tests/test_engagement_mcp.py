@@ -13,6 +13,7 @@ import importlib.metadata
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -43,6 +44,8 @@ from jev_ultrafast.engagement.service import (
     _failed,
     _jev_undecided,
     _JobStore,
+    _ps_start_time,
+    _start_time,
 )
 from jev_ultrafast.engagement.store import RunStore, iso_now
 from jev_ultrafast.engagement.transport import DirectTransport
@@ -782,6 +785,22 @@ def test_a_run_that_never_started_is_not_waited_for(service):
     assert svc.get_run(fresh)["status"] == "created"
 
 
+def test_without_proc_the_start_time_comes_from_ps():
+    """macOS has no /proc: the owner's start time is the date ps prints, the same for one process every time and
+    another for a process started later, so a reused pid is still told apart; None for a pid that does not exist."""
+    if shutil.which("ps") is None:
+        pytest.skip("no ps on this machine")
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        time.sleep(1.1)  # ps prints to the second
+        mine, again = _ps_start_time(os.getpid()), _ps_start_time(os.getpid())
+        assert mine and mine == again and _ps_start_time(child.pid) not in (None, mine)
+    finally:
+        child.kill()
+        child.wait()
+    assert _ps_start_time(child.pid) is None
+
+
 def test_runs_of_a_process_that_died_are_marked_failed_not_waited_for(service, monkeypatch):
     if os.name != "posix":
         pytest.skip("owner liveness is only checked on POSIX")
@@ -815,7 +834,9 @@ def test_runs_of_a_process_that_died_are_marked_failed_not_waited_for(service, m
     assert svc.store.load(journey)["status"] == "failed"
     with pytest.raises(ValueError, match="still running"):
         svc.score_run(alive)
-    assert sorted(svc.recover_orphans()) == sorted([reused, landed])  # a live pid with another start time: reused
+    # a live pid with another start time is reused, where the start time can be read (/proc, or ps on macOS)
+    readable = _start_time(os.getpid()) is not None
+    assert sorted(svc.recover_orphans()) == sorted([reused, landed] if readable else [landed])
     run = svc.store.load(landed)
     assert run["status"] == "partial" and run["journey"]["status"] == "abandoned" and run["finished_at"]
     assert run["errors"] == [f"interrupted: owning process {dead} is gone"]
@@ -1919,6 +1940,48 @@ def test_the_smoke_never_reuses_a_cached_jev_verdict(service, monkeypatch, tmp_p
     assert again["judge"]["accepted_in_run"] == judged["accepted"] > 0  # this call's, never the cached ones
     assert svc.store.load(control)["judgments"] == before["judgments"]  # nothing stored
     assert svc.store.load(control)["model_calls"] == before["model_calls"]
+
+
+def test_the_smoke_summary_names_no_home_directory(tmp_path, monkeypatch):
+    """smoke_summary.json gets committed as evidence: its paths are relative to the working directory, or start at
+    "~" outside it, so the file never carries the user's home (/Users/<name>/...)."""
+    smoke = smoke_module()
+    home = tmp_path / "home" / "someone"
+    (home / "repo").mkdir(parents=True)
+    monkeypatch.setattr(smoke.Path, "home", lambda: home)
+    monkeypatch.chdir(home / "repo")
+    assert smoke.shown_path(home / "repo" / "artifacts" / "smoke-fixture") == "artifacts/smoke-fixture"
+    assert smoke.shown_path("artifacts/smoke-real/judge-cache-x") == "artifacts/smoke-real/judge-cache-x"
+    assert smoke.shown_path(home / "elsewhere" / "report.html") == "~/elsewhere/report.html"
+    assert smoke.shown_path(tmp_path / "other") == (tmp_path / "other").resolve().as_posix()  # neither: as it is
+
+
+def test_the_smoke_records_what_jev_chose_without_page_text():
+    """Each choose request (journey decision, crawler lookup) records the operation, every operation's probability
+    and the chosen offered element: a journey that ended BLOCKED can be read from the summary alone."""
+    smoke = smoke_module()
+    body = {"state": {"page": {"url": "http://shop.test/", "title": "Shop", "text": "page text never copied"},
+                      "elements": [{"index": "1", "label": "Scarpe da corsa"}, {"index": "2", "label": "Accetta"}]},
+            "questions": {"operation": {"type": "choice", "criteria": {"CLICK": "c", "BLOCKED": "b"}},
+                          "click_target": {"type": "choice", "criteria": {"1": {"element": "[1] Scarpe da corsa"},
+                                                                          "2": {"element": "[2] Accetta"}}}}}
+    blocked = {"answers": {"operation": {"choice": "BLOCKED", "probabilities": {"CLICK": 0.4, "BLOCKED": 0.6},
+                                         "confidence": 0.6},
+                           "click_target": {"choice": "2", "probabilities": {"1": 0.3, "2": 0.7}}}}
+    assert smoke._choice(body, blocked) == {"operation": "BLOCKED", "probabilities": {"BLOCKED": 0.6, "CLICK": 0.4}}
+    click = {"answers": {"operation": {"choice": "CLICK", "probabilities": {"CLICK": 0.9, "BLOCKED": 0.1}},
+                         "click_target": {"choice": "1", "probabilities": {"1": 0.94, "2": 0.06}}}}
+    chosen = smoke._choice(body, click)
+    assert chosen == {"operation": "CLICK", "probabilities": {"CLICK": 0.9, "BLOCKED": 0.1},
+                      "target": "[1] Scarpe da corsa", "target_probability": 0.94}
+    assert "page text" not in json.dumps(chosen)
+    assert smoke._choice({"state": {"tasks": []}}, click) is None  # a judge request
+    assert smoke._choice(body, {"answers": {}}) is None and smoke._choice(body, None) is None
+    recorder = smoke.Recorder(None)
+    recorder._post = lambda url, key, request: blocked
+    recorder.phase = "journey"
+    recorder.post(smoke.SYSTEMONE, "k", body)
+    assert recorder.calls[0]["choice"]["operation"] == "BLOCKED" and "page text" not in json.dumps(recorder.calls)
 
 
 def test_the_smoke_counts_a_text_request_without_a_value_as_the_run_does():
