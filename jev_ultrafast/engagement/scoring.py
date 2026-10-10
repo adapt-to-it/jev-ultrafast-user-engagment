@@ -260,6 +260,18 @@ def _grade(coverage, anchors):
     return None
 
 
+def _stored(coverage, anchors) -> float:
+    """A coverage as stored and shown: rounded to three decimals (0.9467 -> 0.947), or rounded down (within _grade's
+    1e-9 tolerance) where rounding would reach a grade or publication threshold the coverage missed (0.84953 -> 0.849,
+    never 0.85): a stored coverage never reads as a grade or a gate that the unrounded one did not earn."""
+    value = round(coverage, 3)
+    publish = anchors.get("publish") or {}
+    thresholds = [*anchors.get("grades", {}).values(), publish.get("min_coverage"), publish.get("min_major_coverage")]
+    if any(t is not None and coverage + 1e-9 < t <= value + 1e-9 for t in thresholds):
+        return math.floor(coverage * 1000 + 1e-6) / 1000
+    return value
+
+
 def _source(kpi: Kpi, rows, chosen=None):
     if chosen is not None:  # first/best: the value comes from one observation
         return "judged" if chosen.get("source") == "judged" else "deterministic"
@@ -338,7 +350,7 @@ def _sub_index(members, anchors):
     lowest = sorted(scored, key=lambda k: (k["normalized"], -k["weight"], k["id"]))
     return {
         "score": round(score, 1),
-        "coverage": round(coverage, 3),
+        "coverage": _stored(coverage, anchors),
         "grade": _grade(coverage, anchors),
         "llm_share": round(judged / assessed_weight, 3),
         "limiting_kpis": [k["id"] for k in lowest if k["normalized"] < 100][: anchors.get("limiting_kpis", 3)],
@@ -399,11 +411,27 @@ def dpr(signals) -> float:
     return round(100 * (1 - keep), 2)
 
 
-def _share(value, below=None) -> str:
-    """0.123 -> "12 %", as report.fmt_share writes it; a value under `below` never reads as reaching it ("59,9 %")."""
-    if below is not None and round(value * 100) >= round(below * 100):
-        return f"{math.floor(value * 1000) / 10:.1f} %".replace(".", ",")
-    return f"{round(value * 100):d} %"
+def fmt_share(value, below=None) -> str:
+    """A 0-1 share as a whole percentage, the one formatter of the ers() reasons, the report (report.fmt_share) and
+    the CLI: 0.123 -> "12 %", None -> "n/d". A value under a threshold (a grade of anchors.json, its
+    publish.min_coverage and publish.min_major_coverage, or below) never reads as reaching it (catalogue 3.5): where
+    rounding would reach one it is rounded down, 0.849 -> "84 %" (never "Confidenza B (copertura 85 %)"), keeping a
+    non-zero tenth under a publication threshold, 0.499 -> "49,9 %". Coverages are formatted from their stored value
+    (_stored), so one coverage reads the same in a reason, a card and the CLI. 1e-9 is _grade's tolerance."""
+    if value is None:
+        return "n/d"
+    percent = value * 100
+    whole = round(percent)
+    anchors = _default_anchors()
+    gates = [anchors["publish"]["min_coverage"], anchors["publish"]["min_major_coverage"],
+             *(() if below is None else (below,))]
+    missed = [t for t in (*anchors["grades"].values(), *gates) if value + 1e-9 < t <= whole / 100 + 1e-9]
+    if not missed:
+        return f"{whole:d} %"
+    tenths = math.floor(percent * 10 + 1e-6)  # rounded down: 56.99999999999999 (0.57 * 100) is 57
+    if tenths % 10 and any(t in gates for t in missed):
+        return f"{tenths // 10},{tenths % 10} %"
+    return f"{tenths // 10:d} %"
 
 
 def ers(sub_indices, dpr_score, anchors) -> dict:
@@ -421,18 +449,20 @@ def ers(sub_indices, dpr_score, anchors) -> dict:
     if not present:
         reasons.append("nessun sotto-indice valutabile")
     least, least_major = publish["min_coverage"], publish["min_major_coverage"]
+    # the gates read the unrounded coverages; the reasons show the stored ones, as the report and the CLI do
     if coverage + 1e-9 < least:
-        reasons.append(f"copertura complessiva {_share(coverage, least)} sotto il minimo del {_share(least)}")
-    low = [f"{NAMES[n]} ({_share(covered[n], least_major)})" for n in SUB_INDICES
+        reasons.append(f"copertura complessiva {fmt_share(_stored(coverage, anchors), least)} sotto il minimo del "
+                       f"{fmt_share(least)}")
+    low = [f"{NAMES[n]} ({fmt_share(_stored(covered[n], anchors), least_major)})" for n in SUB_INDICES
            if weights.get(n, 0) >= publish.get("major_weight", 15) and covered[n] + 1e-9 < least_major]
     if low:
-        reasons.append(f"copertura sotto il minimo del {_share(least_major)} per {', '.join(low)}")
+        reasons.append(f"copertura sotto il minimo del {fmt_share(least_major)} per {', '.join(low)}")
     limiting = min(present, key=lambda n: (present[n], n)) if present else None
     result = {
         "score": None,
         "published": False,
         "grade": None,
-        "coverage": round(coverage, 3),
+        "coverage": _stored(coverage, anchors),
         "llm_share": round(llm_share, 3),
         "reason": "; ".join(reasons) or None,
         "limiting_factor": limiting,

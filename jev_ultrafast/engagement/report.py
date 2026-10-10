@@ -9,7 +9,7 @@ from html import escape
 from .judgments import JEV_JUDGE_ID, RUBRICS_VERSION, load_rubrics
 from .kpis import KPIS
 from .schemas import RISK_INDEX, SCHEMA_VERSION, SUB_INDICES
-from .scoring import NAMES, load_anchors, run_observations, score_run
+from .scoring import NAMES, fmt_share, load_anchors, run_observations, score_run
 
 REPORT_VERSION = "report.v1"
 DISCLAIMER = (
@@ -147,7 +147,8 @@ REASONS = {
     "journey_error": "percorso interrotto da un errore del sistema di prova, non del sito",
     "left_shop": "percorso uscito dal negozio verso un altro sito",
     "page_unreadable": "controlli trattenuti: la pagina non è stata letta dall'audit",
-    "text_helper_unavailable": "aiuto testuale non disponibile: TYPE_TEXT non offerto",
+    "text_helper_unavailable": ("aiuto testuale non disponibile: TYPE_TEXT scelto da Jev e rifiutato (nessuna "
+                                "chiave per l'aiuto testuale)"),
     "text_refused": "testo rifiutato dalla guardia di sicurezza: TYPE_TEXT non più offerto",
     "cart_unreadable": "pagina del carrello non leggibile dall'audit",
     "final_page_unreadable": "pagina finale non leggibile dall'audit",
@@ -360,10 +361,6 @@ def fmt_score(value) -> str:
     return "n/d" if value is None else _it(value, 1)
 
 
-def fmt_share(value) -> str:
-    return "n/d" if value is None else f"{round(value * 100):d} %"
-
-
 def fmt_ratio(value) -> str:
     """0.3 -> "0,30" for formulas."""
     return _it(value, 2)
@@ -377,8 +374,28 @@ def fmt_number(value) -> str:
 
 
 def fmt_confidence(grade, coverage) -> str:
-    """Coverage grade as the report must name it: "A (copertura 96 %)", never a bare grade."""
+    """Coverage grade as the report must name it: "A (copertura 96 %)", never a bare grade. The coverage goes through
+    scoring.fmt_share, the formatter of every share (a coverage under a threshold never reads as reaching it)."""
     return f"{grade or 'n/d'} (copertura {fmt_share(coverage)})"
+
+
+# kpis.Kpi.unit in Italian for human text: punteggio, conteggio and rapporto as the "Unità" column of the catalogue
+# (docs/engagement-kpi.md, section 4) writes them, confidenza as its DPR section does; bool, enum and label, which the
+# catalogue keeps as codes, in plain words. ms, KB, px, % and 0-1 stay as written.
+UNIT_NAMES = {
+    "score": "punteggio",
+    "count": "conteggio",
+    "ratio": "rapporto",
+    "confidence": "confidenza",
+    "bool": "sì/no",
+    "enum": "categoria",
+    "label": "etichetta",
+}
+
+
+def unit_name(unit) -> str:
+    """A KPI unit for human text: Italian (UNIT_NAMES), or as written (ms, KB, px, %, 0-1)."""
+    return UNIT_NAMES.get(unit, "" if unit is None else str(unit))
 
 
 def dpr_text(dpr) -> str:
@@ -442,13 +459,24 @@ def reason_text(reason, assessed=False, absent=True) -> str:
 
 
 STAGE_WARNING = re.compile(r"(?P<profile>[\w.-]+): (?P<stage>\w+) not assessable \((?P<reason>.+)\)")
-JEV_WARNING = re.compile(r"(?P<profile>[\w.-]+): (?P<stage>\w+) found through the Jev fallback(?:: .*)?")  # audit.py
+# audit.py: the stage's own Jev lookup opened its page, or a Jev pick on the way to it (add to cart, a variant)
+JEV_WARNING = re.compile(r"(?P<profile>[\w.-]+): (?P<stage>\w+) found through the Jev fallback(?:: .*)?")
+JEV_PICK_WARNING = re.compile(r"(?P<profile>[\w.-]+): (?P<stage>\w+) reached after a Jev pick \((?P<purposes>[^)]*)\)"
+                              r"(?:: .*)?")
+JEV_PURPOSES = {  # crawler.GOALS: the lookups of the Jev fallback
+    "plp": "listing di categoria",
+    "pdp": "pagina prodotto",
+    "cart": "link al carrello",
+    "add_to_cart": "aggiunta al carrello",
+    "select_variant": "scelta della variante",
+    "checkout_entry": "accesso al checkout",
+}
 CODE_WARNING = re.compile(r"(?P<code>[a-z]+(?:_[a-z]+)+): (?P<detail>.+)")
 
 
 def warning_text(warning) -> str:
-    """A run warning for the Italian report: the stage and reason-code patterns of audit.py and journey.py in
-    Italian (the producer's detail kept as written), any other technical message as written."""
+    """A run warning for the Italian report: the stage, Jev-fallback and reason-code patterns of audit.py and
+    journey.py in Italian (the producer's detail kept as written), any other technical message as written."""
     warning = str(warning)
     if match := STAGE_WARNING.fullmatch(warning):
         stage = STAGE_NAMES.get(match["stage"], match["stage"])
@@ -457,6 +485,11 @@ def warning_text(warning) -> str:
         stage = STAGE_NAMES.get(match["stage"], match["stage"])
         return (f"{match['profile']}: fase {stage} trovata con il fallback Jev (elemento scelto dal modello): "
                 "non riproducibile tra run diverse")
+    if match := JEV_PICK_WARNING.fullmatch(warning):
+        stage = STAGE_NAMES.get(match["stage"], match["stage"])
+        purposes = ", ".join(JEV_PURPOSES.get(p.strip(), p.strip()) for p in match["purposes"].split(",") if p.strip())
+        return (f"{match['profile']}: fase {stage} raggiunta dopo un elemento scelto da Jev con il fallback "
+                f"({purposes}): non riproducibile tra run diverse")
     if (match := CODE_WARNING.fullmatch(warning)) and match["code"] in REASONS:
         return f"{REASONS[match['code']]} ({match['detail']})"
     return warning
@@ -550,7 +583,8 @@ def _kpi_ids(rows) -> list:
 def _judgments(run) -> dict:
     """Counts, models and who judged what: a final is Jev's when its only verdicts come from judge "jev" (an id
     judgments.submit reserves to Jev's own namespace, so no host verdict is credited to Jev). escalated
-    counts every task Jev passed on, escalated_final only those Claude has already decided (the footer's claim)."""
+    counts every task Jev passed on, escalated_final only those Claude has already decided (the footer's claim).
+    claude_samples: Claude's finals by their sample count ({"3": 6}; "1" is a single sample, no majority)."""
     state = run.get("judgments") or {}
     finals = state.get("final") or []
     tasks = {t["task_id"]: t for t in state.get("tasks") or []}
@@ -562,6 +596,10 @@ def _judgments(run) -> dict:
         for model in final.get("models") or []:
             by_model[model] = by_model.get(model, 0) + 1
         (jev if judges.get(final["task_id"]) == {JEV_JUDGE_ID} else claude).append(final)
+    sizes = {}
+    for final in claude:
+        if isinstance(final.get("samples"), int) and not isinstance(final["samples"], bool):
+            sizes[final["samples"]] = sizes.get(final["samples"], 0) + 1
     return {
         **{key: len(state.get(key) or []) for key in ("tasks", "verdicts", "final")},
         "models": sorted(by_model),
@@ -572,6 +610,7 @@ def _judgments(run) -> dict:
         "jev_kpis": _kpi_ids(jev),
         "jev_models": sorted({m for f in jev for m in f.get("models") or []}),
         "claude_kpis": _kpi_ids([f for f in claude if not (tasks.get(f["task_id"]) or {}).get("escalation")]),
+        "claude_samples": {str(n): sizes[n] for n in sorted(sizes)},
     }
 
 
@@ -997,14 +1036,31 @@ def _missing(report) -> str:
     )
 
 
+def _alternatives(numbers) -> str:
+    """[3] -> "3", [2, 3] -> "2 o 3", [2, 3, 5] -> "2, 3 o 5"."""
+    words = [str(n) for n in numbers]
+    return words[0] if len(words) == 1 else f"{', '.join(words[:-1])} o {words[-1]}"
+
+
 def _judges_text(judged) -> str:
-    """Who judged: today's sentence when no Jev final exists, else Jev's rubrics, then Claude's and the escalations."""
+    """Who judged and how. Claude's finals are named by their real sample counts (claude_samples): the majority of N
+    samples, or a single sample with no majority (judge --samples 1). Without a Jev final one sentence for Claude's
+    judges (the protocol's own wording while no final has a sample count yet); with one, Jev's rubrics first, then
+    Claude's and the escalations Claude decided."""
+    counts = {int(k): v for k, v in (judged.get("claude_samples") or {}).items()}
+    single = counts.get(1, 0)
+    majority = _alternatives(sorted(n for n in counts if n > 1)) if any(n > 1 for n in counts) else None
+    alone = f"{single} {'giudizio' if single == 1 else 'giudizi'} di un solo campione, senza maggioranza"
     if not judged.get("jev_kpis"):
-        return e(
-            "I giudizi LLM usano etichette chiuse, citazioni verificate parola per parola sul testo della pagina e la "
-            "maggioranza di più valutatori, che sono campioni dello stesso modello con lo stesso prompt: la "
-            "maggioranza controlla la stabilità del giudizio, non un accordo tra valutatori indipendenti."
-        )
+        if single and not majority:
+            return e("I giudizi LLM usano etichette chiuse e citazioni verificate parola per parola sul testo della "
+                     "pagina, con un solo campione del modello per task: senza maggioranza non c'è alcun controllo "
+                     "della stabilità del giudizio, né un accordo tra valutatori indipendenti.")
+        text = ("I giudizi LLM usano etichette chiuse, citazioni verificate parola per parola sul testo della pagina e "
+                f"la maggioranza di {majority or 'più'} valutatori, che sono campioni dello stesso modello con lo "
+                "stesso prompt: la maggioranza controlla la stabilità del giudizio, non un accordo tra valutatori "
+                "indipendenti")
+        return e(text + (f" ({alone})." if single else "."))
     text = (f"I giudizi di {', '.join(judged['jev_kpis'])} sono scelte del modello TypeSafe Jev "
             f"({', '.join(judged.get('jev_models') or [])}) fra etichette chiuse, con l'evidenza scelta fra gli "
             "snippet offerti e un controllo di stabilità a ordine invertito, un campione per task")
@@ -1017,10 +1073,13 @@ def _judges_text(judged) -> str:
         who, verb = "il giudizio del task che Jev ha passato a Claude", "è"
     elif passed:
         who = f"i giudizi dei {passed} task che Jev ha passato a Claude"
-    if who:
-        text += (f"; {who} {verb} la maggioranza di più campioni dello stesso modello con lo stesso prompt, con "
-                 "citazioni verificate parola per parola sul testo della pagina: la maggioranza controlla la "
-                 "stabilità, non un accordo fra valutatori indipendenti")
+    if who and single and not majority:
+        text += (f"; {who} {verb} di un solo campione, senza maggioranza (nessun controllo di stabilità), con "
+                 "citazioni verificate parola per parola sul testo della pagina")
+    elif who:
+        text += (f"; {who} {verb} la maggioranza di {majority or 'più'} campioni dello stesso modello con lo stesso "
+                 f"prompt{f' ({alone})' if single else ''}, con citazioni verificate parola per parola sul testo "
+                 "della pagina: la maggioranza controlla la stabilità, non un accordo fra valutatori indipendenti")
     return e(text + ".")
 
 

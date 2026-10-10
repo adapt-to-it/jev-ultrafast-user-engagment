@@ -1,6 +1,6 @@
 ---
 name: shop-readiness
-description: Audit the engagement readiness of an e-commerce shop (speed, key elements, predicted friction, trust, price transparency, dark-pattern risk signals), optionally run one shopping journey (piloted by Jev, TypeSafe's fast choice model, when the server has its key), judge the page texts (Jev for the operational rubrics, three Sonnet judges for the rest) and present the scores in Italian with the report path.
+description: Audit the engagement readiness of an e-commerce shop (speed, key elements, predicted friction, trust, price transparency, dark-pattern risk signals), optionally run one shopping journey (piloted by Jev, TypeSafe's choice model, when the server has its key), judge the page texts (Jev for the operational rubrics, three Sonnet judges for the rest) and present the scores in Italian with the report path.
 argument-hint: "[url] [goal]"
 disable-model-invocation: true
 allowed-tools:
@@ -47,10 +47,11 @@ for `get_judgment_tasks` (the tool that reads their tasks): they can approve it 
 `mcp__plugin_jev-engagement_engagement__get_judgment_tasks` in their Claude Code permission settings. Never change the
 user's settings yourself.
 
-Call `audit_shop` with the URL (defaults: both profiles, every stage, consent `auto`). Tell the user it takes about
-2-4 minutes. Then call `wait_run(run_id)` again and again while `timed_out` is true (a run whose server process died
-comes back `failed`, so this loop ends). From the `server` block of the first `wait_run` result tell the user in one
-line who will pilot and judge:
+Call `audit_shop` with the URL (defaults: both profiles, every stage, consent `auto`). Tell the user the audit runs
+in the background on the server; promise no duration. Then call `wait_run(run_id)` again and again while `timed_out`
+is true (a run whose server process died comes back `failed`, so this loop ends); if the user asks how long it took,
+read it from the run's `created_at` and `finished_at`. From the `server` block of the first `wait_run` result tell the
+user in one line who will pilot and judge:
 
 - `typesafe_key` true: "Jev (TypeSafe) pilota il journey e giudica le rubriche operative; Claude giudica le rubriche di
   percezione e i casi incerti". When `text_helper` is null add "Jev non può scrivere nei campi di testo:
@@ -169,7 +170,7 @@ Call `score_run(<audit run_id>, journey_run_ids=[the journey run_id])` (an empty
 
 ```
 Engagement readiness di <host> (stima da sessioni sintetiche, non engagement misurato)
-ERS <score> · Confidenza <grade> (copertura <coverage %>) · quota LLM <llm_share %>
+ERS <score> · <confidence> · quota LLM <llm_share %>
 Modelli: pilota <Jev | Claude>, giudici <Jev (<model>) + Claude sonnet | Claude sonnet>, richieste TypeSafe <n>
 Passati a Claude: <n> task (<reasons>)
 <scope>
@@ -182,6 +183,8 @@ Non valutabile: <each label of get_report's not_assessable_reasons, with its cou
 Rapporto: <report.report_html>
 ```
 
+`<confidence>` is `score_run`'s `confidence` as written ("Confidenza A (copertura 96 %)"): never recompute the
+coverage percentage yourself, the server's never rounds up to a grade or publication threshold the coverage missed.
 The models line comes from what ran: the pilot from `journey_finish`'s `policy` (`typesafe`: Jev, `host`: Claude;
 after the host re-run of step 2: "Claude (Jev non ha potuto decidere: run <failed run id>)"; leave the pilot out
 without a journey), the judges from step 3 (Jev with the `model` of `judge_with_jev` when it accepted verdicts, Claude

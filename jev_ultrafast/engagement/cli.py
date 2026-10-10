@@ -22,7 +22,17 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .profiles import DEVICE_PROFILES
-from .report import JOURNEY_STATUS, RUN_STATUS, fmt_confidence
+from .report import (
+    JOURNEY_STATUS,
+    RUN_STATUS,
+    STAGE_NAMES,
+    fmt_confidence,
+    fmt_share,
+    kpi_value,
+    reason_text,
+    unit_name,
+    warning_text,
+)
 from .schemas import STAGES
 
 ORACLES = ("cart_contains_item_under_price", "cart_not_empty", "pdp_reached", "search_results_shown")
@@ -301,16 +311,19 @@ def _print_run(summary: dict) -> None:
     for page in summary.get("pages") or []:
         print(f"  {page.get('profile') or '-':8} {page.get('stage') or '-':15} {page.get('type') or '-':9} "
               f"LCP {_num(page.get('lcp_ms'), 0)} ms · CLS {_num(page.get('cls'), 3)} · {_num(page.get('kb'), 0)} KB")
-    for item in summary.get("not_assessable") or []:
-        where = " ".join(str(v) for v in (item.get("profile"), item.get("stage"), item.get("kpi_id")) if v)
-        print(f"  non valutabile: {where or 'run'} ({item.get('reason')})")
+    for item in summary.get("not_assessable") or []:  # the report's wording: Italian stage names and reasons
+        stage = STAGE_NAMES.get(item.get("stage"), item.get("stage"))
+        where = " · ".join(str(v) for v in (item.get("profile"), f"fase {stage}" if stage else None,
+                                             item.get("kpi_id")) if v)
+        reason = reason_text(item.get("reason"))
+        print(f"  non valutabile: {where or 'run'}" + (f": {reason}" if reason else ""))
     if summary.get("journey"):
         journey = summary["journey"]
         passed = (journey.get("verification") or {}).get("passed")
         print(f"  journey: {JOURNEY_STATUS.get(journey.get('status'), journey.get('status'))}, verifica "
               f"{'superata' if passed else 'non superata' if passed is False else 'non valutabile'}")
     if summary.get("warnings_total"):
-        print(f"  avvisi: {summary['warnings_total']} (ultimo: {summary['warnings'][-1]})")
+        print(f"  avvisi: {summary['warnings_total']} (ultimo: {warning_text(summary['warnings'][-1])})")
     for error in summary.get("errors") or []:
         print(f"  errore: {error}")
 
@@ -320,7 +333,7 @@ def _print_score(summary: dict) -> None:
     print("Engagement readiness (stima da sessioni sintetiche, non engagement misurato)")
     if ers.get("published"):
         print(f"  ERS {_num(ers.get('score'))} · {summary.get('confidence')} · "
-              f"quota LLM {_num(ers.get('llm_share'), 2)}")
+              f"quota LLM {fmt_share(ers.get('llm_share'))}")
     else:
         print(f"  ERS non pubblicato: {ers.get('reason') or 'copertura insufficiente'}")
     print(f"  {summary.get('scope')}")
@@ -339,14 +352,27 @@ def _print_score(summary: dict) -> None:
     print(f"Rapporto: {(summary.get('report') or {}).get('report_html')}")
 
 
+def _kpi_cell(row: dict) -> str:
+    """A KPI row of get_report(format="kpis") as report.html shows it: "non applicabile (<reason>)" for a KPI that
+    does not apply (no journey, judgments not requested, nothing to assess), "non valutabile (<reason>)" for one that
+    could not be assessed (its reason is already Italian), else its value (report.kpi_value: Italian enum labels)."""
+    state = "non applicabile" if row.get("applicable") is False else None if row.get("assessed") else "non valutabile"
+    if state is None:
+        return kpi_value(row)
+    reason = str(row.get("reason") or "")
+    if not reason or reason == state:
+        return state
+    return reason if reason.startswith(state) else f"{state} ({reason})"
+
+
 def _print_report(result: dict, fmt: str) -> None:
     if fmt == "paths":
         print(f"Rapporto HTML: {result['report_html']}\nRapporto JSON: {result['report_json']}")
         return
-    if fmt == "kpis":
+    if fmt == "kpis":  # report.html's KPI table: Italian values and units, "non applicabile" apart
         for row in result.get("kpis") or []:
-            value = _num(row.get("value"), 2) if row.get("assessed") else f"non valutabile ({row.get('reason')})"
-            print(f"  {row['id']:32} {value:>12}  {row.get('unit') or ''}  punteggio {_num(row.get('normalized'))}")
+            print(f"  {row['id']:32} {_kpi_cell(row):>14}  {unit_name(row.get('unit')):10}  "
+                  f"normalizzato {_num(row.get('normalized'))}")
         print(f"Rapporto: {result['report_html']}")
         return
     headline = result.get("headline") or {}

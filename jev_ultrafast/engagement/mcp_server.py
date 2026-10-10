@@ -165,8 +165,9 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
         """Start the deterministic engagement-readiness audit of one shop and return {run_id, status: "running"} at
         once. Per device profile the audit opens home, a category listing (PLP), a product page (PDP), adds one item
         to the cart, opens the cart and stops at the first checkout page (never fills or submits it), then runs the
-        dark-pattern deception tests in fresh contexts. Two profiles take about 2-4 minutes: call wait_run(run_id)
-        until the status is complete, partial or failed. Anti-bot pages make stages "not assessable" (no evasion)."""
+        dark-pattern deception tests in fresh contexts. The audit runs in the background on the server and no duration
+        is promised: call wait_run(run_id) until the status is complete, partial or failed; how long it took is
+        finished_at minus created_at of the run. Anti-bot pages make stages "not assessable" (no evasion)."""
         return service.start_audit(url, profiles, stages, browser, locale, consent, repeats)
 
     @tool(READ, "Wait for a run")
@@ -275,8 +276,8 @@ def build_server(service: EngagementService | None = None) -> MCPServer:
         the perception rubrics' tasks (open_tasks). available false (no TYPESAFE_API_KEY on the server): nothing
         changed, your judges take every task. Returns requests, latency_ms, input_tokens, model, accepted, escalated
         counts by reason, per_task readings and the finalize counts. A call asks no new page after about 30 s
-        (TypeSafe is slow): pages_left counts the pages Jev has never asked in this run (a page whose request failed
-        was asked: its tasks are escalated request_failed, retried by later calls and otherwise judged by yours).
+        (when TypeSafe is slow): pages_left counts the pages Jev has never asked in this run (a page whose request
+        failed was asked: its tasks are escalated request_failed, retried by later calls and otherwise judged by yours).
         next names judge_with_jev again only while pages are left and the call lowered pages_left; a call that asked
         none of them sends you to get_judgment_tasks, so the loop always ends. Call judge_with_jev again while its
         next names judge_with_jev (unless its errors name HTTP 401 or 403), then get_judgment_tasks: your judges take
