@@ -116,7 +116,7 @@ from .profiles import DEVICE_PROFILES, PROFILES_VERSION, close_context, new_cont
 from .safety import CheckoutGuard
 from .schemas import JourneyRecord, JourneyStep
 from .scoring import load_anchors
-from .settings import CREDENTIALS, EngagementSettings, has_credentials, public_browser, redact_browser
+from .settings import CREDENTIALS, EngagementSettings, error_text, has_credentials, public_browser
 from .store import RunStore, iso_now
 from .transport import open_transport
 
@@ -1491,7 +1491,7 @@ class JourneyRunner:
 
     def _error(self, exc: BaseException) -> None:
         self.status = "error"  # a cdp: browser's key never reaches the run (an error that quotes its URL)
-        self._warn(redact_browser(f"{type(exc).__name__}: {str(exc)[:300]}", self.settings.browser))
+        self._warn(error_text(exc, self.settings.browser))
 
     def _save(self, *, run_status: str | None = None, observations=None, page=None, finished: bool = False,
               not_assessable: dict | None = None) -> None:

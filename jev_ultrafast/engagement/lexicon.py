@@ -283,7 +283,8 @@ LEXICON: dict[str, dict[str, list[str]]] = {
         ],
         "remove": [r"rimuovi", r"\belimina", r"\bcancella\b", r"\btogli\b"],
         # a control that empties the whole cart ("Svuota carrello", a cart's bare "Svuota"): the crawler's Jev offers
-        # leave it out with "remove"; audit.js does not read it (FAI.CART_EDITABLE counts per-line controls)
+        # leave it out with "remove"; audit.js keeps it out of the cart link and reads no such control as a statement
+        # that the cart is empty (FAI.CART_EDITABLE still counts per-line controls only)
         "clear_cart": [r"\bsvuot(a|are|alo|arlo)\b", r"\bazzera\s+(il\s+)?(carrello|borsa|cestino)"],
         "subtotal": [r"subtotale", r"(totale|somma)\s+parziale", r"totale\s+(prodotti|articoli|merce)"],
         "total": [r"^\s*totale", r"totale\s+(ordine|complessivo|da\s+pagare)", r"importo\s+totale", r"da\s+pagare"],

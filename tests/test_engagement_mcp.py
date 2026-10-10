@@ -1826,8 +1826,10 @@ def test_a_jev_journey_abandoned_at_shutdown_keeps_what_deciding_cost(chromium, 
                                       "model": JEV_MODEL}  # the runner's own last write had 1
     assert journey["usage"] == {"input_tokens": 2000, "output_tokens": 4}
     assert set(journey["timing_ms"]) == {"decision", "text", "site", "wall"} and journey["timing_ms"]["wall"] > 0
+    assert svc._jobs[run_id].runner is not None  # the marks read its costs while it runs
     gate.set()
     assert svc._jobs[run_id].done.wait(60)
+    assert svc._jobs[run_id].runner is None  # a done job keeps no runner (nor its request bodies)
     run = svc.store.load(run_id)
     assert run["journey"]["status"] == "abandoned" and run["journey"]["model_calls"]["choose"] == 3
     assert run["journey"]["verification"] is None
@@ -1907,6 +1909,15 @@ def test_the_smoke_never_reuses_a_cached_jev_verdict(service, monkeypatch, tmp_p
     checks = {c["name"]: c for c in smoke.checks(summary, recorder, None, True)}
     assert checks["judge_reused_no_cached_verdict"]["ok"] is False and checks["judge_reused_no_cached_verdict"][
         "required"]
+    # an --audit-run the plugin judged from the cache: the smoke asks a copy live and reports only those answers
+    before = svc.store.load(control)
+    again = {}
+    judged = smoke.run_judge(svc, control, again)
+    assert judged["requests"] == 4 and len(stand_in.pages) == 12 and judged["reused"] == 0
+    assert again["judge"]["judged_a_copy"] and again["judge"]["earlier"] > 0
+    assert again["judge"]["accepted_in_run"] == judged["accepted"] > 0  # this call's, never the cached ones
+    assert svc.store.load(control)["judgments"] == before["judgments"]  # nothing stored
+    assert svc.store.load(control)["model_calls"] == before["model_calls"]
 
 
 def test_the_smoke_counts_a_text_request_without_a_value_as_the_run_does():

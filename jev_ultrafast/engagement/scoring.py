@@ -260,11 +260,26 @@ def _grade(coverage, anchors):
     return None
 
 
+def _half_up(percent) -> int:
+    """A percentage to the nearest whole, halves up (18.5 -> 19), the rounding of fmt_share."""
+    return math.floor(percent + 0.5 + 1e-9)
+
+
+def _three(share) -> float:
+    """A 0-1 share rounded to three decimals, or rounded down where the three decimals would read as another whole
+    percentage than the share itself (0.18452 -> 0.184, never 0.185, which fmt_share shows as 19 %): one rounding
+    from the share to what is shown, never two."""
+    value = round(share, 3)
+    if _half_up(value * 100) != _half_up(share * 100):
+        return math.floor(share * 1000 + 1e-6) / 1000
+    return value
+
+
 def _stored(coverage, anchors) -> float:
-    """A coverage as stored and shown: rounded to three decimals (0.9467 -> 0.947), or rounded down (within _grade's
-    1e-9 tolerance) where rounding would reach a grade or publication threshold the coverage missed (0.84953 -> 0.849,
-    never 0.85): a stored coverage never reads as a grade or a gate that the unrounded one did not earn."""
-    value = round(coverage, 3)
+    """A coverage as stored and shown: rounded to three decimals (0.9467 -> 0.947; _three), or rounded down (within
+    _grade's 1e-9 tolerance) where rounding would reach a grade or publication threshold the coverage missed (0.84953
+    -> 0.849, never 0.85): a stored coverage never reads as a grade or a gate that the unrounded one did not earn."""
+    value = _three(coverage)
     publish = anchors.get("publish") or {}
     thresholds = [*anchors.get("grades", {}).values(), publish.get("min_coverage"), publish.get("min_major_coverage")]
     if any(t is not None and coverage + 1e-9 < t <= value + 1e-9 for t in thresholds):
@@ -352,7 +367,7 @@ def _sub_index(members, anchors):
         "score": round(score, 1),
         "coverage": _stored(coverage, anchors),
         "grade": _grade(coverage, anchors),
-        "llm_share": round(judged / assessed_weight, 3),
+        "llm_share": _three(judged / assessed_weight),
         "limiting_kpis": [k["id"] for k in lowest if k["normalized"] < 100][: anchors.get("limiting_kpis", 3)],
         "_exact": score,
         "_coverage": coverage,
@@ -395,7 +410,7 @@ def _dpr_summary(kpi_scores, signals) -> dict:
     return {
         "score": dpr(signals),
         "signals": signals,
-        "coverage": round(covered / total, 3) if total else 0.0,
+        "coverage": _three(covered / total) if total else 0.0,
         "assessed": sum(1 for k in risk if k["assessed"]),
         "applicable": len(risk),
         "unassessed": [{"kpi_id": k["id"], "reason": k["reason"] or "no_observation"}
@@ -413,15 +428,17 @@ def dpr(signals) -> float:
 
 def fmt_share(value, below=None) -> str:
     """A 0-1 share as a whole percentage, the one formatter of the ers() reasons, the report (report.fmt_share) and
-    the CLI: 0.123 -> "12 %", None -> "n/d". A value under a threshold (a grade of anchors.json, its
-    publish.min_coverage and publish.min_major_coverage, or below) never reads as reaching it (catalogue 3.5): where
-    rounding would reach one it is rounded down, 0.849 -> "84 %" (never "Confidenza B (copertura 85 %)"), keeping a
-    non-zero tenth under a publication threshold, 0.499 -> "49,9 %". Coverages are formatted from their stored value
-    (_stored), so one coverage reads the same in a reason, a card and the CLI. 1e-9 is _grade's tolerance."""
+    the CLI: 0.123 -> "12 %", halves up (0.185 -> "19 %"), None -> "n/d". A value under a threshold (a grade of
+    anchors.json, its publish.min_coverage and publish.min_major_coverage, or below) never reads as reaching it
+    (catalogue 3.5): where rounding would reach one it is rounded down, 0.849 -> "84 %" (never "Confidenza B
+    (copertura 85 %)"), keeping a non-zero tenth under a publication threshold, 0.499 -> "49,9 %". Coverages are
+    formatted from their stored value (_stored), so one coverage reads the same in a reason, a card and the CLI;
+    _three stores no share that would read as another whole percentage than its unrounded value. 1e-9 is _grade's
+    tolerance."""
     if value is None:
         return "n/d"
     percent = value * 100
-    whole = round(percent)
+    whole = _half_up(percent)
     anchors = _default_anchors()
     gates = [anchors["publish"]["min_coverage"], anchors["publish"]["min_major_coverage"],
              *(() if below is None else (below,))]
@@ -463,7 +480,7 @@ def ers(sub_indices, dpr_score, anchors) -> dict:
         "published": False,
         "grade": None,
         "coverage": _stored(coverage, anchors),
-        "llm_share": round(llm_share, 3),
+        "llm_share": _three(llm_share),
         "reason": "; ".join(reasons) or None,
         "limiting_factor": limiting,
     }

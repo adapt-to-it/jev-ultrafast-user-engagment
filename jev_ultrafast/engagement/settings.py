@@ -69,6 +69,12 @@ def redact_browser(text, browser: str):
     return text
 
 
+def error_text(exc: BaseException, browser, limit: int = 300) -> str:
+    """An exception as runs and the host show it, "Type: message": the message redacted (redact_browser) before it is
+    cut to limit characters, so a cut inside a cdp: URL never leaves the start of a key that no longer matches."""
+    return f"{type(exc).__name__}: {redact_browser(str(exc), browser)[:limit]}"
+
+
 @dataclass
 class EngagementSettings:
     url: str

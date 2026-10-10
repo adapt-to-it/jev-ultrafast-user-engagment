@@ -464,8 +464,10 @@ def _print_journey(result: dict) -> None:
         texts = calls.get("text") or 0
         written = f", {texts} {'testo scritto' if texts == 1 else 'testi scritti'}" + (
             f" (+{no_text} {'richiesta' if no_text == 1 else 'richieste'} senza testo)" if no_text else "")
-        print(f"  pilota Jev: {calls.get('choose')} decisioni{extra} in "
-              f"{_num((timing.get('decision') or 0) / 1000, 2)} s (escluse dal tempo del sito), aiuto testuale {text}"
+        one = calls.get("choose") == 1
+        print(f"  pilota Jev: {calls.get('choose')} {'decisione' if one else 'decisioni'}{extra} in "
+              f"{_num((timing.get('decision') or 0) / 1000, 2)} s ({'esclusa' if one else 'escluse'} dal tempo del "
+              f"sito), aiuto testuale {text}"
               f"{written if calls.get('text') or no_text else ''}")
     for kpi, value in (result.get("friction") or {}).items():
         print(f"  {kpi:28} {_num(value, 2)}")

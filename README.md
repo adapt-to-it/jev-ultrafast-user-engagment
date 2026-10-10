@@ -256,8 +256,8 @@ MCP tools (server `engagement`, stdio). Each returns a compact summary and file 
 ```text
 <artifacts>/<host>/<run id>/
   run.json           pages, observations, judgments, scores, warnings, model_calls (the full record)
-  steps.jsonl        every executed step: an execution line before its result is observed, then a
-                     measurement line with the same step number
+  steps.jsonl        executed actions, each logged before its result is observed: a journey step as an
+                     execution line, then a measurement line with the same step number; an audit click as one line
   snapshots/         one audit payload per page
   shots/             optional screenshots
   report.json        the report as data
@@ -325,7 +325,7 @@ uv run python scripts/smoke_engagement.py --repeat 3 --dump-requests /tmp/jev-re
 It reads `./.env`, the file named by `JEV_ENGAGEMENT_ENV` or the environment, and exits 2 without `TYPESAFE_API_KEY` or with an out-of-range `--max-steps` (1-60) or `--repeat`, before any request. It needs a Chromium like the audit does. What it exercises:
 
 1. **Audit (crawler fallback).** Fixture mode serves `tests/fixtures/` on 127.0.0.1 and hides the shop's category links from the lexicon, so the listing page can only come from Jev's pick; Chromium gets a dead proxy, so only the model requests leave the machine. With `--url` a real shop is audited unchanged (and one item goes into its cart, as in any audit).
-2. **Judge.** Jev judges the audit with the cache off, in a fresh cache folder each run (`judge.reused` must stay 0): per task the rubric, label, probability, evidence id or escalation reason; per request the latency and input tokens; per rubric the mean probability, the number accepted and the escalations by reason. `--repeat N` judges N more copies (cache off, nothing stored) and prints the label agreement per task.
+2. **Judge.** Jev judges the audit with the cache off, in a fresh cache folder each run (`judge.reused` must stay 0); an `--audit-run` that already holds verdicts is judged as a copy from scratch, nothing stored, so only live answers are reported: per task the rubric, label, probability, evidence id or escalation reason; per request the latency and input tokens; per rubric the mean probability, the number accepted and the escalations by reason. `--repeat N` judges N more copies (cache off, nothing stored) and prints the label agreement per task.
 3. **Journey.** Jev pilots `--goal` (default "Aggiungi al carrello un prodotto", oracle `cart_not_empty`): steps, `model_calls`, `timing_ms`, usage and the oracle's verdict.
 4. **Score.** The ERS, the "Confidenza" line, `llm_share` and the report path.
 

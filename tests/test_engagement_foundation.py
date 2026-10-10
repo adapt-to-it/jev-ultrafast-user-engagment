@@ -28,7 +28,7 @@ from jev_ultrafast.engagement.profiles import (
     new_context,
 )
 from jev_ultrafast.engagement.schemas import SCHEMA_VERSION, STAGES
-from jev_ultrafast.engagement.settings import EngagementSettings, public_browser, redact_browser
+from jev_ultrafast.engagement.settings import EngagementSettings, error_text, public_browser, redact_browser
 from jev_ultrafast.engagement.store import RUN_ID_RE, RunStore, artifacts_root, host_slug
 from jev_ultrafast.engagement.transport import CdpError, DirectTransport, HarnessTransport, open_transport
 
@@ -108,6 +108,16 @@ def test_a_devtools_url_is_stored_and_shown_without_its_credentials(browser, pub
         text = redact_browser(f"HTTP 401 for {secret} ({urllib.parse.quote(secret)})", browser)
         assert text == "HTTP 401 for [redacted] ([redacted])", text
     assert redact_browser(None, browser) is None and redact_browser("no URL here", browser) == "no URL here"
+
+
+def test_an_error_is_redacted_before_it_is_cut():
+    """websockets quotes a cdp: URL with a fragment whole (InvalidURI): the message is redacted, then cut to 300
+    characters, so a cut inside the key never leaves its start, which no longer matches the key, in the run."""
+    browser = "cdp:wss://connect.example.com/x?apiKey=bb_live_" + "K" * 40 + "#session"
+    text = error_text(ValueError("x" * 250 + f" {browser[4:]} isn't a valid URI"), browser)
+    assert text.startswith("ValueError: " + "x" * 250) and "bb_live" not in text and "apiKey" not in text, text
+    cut_first = f"ValueError: {('x' * 250 + ' ' + browser[4:])[:300]}"
+    assert "bb_live_KKKK" in redact_browser(cut_first, browser)  # the other order leaves the key's start
 
 
 def test_settings_read_the_run_record_shape():

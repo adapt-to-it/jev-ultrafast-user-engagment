@@ -39,7 +39,7 @@ from . import judgments, report
 from .kpis import KPIS
 from .profiles import DEVICE_PROFILES
 from .schemas import STAGES, SUB_INDICES
-from .settings import EngagementSettings, redact_browser
+from .settings import EngagementSettings, error_text, redact_browser
 from .store import RunStore, iso_now
 
 log = logging.getLogger("jev_ultrafast.engagement.service")
@@ -117,7 +117,7 @@ class _Job:
     progress: list[str] = field(default_factory=list)
     thread: threading.Thread | None = None
     summarized: bool = False  # a typesafe journey whose finish summary was returned (wait=True, journey_finish)
-    runner: object | None = None  # a typesafe journey's JourneyRunner: what deciding cost goes into its interrupt mark
+    runner: object | None = None  # a running typesafe journey's JourneyRunner: its costs go into an interrupt mark
 
 
 @dataclass
@@ -486,7 +486,7 @@ class EngagementService:
                 if isinstance(exc, KeyboardInterrupt):  # Ctrl-C, or SIGTERM/SIGHUP in the CLI (cli.Interrupted)
                     self._fail(run_id, f"interrupted: {str(exc) or 'Ctrl-C'} while the run was in progress")
                 else:
-                    self._fail(run_id, redact_browser(f"audit: {type(exc).__name__}: {str(exc)[:300]}", browser))
+                    self._fail(run_id, f"audit: {error_text(exc, browser)}")
                 if not isinstance(exc, Exception):
                     raise
             finally:  # owner.json goes first: whoever wakes on done sees the run fully released
@@ -740,9 +740,8 @@ class EngagementService:
             raise
         except Exception as exc:  # the runner closed everything and recorded the failure in its run
             where = f"; run {runner.run_id} records it" if runner.run_id else ""
-            plain = f"{type(exc).__name__}: {str(exc)[:300]}"
-            message = redact_browser(plain, browser)  # a cdp: URL's key never reaches the host, nor its traceback
-            cause = exc if message == plain else None
+            message = error_text(exc, browser)  # a cdp: URL's key never reaches the host, nor its traceback
+            cause = exc if redact_browser(str(exc), browser) == str(exc) else None
             raise RuntimeError(f"the journey could not start: {message}{where}") from cause
         finally:
             with self._lock:
@@ -795,6 +794,7 @@ class EngagementService:
                 raise
             finally:  # owner.json goes first: whoever wakes on done sees the run fully released
                 self._disown(run_id)
+                job.runner = None  # no decision is in flight any more: a done job keeps no request bodies
                 job.done.set()
 
         if wait:
@@ -975,8 +975,8 @@ class EngagementService:
     @staticmethod
     def _job_mark(job: _Job, reason: str):
         """The interrupt mark of a job: an audit failed, a typesafe journey abandoned with what deciding cost."""
-        mark = _interrupted(job.kind, reason)
-        return _with_costs(mark, job.runner) if job.runner is not None else mark
+        mark, runner = _interrupted(job.kind, reason), job.runner  # read once: a finished job drops its runner
+        return _with_costs(mark, runner) if runner is not None else mark
 
     def seal(self, reason: str = "the server was stopped") -> None:
         """Signal path, step 1, before the browsers are killed: no lock, no I/O. Refuse new runs and seal the store of

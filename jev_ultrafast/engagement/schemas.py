@@ -365,7 +365,7 @@ class KpiScore(TypedDict, total=False):
     assessed: bool
     reason: str | None
     observations: int
-    provisional: bool  # anchor is editorial, not published
+    provisional: bool  # anchor is editorial, or a published threshold applied to another quantity
     weight: float  # weight inside the owner sub-index (0 = informational or DPR)
     applicable: bool  # False: excluded from coverage (no journey, no judgments, or reason "not_applicable...")
     profile: str | None  # the profile whose aggregate is the value, when it scores strictly worse than every other

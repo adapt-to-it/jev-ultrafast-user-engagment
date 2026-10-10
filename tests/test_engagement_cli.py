@@ -558,6 +558,8 @@ def test_the_jev_pilot_line_counts_the_requests_that_brought_no_decision(capsys)
     cli._print_journey({**journey, "model_calls": {"choose": 5, "text": 0, "failed": 0}})
     out = capsys.readouterr().out
     assert "pilota Jev: 5 decisioni in 0,00 s (escluse" in out and "testi scritti" not in out
+    cli._print_journey({**journey, "model_calls": {"choose": 1, "text": 0, "failed": 0}})
+    assert "pilota Jev: 1 decisione in 0,00 s (esclusa dal tempo del sito)" in capsys.readouterr().out
     cli._print_journey({**journey, "text_helper": "m", "model_calls": {"choose": 5, "text": 1, "text_failed": 2}})
     assert "aiuto testuale m, 1 testo scritto (+2 richieste senza testo)" in capsys.readouterr().out
 

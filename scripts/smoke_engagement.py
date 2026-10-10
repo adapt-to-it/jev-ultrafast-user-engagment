@@ -21,8 +21,10 @@ the runs record, and the two are compared. --dump-requests writes each request w
 --repeat N judges copies of the audit N more times (cache off, nothing stored) and prints the label agreement per task.
 A smoke never reuses a cached Jev verdict: the judge runs with the cache off (judge_with_jev(use_cache=False)) in a
 judge-cache directory of its own, new at every invocation, and the required check judge_reused_no_cached_verdict fails
-if a verdict was reused all the same (summary judge.reused). --max-steps (1 to 60) and --repeat (0 or more) are checked
-before anything runs (exit 2).
+if a verdict was reused all the same (summary judge.reused). An --audit-run that already holds verdicts or
+escalations (judged with the cache on, or by Claude) is judged as a copy from scratch, cache off and nothing stored
+(summary judge.judged_a_copy), so its earlier verdicts are never reported as this smoke's answers. --max-steps (1 to
+60) and --repeat (0 or more) are checked before anything runs (exit 2).
 
 Once TypeSafe refuses the key (HTTP 401 or 403: wrong, revoked or expired) the later TypeSafe phases (judge, repeat,
 journey) are skipped and the check typesafe_key_accepted fails: they would only be refused again.
@@ -286,10 +288,21 @@ def run_audit(service, url, args, fixture: bool, summary: dict) -> str | None:
 
 def run_judge(service, run_id, summary: dict) -> dict:
     heading("Jev judge (one TypeSafe request per page, cache off)")
-    judged = service.judge_with_jev(run_id, use_cache=False)  # every verdict is a live answer, never a cached one
-    run = service.store.load(run_id)
-    rows = jev_readings(run)
-    in_run = sum(1 for row in rows if not row["escalated"])  # Jev's accepted verdicts, this call's and earlier ones
+    stored = (service.store.load(run_id).get("judgments") or {})
+    earlier = len(stored.get("verdicts") or []) + sum(1 for t in stored.get("tasks") or [] if t.get("escalation"))
+    if earlier:  # an --audit-run judged before (cache on, or by Claude): its verdicts are not this smoke's answers
+        print(f"  the audit already holds {earlier} verdicts or escalations: Jev judges a copy of it from scratch "
+              "(cache off, nothing stored), so every reading below is a live answer")
+        run = copy.deepcopy(service.store.load(run_id))
+        run["judgments"], run["model_calls"] = {}, {}
+        judge = judges.JevJudge()
+        raw = judges.judge_with_jev(run, judge, use_cache=False)
+        judged = {**raw, "model": raw.get("model") or judge.model, "accepted": raw["judged"], "error_groups": []}
+    else:
+        judged = service.judge_with_jev(run_id, use_cache=False)  # every verdict is a live answer, never a cached one
+        run = service.store.load(run_id)
+    rows = jev_readings(run)  # this call's readings only: the run (or its copy) held no verdict before it
+    in_run = sum(1 for row in rows if not row["escalated"])
     print(f"available={judged['available']} model={judged['model']} requests={judged['requests']} "
           f"latency={judged['latency_ms']} ms input_tokens={judged['input_tokens']} accepted={judged['accepted']} "
           f"(in the run {in_run}) reused={judged.get('reused')} escalated={judged['escalated']} "
@@ -310,7 +323,8 @@ def run_judge(service, run_id, summary: dict) -> dict:
     summary["judge"] = {**{k: judged.get(k) for k in ("available", "model", "requests", "latency_ms", "input_tokens",
                                                       "accepted", "reused", "escalated", "open_tasks", "errors",
                                                       "error_groups")},
-                        "accepted_in_run": in_run, "per_task": rows, "per_rubric": rubrics, "jev_tasks": len(jev_tasks),
+                        "accepted_in_run": in_run, "judged_a_copy": bool(earlier), "earlier": earlier,
+                        "per_task": rows, "per_rubric": rubrics, "jev_tasks": len(jev_tasks),
                         "jev_tasks_open": [t["task_id"] for t in jev_tasks
                                            if t["task_id"] not in final and not t.get("escalation")]}
     return judged
@@ -399,8 +413,9 @@ def checks(summary: dict, recorder: Recorder, shop: ShopServer | None, fixture: 
         recorded = ((audit["model_calls"] or {}).get("crawler_fallback") or {}).get("requests", 0)
         check("crawler_calls_match_the_run", sent == recorded, True, f"sent {sent}, run records {recorded}")
     if judge:
-        check("jev_judge_accepted_a_verdict", judge["accepted_in_run"] > 0, fixture,  # an --audit-run's earlier
-              f"{judge['accepted_in_run']} accepted in the run ({judge['accepted']} by this call)")  # ones count
+        check("jev_judge_accepted_a_verdict", judge["accepted_in_run"] > 0, fixture,  # live answers only: an
+              f"{judge['accepted_in_run']} accepted in the run ({judge['accepted']} by this call)")  # --audit-run's
+        # earlier verdicts are never counted, the smoke then judges a copy of the audit from scratch
         check("jev_tasks_settled_or_escalated", judge["available"] and not judge["jev_tasks_open"], True,
               ", ".join(judge["jev_tasks_open"][:5]))
         sent = len(recorder.of("judge"))

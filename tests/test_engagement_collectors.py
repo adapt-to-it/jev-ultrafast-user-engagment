@@ -2605,6 +2605,19 @@ def test_an_empty_cart_control_neither_empties_a_full_cart_nor_is_the_cart_link(
     assert audit["nav"]["cart_link"]["href"].endswith("/cart/")
 
 
+@pytest.mark.parametrize("lang, body", [
+    ("en", "<h1>Empty cart</h1><p>Nothing here yet.</p>"),
+    ("en", "<h1>Basket</h1><p>You have an empty basket.</p>"),
+    ("it", '<h1>Carrello</h1><a href="/"><p>Il tuo carrello è vuoto: torna al negozio</p></a>'),
+])
+def test_a_statement_that_the_cart_is_empty_is_read_outside_a_control(lab, lang, body):
+    """Only a control that empties the cart is left out: an "Empty cart" heading, an English "empty basket" sentence
+    and an Italian statement inside a link all say the cart is empty."""
+    audit = page_audit(lab, f"""<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><title>Cart</title>
+      </head><body><main>{body}</main></body></html>""", "/shopping-trolley")
+    assert audit["cart"]["empty"]
+
+
 @pytest.mark.parametrize("line, shown", [
     ("Spedizione 4,90 €, gratuita per ordini sopra i 59 €", True),
     ("Spedizione gratuita in tutta Italia", True),

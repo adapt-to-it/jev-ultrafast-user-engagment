@@ -686,6 +686,8 @@
   const urlPart = href => { try { const u = new URL(href, location.href); return u.pathname + u.search; } catch (e) { return ''; } };
   // A link whose GET changes the cart ("?add-to-cart=7", "/cart/change?line=1&quantity=0", "?remove_item=..."): never
   // a product or cart link, whatever it is called.
+  const CONTROL = 'a,button,[role="button"],[role="link"]';
+  const inControl = b => !!closest(b.el, CONTROL) || (b.holders.length > 0 && b.holders.every(h => closest(h, CONTROL)));
   const cartAction = a => { let p = urlPart(a.href); try { p = decodeURIComponent(p); } catch (e) { /* as is */ } return hit('cart_action_url', p); };
   const cardPrices = prices.filter(p => p.kind === 'price' && p.value > 0 && !p.overlay && p.area !== 'footer');
   const count = new Map();
@@ -1170,9 +1172,10 @@
     checkout_cta: ctaSummary(best(ctaPool.filter(c => c.lexicon_hit === 'checkout'))),
     editable: lineItems.some(i => i.qty_editable || i.removable),
     prechecked_paid: options.filter(o => o.checked).slice(0, 10), paid_options: options.filter(o => !o.checked).slice(0, 10),
-    // a statement, never a control: an "Empty cart" button empties a full cart
-    fees, empty: blocks.some(b => !b.overlay && b.text.length <= 200 && hit('empty_cart', b.text) && !hit('clear_cart', b.text) &&
-      !closest(b.el, 'a,button,[role="button"],[role="link"]')),
+    // a statement, never a control: an "Empty cart" button empties a full cart, a heading "Empty cart" or a linked
+    // "Il carrello è vuoto" states the cart is empty
+    fees, empty: blocks.some(b => !b.overlay && b.text.length <= 200 && hit('empty_cart', b.text) &&
+      !(hit('clear_cart', b.text) && inControl(b))),
   };
 
   // ------------------------------------------------------------------ trust

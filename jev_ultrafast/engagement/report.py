@@ -488,9 +488,10 @@ def warning_text(warning) -> str:
                 "non riproducibile tra run diverse")
     if match := JEV_PICK_WARNING.fullmatch(warning):
         stage = STAGE_NAMES.get(match["stage"], match["stage"])
-        purposes = ", ".join(JEV_PURPOSES.get(p.strip(), p.strip()) for p in match["purposes"].split(",") if p.strip())
-        return (f"{match['profile']}: fase {stage} raggiunta dopo un elemento scelto da Jev con il fallback "
-                f"({purposes}): non riproducibile tra run diverse")
+        picks = [JEV_PURPOSES.get(p.strip(), p.strip()) for p in match["purposes"].split(",") if p.strip()]
+        picked = "elementi scelti" if len(picks) > 1 else "un elemento scelto"
+        return (f"{match['profile']}: fase {stage} raggiunta dopo {picked} da Jev con il fallback "
+                f"({', '.join(picks)}): non riproducibile tra run diverse")
     if (match := CODE_WARNING.fullmatch(warning)) and match["code"] in REASONS:
         return f"{REASONS[match['code']]} ({match['detail']})"
     return warning
@@ -954,7 +955,8 @@ def _kpi_table(overall, caveats, show_profile=False) -> str:
             if caveats.get(row["id"]):
                 reason += f"; {caveats[row['id']]}"
             note = f'<div class="muted">{e(reason)}</div>' if reason else ""
-            provisional = ' <span class="muted" title="ancora editoriale">*</span>' if row.get("provisional") else ""
+            provisional = (' <span class="muted" title="ancora provvisoria: editoriale o soglia pubblicata applicata a '
+                           'un&#x27;altra grandezza">*</span>' if row.get("provisional") else "")
             third = row.get("weight") if owner != RISK_INDEX else (kpi.severity if kpi else None)
             value = kpi_value(row)
             if show_profile and row.get("profile"):
@@ -977,7 +979,8 @@ def _kpi_table(overall, caveats, show_profile=False) -> str:
     return (
         '<section><h2>KPI</h2><div class="card"><p class="muted">Osservato: misurato in modo deterministico. '
         "Inferito: giudizio LLM su testi della pagina con citazioni verificate. Non valutabile: escluso dal "
-        "punteggio, mai contato come 0. * ancora editoriale (provvisoria)."
+        "punteggio, mai contato come 0. * ancora provvisoria: editoriale, o soglia pubblicata applicata a un'altra "
+        "grandezza."
         + (f" {PROFILE_RULE}" if show_profile else "")
         + "</p>"
         + "".join(sections)

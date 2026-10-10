@@ -829,7 +829,7 @@
   "desktop": {
    "dpr": 96.65,
    "dpr_coverage": [
-    0.895,
+    0.894,
     8,
     9
    ],
@@ -1580,7 +1580,7 @@
    ],
    "sub_indices": {
     "CCL": {
-     "coverage": 0.905,
+     "coverage": 0.904,
      "grade": "A",
      "limiting_kpis": [
       "CCL.HEADINGS",

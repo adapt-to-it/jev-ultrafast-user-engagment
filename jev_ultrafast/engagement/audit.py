@@ -31,7 +31,7 @@ from .profiles import PROFILES_VERSION, close_context, new_context
 from .safety import CheckoutGuard
 from .schemas import STAGES
 from .scoring import load_anchors
-from .settings import EngagementSettings, public_browser, redact_browser
+from .settings import EngagementSettings, error_text, public_browser
 from .store import RunStore, iso_now
 from .transport import open_transport
 
@@ -99,12 +99,12 @@ def audit_shop(settings: EngagementSettings, *, store: RunStore | None = None, t
             try:
                 _audit_profile(settings, profile, transport, store, run_id, say)
             except Exception as exc:  # e.g. no browser context: the next profile may still work
-                message = redact_browser(f"{profile}: {type(exc).__name__}: {str(exc)[:300]}", settings.browser)
+                message = f"{profile}: {error_text(exc, settings.browser)}"
                 store.update(run_id, lambda run: run["errors"].append(message))
         say("deterministic observations")
         store.update(run_id, lambda run: run.update(observations=checks.observations(run)))
     except Exception as exc:  # recorded in the run; the caller gets the run_id either way
-        message = redact_browser(f"audit: {type(exc).__name__}: {str(exc)[:300]}", settings.browser)
+        message = f"audit: {error_text(exc, settings.browser)}"
         store.update(run_id, lambda run: run["errors"].append(message))
     finally:
         for closer in (transport, launched):

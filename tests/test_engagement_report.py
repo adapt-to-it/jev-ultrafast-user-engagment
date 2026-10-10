@@ -725,7 +725,7 @@ def test_journey_verification_reason_is_shown_in_italian():
      "mobile: fase carrello raggiunta dopo un elemento scelto da Jev con il fallback (aggiunta al carrello): non "
      "riproducibile tra run diverse"),
     ("desktop: cart reached after a Jev pick (select_variant, add_to_cart): not reproducible across runs",
-     "desktop: fase carrello raggiunta dopo un elemento scelto da Jev con il fallback (scelta della variante, "
+     "desktop: fase carrello raggiunta dopo elementi scelti da Jev con il fallback (scelta della variante, "
      "aggiunta al carrello): non riproducibile tra run diverse"),
     ("mobile: checkout_entry reached after a Jev pick (brand_new): not reproducible across runs",
      "mobile: fase primo step del checkout raggiunta dopo un elemento scelto da Jev con il fallback (brand_new): non "
@@ -948,10 +948,16 @@ def test_one_share_formatter_never_rounds_up_to_a_threshold():
     assert scoring._stored(0.84953, anchors) == scoring._stored(0.8495, anchors) == 0.849  # never 0.85: grade A
     assert scoring._stored(0.4996, anchors) == 0.499 and scoring._stored(0.18519, anchors) == 0.185
     assert scoring._stored(0.9467, anchors) == 0.947  # no threshold in reach: rounded as before
+    # one rounding from the share to the whole percentage shown, never two: 18.452 % is 18 %, 18.519 % is 19 %
+    assert scoring._three(0.18452) == 0.184 and scoring._three(0.89474) == 0.894 and scoring._three(0.18519) == 0.185
+    assert scoring.fmt_share(scoring._three(0.17451)) == "17 %" and scoring.fmt_share(scoring._three(0.1755)) == "18 %"
+    grid = [i / 100_000 for i in range(100_001)]
+    assert all(scoring.fmt_share(scoring._stored(v, anchors)) == scoring.fmt_share(v) for v in grid
+               if not any(v < t <= round(v, 2) + 1e-9 for t in (0.5, 0.6, 0.7, 0.85)))
     assert report.fmt_confidence("B", 0.8495) == report.fmt_confidence("B", 0.849) == "B (copertura 84 %)"
     assert report.fmt_confidence("A", 0.85) == "A (copertura 85 %)"
     assert [scoring.fmt_share(v) for v in (0.185, 0.699, 0.7, 0.57, 0.596, 0.59, 0.499, 0.5, 1, 0, None)] == [
-        "18 %", "69 %", "70 %", "57 %", "59,6 %", "59 %", "49,9 %", "50 %", "100 %", "0 %", "n/d"]
+        "19 %", "69 %", "70 %", "57 %", "59,6 %", "59 %", "49,9 %", "50 %", "100 %", "0 %", "n/d"]  # halves up
     assert scoring.fmt_share(0.649, below=0.65) == "64,9 %"  # a threshold of the caller's anchors
 
 
@@ -974,7 +980,7 @@ def test_a_coverage_just_under_grade_a_reads_84_percent_with_grade_b():
 
 
 def test_a_coverage_reads_the_same_in_the_unpublished_reason_and_its_card():
-    """A major sub-index at 2.5 / 13.5 = 18.52 %: the reason once said 19 % beside an 18 % card."""
+    """A major sub-index at 2.5 / 13.5 = 18.52 %: 19 % in the reason and on the card (catalogue 3.5), never 18 %."""
     run = load("audit_complete")
     kept = {"FAI.CHECKOUT_FIELDS", "FAI.BREADCRUMBS"}  # weights 2 + 0.5
     excluded = {"FAI.PDP_CTA_ABOVE_FOLD", "FAI.SEARCH_VISIBLE", "FAI.FORCED_ACCOUNT", "FAI.GUEST_CHECKOUT",
@@ -987,8 +993,8 @@ def test_a_coverage_reads_the_same_in_the_unpublished_reason_and_its_card():
     overall = scores["overall"]
     assert coverage_of(overall, "FAI") == pytest.approx(2.5 / 13.5) and overall["sub_indices"]["FAI"]["coverage"] == (
         0.185)
-    assert "Attrito previsto (18 %)" in overall["ers"]["reason"] and not overall["ers"]["published"]
+    assert "Attrito previsto (19 %)" in overall["ers"]["reason"] and not overall["ers"]["published"]
     _, html = report.build_report(run, scores)
-    assert report.e("Attrito previsto (18 %)") in html and "Attrito previsto (19 %)" not in html
+    assert report.e("Attrito previsto (19 %)") in html and "Attrito previsto (18 %)" not in html
     card = html.split("<h3>Attrito previsto ", 1)[1].split("</div>", 1)[0]
-    assert "Confidenza n/d (copertura 18 %)" in card
+    assert "Confidenza n/d (copertura 19 %)" in card
