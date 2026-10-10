@@ -1781,3 +1781,163 @@ def test_an_env_file_from_another_editor_never_keeps_the_server_from_starting(tm
         assert mcp_server.load_keys() == {"typesafe_key": True, "text_helper": None}
     assert f"env file {latin1} (JEV_ENGAGEMENT_ENV) not read: Permission denied" in caplog.text
     assert "ts-" not in caplog.text
+
+
+# ---------------------------------------------------------------- review round 1: costs, credentials, the smoke
+
+
+def test_a_jev_journey_abandoned_at_shutdown_keeps_what_deciding_cost(chromium, shop_server, service, monkeypatch):
+    """The server shuts down while a typesafe journey's second input is in flight: the run is abandoned and records
+    what deciding cost until then, that step's decision included (model_calls, timing_ms, usage: the runner writes
+    them after every decision, the shutdown mark adds a decision whose step is still running), and whatever the
+    thread writes after the mark keeps the journey abandoned and adds the later decisions. TypeSafe is a stand-in for
+    model.post_json (no request leaves the machine)."""
+    monkeypatch.setattr(PageCollector, "net_quiet_s", 0.8)
+    monkeypatch.setattr(PageCollector, "lcp_quiet_s", 0.8)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    decisions, entered, gate = [], threading.Event(), threading.Event()
+
+    def post(url, key, body):  # WAIT, WAIT, then DONE
+        assert url == SYSTEMONE and key == "test-key" and set(body) == {"model", "state", "questions"}
+        decisions.append(body["state"]["page"]["url"])
+        operations = body["questions"]["operation"]["criteria"]
+        operation = "WAIT" if len(decisions) <= 2 else "DONE"
+        return {"model": JEV_MODEL, "answers": {"operation": choice(operations, operation)},
+                "usage": {"input_tokens": 1000, "output_tokens": 2}}
+
+    send = journey_module.JourneyRunner._send
+
+    def held(runner, action, text):  # the second input is in flight when the server shuts down
+        if len(decisions) == 2 and not gate.is_set():
+            entered.set()
+            assert gate.wait(30)
+        return send(runner, action, text)
+    monkeypatch.setattr(typesafe, "post_json", post)
+    monkeypatch.setattr(journey_module.JourneyRunner, "_send", held)
+    svc = service(transport_factory=lambda: DirectTransport(chromium.ws_url))
+    started = svc.run_journey(shop_server.url("shop/resi.html"), "Premi Conta", "cart_not_empty", profile="desktop")
+    run_id = started["run_id"]
+    assert started["policy"] == "typesafe" and entered.wait(60)
+    svc.shutdown(join_s=0.2)
+    run = svc.store.load(run_id)
+    journey = run["journey"]
+    assert journey["status"] == "abandoned" and run["status"] == "partial"
+    assert journey["model_calls"] == {"choose": 2, "text": 0, "text_failed": 0, "stale_or_refused": 0, "failed": 0,
+                                      "model": JEV_MODEL}  # the runner's own last write had 1
+    assert journey["usage"] == {"input_tokens": 2000, "output_tokens": 4}
+    assert set(journey["timing_ms"]) == {"decision", "text", "site", "wall"} and journey["timing_ms"]["wall"] > 0
+    gate.set()
+    assert svc._jobs[run_id].done.wait(60)
+    run = svc.store.load(run_id)
+    assert run["journey"]["status"] == "abandoned" and run["journey"]["model_calls"]["choose"] == 3
+    assert run["journey"]["verification"] is None
+    assert "abandoned: the server shut down; closed without verification" in run["warnings"]
+    assert [s["operation"] for s in svc.store.read_steps(run_id)] == ["WAIT", "WAIT", "DONE"]
+
+
+def test_a_devtools_url_key_never_reaches_the_run_the_progress_or_the_host(service, tmp_path, caplog):
+    """audit_shop and run_journey with browser="cdp:<url>" whose query carries a hosted browser's key: run.json
+    (settings.browser.mode, errors, warnings), every progress message and log line, get_run and the start error the
+    host reads hold the endpoint without the key, even when the browser's error quotes the URL."""
+    secret = "bb_live_SECRET123"
+    browser = f"cdp:ws://127.0.0.1:1/devtools/browser/x?apiKey={secret}"
+    public = "cdp:ws://127.0.0.1:1/devtools/browser/x"
+
+    def refused():
+        raise ConnectionError(f"cannot reach {browser[4:]} (key {secret})")
+    svc = service(transport_factory=refused)
+    messages = []
+    with caplog.at_level("INFO", logger="jev_ultrafast.engagement"):
+        summary = svc.audit_shop(SHOP, ["desktop"], ["home"], browser=browser, wait=True, progress=messages.append)
+        with pytest.raises(RuntimeError, match="the journey could not start") as raised:
+            svc.run_journey(SHOP, "Trova scarpe", "cart_not_empty", browser=browser)
+    run = svc.store.load(summary["run_id"])
+    assert run["settings"]["browser"]["mode"] == public and f"opening the browser ({public})" in messages
+    assert run["status"] == "failed"
+    assert run["errors"] == [f"audit: ConnectionError: cannot reach {public[4:]} (key [redacted])"]
+    assert f"ConnectionError: cannot reach {public[4:]} (key [redacted])" in str(raised.value)
+    assert raised.value.__cause__ is None  # the original error quotes the key: it does not travel with the message
+    journeys = [r for r in svc.store.list_runs() if r["run_id"] != summary["run_id"]]
+    assert len(journeys) == 1 and svc.store.load(journeys[0]["run_id"])["settings"]["browser"]["mode"] == public
+    for text in (json.dumps(summary), json.dumps(svc.get_run(summary["run_id"])), str(raised.value), caplog.text,
+                 *messages):
+        assert secret not in text
+    assert not [f for f in tmp_path.rglob("*") if f.is_file() and secret.encode() in f.read_bytes()]
+
+
+def smoke_module():
+    """scripts/smoke_engagement.py (not run by pytest: its main calls the paid API); its parts are tested here."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("smoke_engagement_review", ROOT / "scripts" / "smoke_engagement.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_smoke_never_reuses_a_cached_jev_verdict(service, monkeypatch, tmp_path):
+    """With TYPESAFE_MODEL pinned the plugin's judge_with_jev reuses cached verdicts of the same pages (an earlier
+    audit); the smoke judges with the cache off, so every page is asked live again, and the summary's reused count
+    (0) is a required check that fails if a verdict is ever reused. Each invocation gets a judge cache of its own."""
+    smoke = smoke_module()
+    first, second = smoke.fresh_cache(tmp_path / "art"), smoke.fresh_cache(tmp_path / "art")
+    assert first != second and first.parent == second.parent == tmp_path / "art"
+    assert not any(first.iterdir()) and first.name.startswith("judge-cache-")
+    monkeypatch.setattr(audit_module, "audit_shop", stand_in_audit())
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    monkeypatch.setenv("TYPESAFE_MODEL", JEV_MODEL)  # pinned: the cache is read when it is on
+    svc = service()
+    earlier, control, smoked = (svc.audit_shop(SHOP, wait=True)["run_id"] for _ in range(3))
+    tasks = {t["task_id"]: t for t in judgments.make_tasks(svc.store.load(earlier))}
+    stand_in = JevJudgeStandIn(tasks, {}, earlier)
+    monkeypatch.setattr(typesafe, "post_json", stand_in)
+    asked = svc.judge_with_jev(earlier)  # the plugin's call: its accepted verdicts go into the cache
+    assert asked["requests"] == len(stand_in.pages) == 4 and asked["reused"] == 0
+    reused = svc.judge_with_jev(control)  # the same pages again, cache on: no request, cached verdicts
+    assert reused["requests"] == 0 and reused["reused"] > 0 and len(stand_in.pages) == 4
+    summary = {}
+    judged = smoke.run_judge(svc, smoked, summary)
+    assert judged["requests"] == 4 and judged["reused"] == 0 and len(stand_in.pages) == 8  # asked live
+    assert summary["judge"]["reused"] == 0 and summary["judge"]["requests"] == 4
+    recorder = smoke.Recorder(None)
+    checks = {c["name"]: c for c in smoke.checks(summary, recorder, None, True)}
+    assert checks["judge_reused_no_cached_verdict"] == {"name": "judge_reused_no_cached_verdict", "ok": True,
+                                                        "required": True, "detail": "0 cached verdicts reused"}
+    summary["judge"]["reused"] = 3
+    checks = {c["name"]: c for c in smoke.checks(summary, recorder, None, True)}
+    assert checks["judge_reused_no_cached_verdict"]["ok"] is False and checks["judge_reused_no_cached_verdict"][
+        "required"]
+
+
+def test_the_smoke_counts_a_text_request_without_a_value_as_the_run_does():
+    """A text helper request that brought no usable value is in the run's model_calls.text_failed: the smoke's
+    journey_calls_match_the_run compares the text requests sent with text + text_failed."""
+    smoke = smoke_module()
+    recorder = smoke.Recorder(None)
+    recorder.calls = [{"n": 1, "phase": "journey", "kind": "typesafe", "error": None},
+                      {"n": 2, "phase": "journey", "kind": "text", "error": None}]  # {"text": null}: no HTTP error
+    calls = {"choose": 1, "text": 0, "text_failed": 1, "stale_or_refused": 0, "failed": 0, "model": JEV_MODEL}
+    journey = {"policy": "typesafe", "model_calls": calls,
+               "verification": {"passed": None, "not_assessable": "journey_error"}}
+    check = {c["name"]: c for c in smoke.checks({"journey": journey}, recorder, None, False)}
+    assert check["journey_calls_match_the_run"]["ok"] is True
+    assert check["journey_calls_match_the_run"]["detail"] == (
+        "sent 1 TypeSafe + 1 text, run records 1 decisions + 0 failed + 0 text + 1 text failed")
+    journey["model_calls"] = {**calls, "text_failed": 0}  # a run that would not count it
+    check = {c["name"]: c for c in smoke.checks({"journey": journey}, recorder, None, False)}
+    assert check["journey_calls_match_the_run"]["ok"] is False
+
+
+def test_the_smoke_checks_its_bounds_before_any_key_or_request(monkeypatch, capsys):
+    """--max-steps 1..60 (as the CLI and the runner accept) and --repeat >= 0 are argument errors (exit 2) before the
+    keys are read or any request is sent, not a journey failure after the paid audit and judge."""
+    smoke = smoke_module()
+    monkeypatch.setattr(smoke.mcp_server, "load_keys", lambda: pytest.fail("refused before any key is read"))
+    monkeypatch.setattr(typesafe, "post_json", lambda *args: pytest.fail("refused before any request"))
+    for argv in (["--max-steps", "0"], ["--max-steps", "61"], ["--max-steps", "tre"], ["--repeat", "-1"]):
+        with pytest.raises(SystemExit) as stopped:
+            smoke.main(argv)
+        assert stopped.value.code == 2, argv
+        assert "atteso un intero" in capsys.readouterr().err
+    args = smoke.parse_args(["--max-steps", "60", "--repeat", "0"])
+    assert (args.max_steps, args.repeat) == (60, 0) and smoke.parse_args([]).max_steps == 30

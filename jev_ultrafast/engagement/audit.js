@@ -959,8 +959,8 @@
   const crumbNodes = crumbsEl ? [...crumbsEl.querySelectorAll('li')] : [];
   const crumbItems = (crumbNodes.length ? crumbNodes : crumbsEl ? [...crumbsEl.querySelectorAll('a,span[itemprop="name"]')] : []).map(text).filter(Boolean);
   const generic = visibleLinks.filter(a => hit('generic_link', name(a)));
-  // the cart link: never a link that changes the cart (a mini-cart's "Rimuovi" link before the header's cart link)
-  const cartLink = links.find(a => !hit('add_to_cart', name(a)) && !hit('remove', name(a)) && !cartAction(a) &&
+  // the cart link: never a link that changes the cart (a mini-cart's "Rimuovi" or "Svuota" link before the header's cart link)
+  const cartLink = links.find(a => !hit('add_to_cart', name(a)) && !hit('remove', name(a)) && !hit('clear_cart', name(a)) && !cartAction(a) &&
     (hit('cart', name(a)) || hit('cart_url', urlPart(a.href))));
   const nav = {
     links: visibleLinks.length, nav_links: navLinks.length, categories,
@@ -1170,7 +1170,9 @@
     checkout_cta: ctaSummary(best(ctaPool.filter(c => c.lexicon_hit === 'checkout'))),
     editable: lineItems.some(i => i.qty_editable || i.removable),
     prechecked_paid: options.filter(o => o.checked).slice(0, 10), paid_options: options.filter(o => !o.checked).slice(0, 10),
-    fees, empty: blocks.some(b => !b.overlay && b.text.length <= 200 && hit('empty_cart', b.text)),
+    // a statement, never a control: an "Empty cart" button empties a full cart
+    fees, empty: blocks.some(b => !b.overlay && b.text.length <= 200 && hit('empty_cart', b.text) && !hit('clear_cart', b.text) &&
+      !closest(b.el, 'a,button,[role="button"],[role="link"]')),
   };
 
   // ------------------------------------------------------------------ trust

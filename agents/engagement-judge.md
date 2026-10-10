@@ -16,7 +16,7 @@ contains the tasks JSON, use it and do not call the tool. The result lists `task
 and `snippets` of `{snippet_id, kind, text}`), the page's `cursor` and `next_cursor` and, once per rubric,
 `rubrics[rubric_id]` with its `question`, `labels` and `no_quote_labels`. Skip tasks marked `"final": true` and tasks
 whose `samples_submitted` already equals `samples_required`. Each task also names its rubric's `judge`: `jev` tasks
-that Jev (a fast choice model on the server) settled are final, so you skip them; a task Jev passed on carries
+that Jev (TypeSafe's choice model, run by the server) settled are final, so you skip them; a task Jev passed on carries
 `escalation` (only why, never Jev's label) and is yours like any other open task. Judge every task on its own
 snippets, independently.
 

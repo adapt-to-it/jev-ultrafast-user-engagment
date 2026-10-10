@@ -77,9 +77,8 @@ ASK = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_h
 # MAX_WAIT_S and the host's 2-minute tool timeout, and the run's lock it holds is released in time for
 # get_judgment_tasks. Should a call exceed it anyway, the host's tool call times out but nothing is lost: the server's
 # thread ends the call under the run's lock, stores every verdict and escalation, and the next call goes on from the
-# run (pages_left and next are read from it). Only model requests are ever retried, never a browser action. At
-# 0.1-1.5 s per page a 30 s budget never cuts a normal audit; only a TypeSafe that is already slow needs more calls
-# (still one request per page in all)
+# run (pages_left and next are read from it). Only model requests are ever retried, never a browser action. A
+# budget the pages do not fit in only means more calls (still one request per page in all)
 JEV_BUDGET_S = 30
 # Claude Code never defers this tool (the judges read their tasks with it) and never saves one of its pages to a file
 # (by default it does so above 50,000 characters, and the judge agent has no tool to read a file): a page holds at most

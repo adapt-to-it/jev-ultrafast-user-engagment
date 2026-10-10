@@ -307,6 +307,25 @@ def test_interactions_whose_measurement_failed_are_not_measured_as_best_values()
     assert out["FAI.DEAD_CLICK_RATE"]["evidence"] == {"dead": 0, "clicks": 1, "unmeasured": 1}
 
 
+def test_an_executed_step_whose_process_stopped_before_its_measurement_counts_as_unmeasured():
+    """The execution line a journey appends right after the input (flags.unobserved: url_after, since and the settle
+    unknown) stays a step's record when the process stopped during the settle: an executed interaction, counted as
+    such, never measured, so no dead click, no rage and no best-band value is read from it."""
+    unobserved = {**step(flags={"unobserved": True}, settle=None, changed=None), "since": {}, "url_after": None,
+                  "settle_reason": None}
+    assert friction.executed(unobserved) and friction.interaction(unobserved)
+    assert not friction.measured(unobserved) and friction.effect(unobserved) is None
+    assert not friction.is_dead_click(unobserved)
+    out = rows([step(event_timing_max_ms=24), {**unobserved, "node": 2}])
+    assert out["FAI.DEAD_CLICK_RATE"]["evidence"] == {"dead": 0, "clicks": 1, "unmeasured": 1}
+    assert out["PERF.INP_SYNTH"]["value"] == 24.0 and out["PERF.INP_SYNTH"]["evidence"]["unmeasured"] == 1
+    out = rows([unobserved], success=True)
+    assert out["FAI.ACTIONS_TO_GOAL"]["value"] == 1  # an action all the same
+    assert out["FAI.TIME_ON_TASK_SITE"]["evidence"]["unsettled_steps"] == 1
+    for kpi_id in (*PERF, "FAI.DEAD_CLICK_RATE", "FAI.RAGE_EVENTS"):
+        assert not out[kpi_id]["assessed"] and out[kpi_id]["reason"].startswith("no_measurement"), kpi_id
+
+
 def test_unexpected_navigation_counts_new_tabs_and_navigations_nobody_chose():
     steps = [
         step(after="/partner", flags={"external_nav": True, "new_document": True}),  # a chosen link: evidence only

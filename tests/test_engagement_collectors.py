@@ -2590,6 +2590,21 @@ def test_a_card_link_is_never_a_cart_action_nor_the_cart_link_a_remove_link(lab)
     assert audit["nav"]["cart_link"]["href"].endswith("/carrello/")
 
 
+@pytest.mark.parametrize("lang, clear, heading, total", [
+    ("en", "Empty cart", "Your cart", "Total"), ("it", "Svuota carrello", "Il tuo carrello", "Totale"),
+])
+def test_an_empty_cart_control_neither_empties_a_full_cart_nor_is_the_cart_link(lab, lang, clear, heading, total):
+    """An "Empty cart" button empties a full cart: it states nothing about the cart, and a link named so (here on a path
+    no cart_action_url key reads) is never the cart link: a GET of it would change the cart."""
+    audit = page_audit(lab, f"""<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><title>{heading}</title>
+      </head><body><header><a href="/cart/flush">{clear}</a> <a href="/cart/">Cart (1)</a></header>
+      <main><h1>{heading}</h1><table><tr><td>Wool scarf</td><td><input type="number" value="1" aria-label="Qty"></td>
+      <td>29,00 €</td></tr></table><p>{total} 29,00 €</p><button type="button">{clear}</button></main></body></html>""",
+                       "/cart/")
+    assert not audit["cart"]["empty"]
+    assert audit["nav"]["cart_link"]["href"].endswith("/cart/")
+
+
 @pytest.mark.parametrize("line, shown", [
     ("Spedizione 4,90 €, gratuita per ordini sopra i 59 €", True),
     ("Spedizione gratuita in tutta Italia", True),

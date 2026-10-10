@@ -207,6 +207,7 @@ STEP_FLAGS = {  # journey step flags (steps.jsonl) in the timeline
     "navigation_error": "pagina non caricata",
     "follows_timeout": "dopo un assestamento scaduto",
     "session_gone": "scheda del browser persa",
+    "unobserved": "esito non osservato: il processo si è fermato prima dell'assestamento",
 }
 OPERATIONS = {  # journey step operations in the timeline
     "CLICK": "Click",

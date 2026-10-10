@@ -893,19 +893,57 @@ def clicks(runner):
     return runner.tab.evaluate("window.__clicks || 0")
 
 
+def raw_lines(store, run_id):
+    """steps.jsonl as written, every line (RunStore.read_steps keeps the last one per step number)."""
+    text = (store.path(run_id) / "steps.jsonl").read_text(encoding="utf-8")
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
 def test_execution_is_logged_before_its_result_is_observed(journey, shop_server):
+    """An executed step is appended twice with one step number: its execution line right after the input, before the
+    settle reads anything back (flags.unobserved), then its measurement line; read_steps keeps the measured one."""
     make, store = journey
     runner, run_id, observation = counter_page(make, shop_server)
     events, tab = [], runner.tab
-    append, observe, send = store.append_step, tab.observe, runner._send
+    append, observe, send, settle = store.append_step, tab.observe, runner._send, runner._settle
     store.append_step = lambda rid, step: (events.append(("log", step["operation"])), append(rid, step))[1]
     tab.observe = lambda **kw: (events.append(("observe",)), observe(**kw))[1]
     runner._send = lambda *a, **kw: (events.append(("act",)), send(*a, **kw))[1]
+    runner._settle = lambda *a, **kw: (events.append(("settle",)), settle(*a, **kw))[1]
     try:
         assert act(runner, "CLICK", index_of(observation, r"^Conta$"))["executed"]
     finally:
-        del store.append_step, tab.observe, runner._send
-    assert events == [("act",), ("log", "CLICK"), ("observe",)]
+        del store.append_step, tab.observe, runner._send, runner._settle
+    assert events == [("act",), ("log", "CLICK"), ("settle",), ("log", "CLICK"), ("observe",)]
+    executed, measured = [line for line in raw_lines(store, run_id) if line["operation"] == "CLICK"]
+    assert executed["step"] == measured["step"] == 2
+    assert executed["flags"] == {"unobserved": True} and executed["since"] == {}
+    assert executed["settle_ms"] is None and executed["url_after"] is None
+    assert measured["settle_reason"] and "unobserved" not in measured["flags"]
+    assert [s for s in store.read_steps(run_id) if s["operation"] == "CLICK"] == [measured]
+
+
+def test_a_process_stopped_during_the_settle_keeps_the_executed_step(journey, shop_server):
+    """Ctrl-C (or SIGTERM in the CLI) while the page settles after an input: the click happened, and its execution
+    line, appended before the settle, stays the step's record: an executed action that was never measured (no dead
+    click is invented), and the run closed afterwards is partial."""
+    make, store = journey
+    runner, run_id, observation = counter_page(make, shop_server)
+    runner._settle = Mock(side_effect=KeyboardInterrupt)
+    with pytest.raises(KeyboardInterrupt):
+        act(runner, "CLICK", index_of(observation, r"^Conta$"))
+    del runner._settle
+    assert clicks(runner) == 1
+    steps = store.read_steps(run_id)
+    assert [s["operation"] for s in steps] == ["WAIT", "CLICK"]
+    click = steps[1]
+    assert click["flags"] == {"unobserved": True}
+    assert friction.executed(click) and not friction.measured(click) and friction.effect(click) is None
+    rows = {o["kpi_id"]: o for o in friction.metrics(steps, profile="mobile")}
+    assert not rows["FAI.DEAD_CLICK_RATE"]["assessed"]
+    assert rows["FAI.DEAD_CLICK_RATE"]["reason"].startswith("no_measurement")
+    runner.close()
+    assert store.load(run_id)["status"] == "partial"
 
 
 @pytest.mark.parametrize("error", [RuntimeError("connection lost after the input"), TimeoutError("no reply")])
@@ -925,6 +963,10 @@ def test_an_input_that_may_have_happened_is_logged_as_uncertain_and_never_sent_a
     steps = store.read_steps(run_id)
     assert [s["operation"] for s in steps] == ["WAIT", "CLICK"] and steps[1]["flags"]["uncertain"]
     assert steps[1]["guard_notes"][0].startswith("execution not confirmed")
+    assert "unobserved" not in steps[1]["flags"]  # measured after all: the measurement line replaced the execution's
+    executed = next(line for line in raw_lines(store, run_id) if line["operation"] == "CLICK")
+    assert executed["flags"] == {"uncertain": True, "unobserved": True}  # appended before the error was handled
+    assert executed["guard_notes"][0].startswith("execution not confirmed")
     history = runner.agent.state["history"]
     assert history[-1]["uncertain"] and history[-1]["action"] == "Conta"  # the policy sees the possible input
     after = act(runner, "WAIT")
@@ -1007,9 +1049,10 @@ def test_an_infrastructure_failure_is_not_scored_as_the_sites(journey, shop_serv
     success = next(o for o in run["observations"] if o["kpi_id"] == "FAI.JOURNEY_SUCCESS")
     assert not success["assessed"] and success["reason"] == "journey_error" and run["status"] == "partial"
     assert runner.transport is None
-    decided = failure == "credential"  # TypeSafe answered; the text helper's failed call is no text call
-    assert run["journey"]["model_calls"] == {"choose": int(decided), "text": 0, "stale_or_refused": 0,
-                                             "failed": int(not decided), "model": "stand-in" if decided else None}
+    decided = failure == "credential"  # TypeSafe answered; the text helper's call failed (text_failed, not text)
+    assert run["journey"]["model_calls"] == {"choose": int(decided), "text": 0, "text_failed": int(decided),
+                                             "stale_or_refused": 0, "failed": int(not decided),
+                                             "model": "stand-in" if decided else None}
 
 
 TICKER = """(() => { const p = document.createElement('p'); let n = 0;
@@ -1703,7 +1746,7 @@ def test_typesafe_without_a_text_helper_refuses_a_chosen_type_text(journey, shop
     assert checks["text_withheld_at"] == {"url": steps[0]["url_before"], "label": steps[0]["label"],
                                           "step": steps[0]["step"]}  # a fact of the run, whatever the verdict
     assert record["text_helper"] is None and record["policy_requested"] == "auto"  # merged, not overwritten
-    assert record["model_calls"] == {"choose": 2, "text": 0, "stale_or_refused": 1, "failed": 0,
+    assert record["model_calls"] == {"choose": 2, "text": 0, "text_failed": 0, "stale_or_refused": 1, "failed": 0,
                                      "model": "jev-1.13.0"}
     warnings = [w for w in run["warnings"] if w.startswith("text_helper_unavailable: ")]
     assert len(warnings) == 1 and warnings[0].startswith("text_helper_unavailable: Jev chose TYPE_TEXT into 'Cerca")
@@ -1875,8 +1918,8 @@ def test_typesafe_text_the_guard_refuses_at_input_withholds_fills(journey, shop_
     checks = finished["verification"]["checks"]
     assert checks["text_withheld_at"] == {"url": steps[0]["url_before"], "label": steps[0]["label"],
                                           "step": steps[0]["step"], "refusal": refusal}
-    assert run["journey"]["model_calls"] == {"choose": 2, "text": 1, "stale_or_refused": 1, "failed": 0,
-                                             "model": "jev-1.13.0"}
+    assert run["journey"]["model_calls"] == {"choose": 2, "text": 1, "text_failed": 0, "stale_or_refused": 1,
+                                             "failed": 0, "model": "jev-1.13.0"}
     assert not [w for w in run["warnings"] if w.startswith(("stopped:", "text_helper_unavailable"))]
     warnings = [w for w in run["warnings"] if w.startswith("text_refused: ")]
     assert len(warnings) == 1 and warnings[0].startswith("text_refused: Jev's text for 'Cerca")
@@ -1920,7 +1963,8 @@ def test_the_recorded_text_helper_is_the_model_field_text_sends(monkeypatch):
 
 def test_typesafe_journey_records_model_calls_timing_and_usage(journey, shop_server, monkeypatch):
     """One TypeSafe request per decision (one that went stale included) and one text helper call: model_calls,
-    timing_ms and usage at finish() agree with the steps and the stand-in's own counts."""
+    timing_ms and usage at finish() agree with the steps and the stand-in's own counts; they are in the run after
+    every decision already (a run abandoned before finish() keeps them)."""
     jev_env(monkeypatch, text_key="unused-in-tests")
     requests, texts = [], []
 
@@ -1947,13 +1991,16 @@ def test_typesafe_journey_records_model_calls_timing_and_usage(journey, shop_ser
     del runner._send
     assert result["status"] == "done" and clicks(runner) == 1 and len(requests) == 4 and len(texts) == 1
     assert runner.tab.evaluate("document.getElementById('q').value") == "scarpe da corsa"
+    before = store.load(run_id)["journey"]  # written after the last decision, before finish()
+    assert before["model_calls"]["choose"] == 4 and before["model_calls"]["text"] == 1
+    assert before["usage"] == {"input_tokens": 4000, "output_tokens": 8}
     runner.finish()
     record = store.load(run_id)["journey"]
     steps = [s for s in store.read_steps(run_id) if s["operation"] != "NAVIGATION"]
     assert [(s["operation"], bool(s["flags"].get("stale"))) for s in steps] == [
         ("CLICK", True), ("CLICK", False), ("TYPE_TEXT", False), ("DONE", False)]
     assert record["text_helper"] == "deepseek-chat"
-    assert record["model_calls"] == {"choose": 4, "text": 1, "stale_or_refused": 1, "failed": 0,
+    assert record["model_calls"] == {"choose": 4, "text": 1, "text_failed": 0, "stale_or_refused": 1, "failed": 0,
                                      "model": "jev-1.13.0"}
     assert record["usage"] == {"input_tokens": 4000, "output_tokens": 8}
     timing = record["timing_ms"]
@@ -1961,6 +2008,63 @@ def test_typesafe_journey_records_model_calls_timing_and_usage(journey, shop_ser
     assert timing["decision"] + timing["text"] == round(sum(s["decision_latency_ms"] for s in steps))
     site = sum(s["execution_ms"] + s["settle_ms"] for s in steps if step_executed(s))
     assert timing["site"] == round(site) and 0 <= timing["site"] <= timing["wall"]
+
+
+@pytest.mark.parametrize("answer", ["null", "http"])
+def test_a_text_helper_call_that_brings_no_value_is_counted(journey, shop_server, monkeypatch, answer):
+    """A text helper request that was sent and brought no usable value ({"text": null}, TEXT_VALUE's answer for a
+    missing value, or an HTTP error after post_json's retries) ends the run with an error and is counted
+    (model_calls.text_failed, its latency in timing_ms.text): every request sent is in the run's accounting, as the
+    smoke's journey_calls_match_the_run compares. model.field_text itself runs unchanged; nothing is typed."""
+    jev_env(monkeypatch, text_key="unused-in-tests")
+    requests, texts = [], []
+    post = typesafe(lambda body: ("TYPE_TEXT", element(body, r"Cerca", "TYPE_TEXT")), requests, texts, text=None)
+
+    def answer_text(url, key, body):
+        if answer == "http" and url.endswith("/chat/completions"):
+            texts.append(body)
+            time.sleep(0.03)
+            raise RuntimeError("Model provider returned HTTP 500; no action executed.")  # post_json after retries
+        return post(url, key, body)
+
+    monkeypatch.setattr(model, "post_json", answer_text)
+    make, store = journey
+    runner = make()
+    started = runner.start(shop_server.url("shop/resi.html"), "Cerca scarpe da corsa", oracle="cart_not_empty",
+                           policy="typesafe", profile="desktop")
+    assert runner.run_auto()["status"] == "error"
+    assert runner.tab.evaluate("document.getElementById('q').value") == ""  # nothing typed
+    runner.finish()
+    run = store.load(started["run_id"])
+    calls = run["journey"]["model_calls"]
+    assert calls == {"choose": 1, "text": 0, "text_failed": 1, "stale_or_refused": 0, "failed": 0,
+                     "model": "jev-1.13.0"}
+    assert len(requests) == calls["choose"] + calls["failed"] and len(texts) == calls["text"] + calls["text_failed"]
+    assert run["journey"]["timing_ms"]["text"] >= (30 if answer == "http" else 0)
+    error = "Text helper returned no valid field value" if answer == "null" else "HTTP 500"
+    assert any(error in warning for warning in run["warnings"])
+    assert not [s for s in store.read_steps(started["run_id"]) if step_executed(s)]
+
+
+def test_a_devtools_url_key_never_reaches_the_journey_run(tmp_path):
+    """browser="cdp:<url>" of a hosted browser carries its key in the query (or a user:password@): the journey run
+    stores the endpoint without it, and the error that stopped the start is recorded without it too."""
+    secret, password = "bb_live_SECRET123", "pa55word"
+    browser = f"cdp:wss://jev:{password}@connect.example:443/devtools/browser/x?apiKey={secret}&headless=1"
+    store = RunStore(tmp_path)
+    settings = EngagementSettings(url="https://shop.example/", browser=browser, screenshots=False)
+
+    def refused():
+        raise ConnectionError(f"cannot open {browser[4:]}: HTTP 401 for key {secret}")
+    runner = JourneyRunner(settings, store=store, transport_factory=refused)
+    with pytest.raises(ConnectionError):
+        runner.start("https://shop.example/", "Trova scarpe", oracle="cart_not_empty")
+    run = store.load(runner.run_id)
+    assert secret not in json.dumps(run) and password not in json.dumps(run)
+    assert run["settings"]["browser"]["mode"] == "cdp:wss://connect.example:443/devtools/browser/x"
+    assert run["status"] == "failed"
+    assert "ConnectionError: cannot open wss://connect.example:443/devtools/browser/x: HTTP 401 for key [redacted]" in (
+        run["warnings"])
 
 
 def test_host_journey_records_its_choices_and_no_model_calls(journey, shop_server, monkeypatch):
@@ -1982,7 +2086,8 @@ def test_host_journey_records_its_choices_and_no_model_calls(journey, shop_serve
     finished = runner.finish(status="done")
     record = store.load(run_id)["journey"]
     assert record["text_helper"] == "host" and record["usage"] == {}
-    assert record["model_calls"] == {"choose": 4, "text": 0, "stale_or_refused": 2, "failed": 0}  # no model key
+    assert record["model_calls"] == {"choose": 4, "text": 0, "text_failed": 0, "stale_or_refused": 2,
+                                     "failed": 0}  # no model key
     steps = store.read_steps(run_id)
     assert "text_withheld_at" not in finished["verification"]["checks"]
     assert [s["flags"] for s in steps if s["flags"].get("guard_blocked")] == [{"stale": False, "guard_blocked": True}]
@@ -1997,6 +2102,6 @@ def test_close_stores_the_cost_of_an_abandoned_journey(journey, shop_server):
     run = store.load(run_id)
     record = run["journey"]
     assert run["status"] == "partial" and record["status"] == "error" and record["verification"] is None
-    assert record["model_calls"] == {"choose": 1, "text": 0, "stale_or_refused": 0, "failed": 0}
+    assert record["model_calls"] == {"choose": 1, "text": 0, "text_failed": 0, "stale_or_refused": 0, "failed": 0}
     assert record["usage"] == {}
     assert 0 <= record["timing_ms"]["site"] <= record["timing_ms"]["wall"]

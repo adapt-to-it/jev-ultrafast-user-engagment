@@ -28,7 +28,7 @@ from jev_ultrafast.engagement.profiles import (
     new_context,
 )
 from jev_ultrafast.engagement.schemas import SCHEMA_VERSION, STAGES
-from jev_ultrafast.engagement.settings import EngagementSettings
+from jev_ultrafast.engagement.settings import EngagementSettings, public_browser, redact_browser
 from jev_ultrafast.engagement.store import RUN_ID_RE, RunStore, artifacts_root, host_slug
 from jev_ultrafast.engagement.transport import CdpError, DirectTransport, HarnessTransport, open_transport
 
@@ -87,10 +87,33 @@ def test_settings_accept_a_devtools_endpoint():
         assert EngagementSettings("https://shop.example/", browser=browser).browser == browser
 
 
+@pytest.mark.parametrize("browser, public, secret", [
+    ("cdp:wss://connect.example/?apiKey=bb_live_SECRET123", "cdp:wss://connect.example/", "bb_live_SECRET123"),
+    ("cdp:wss://connect.example:443/devtools/browser/x?token=S3cr%2Bt99&headless=1#frag",
+     "cdp:wss://connect.example:443/devtools/browser/x", "S3cr+t99"),
+    ("cdp:ws://jev:pa55word@127.0.0.1:9222/devtools/browser/x", "cdp:ws://127.0.0.1:9222/devtools/browser/x",
+     "pa55word"),
+    ("cdp:http://[::1]:9222?SECRET123", "cdp:http://[::1]:9222", "SECRET123"),
+    ("cdp:ws://127.0.0.1:9222/devtools/browser/x", "cdp:ws://127.0.0.1:9222/devtools/browser/x", None),
+    ("auto", "auto", None), ("launch", "launch", None), ("harness", "harness", None),
+])
+def test_a_devtools_url_is_stored_and_shown_without_its_credentials(browser, public, secret):
+    """A hosted browser's DevTools URL carries its key in the query (or user:password@): the run keeps scheme, host,
+    port and path, and a message that quotes the URL, or the secret alone (as written or percent-decoded), loses it."""
+    assert public_browser(browser) == public
+    assert EngagementSettings("https://shop.example/", browser=public).browser == public  # still a valid setting
+    message = f"ConnectionError: cannot open {browser[4:]} (refused)"
+    assert redact_browser(message, browser) == f"ConnectionError: cannot open {public[4:]} (refused)"
+    if secret:
+        text = redact_browser(f"HTTP 401 for {secret} ({urllib.parse.quote(secret)})", browser)
+        assert text == "HTTP 401 for [redacted] ([redacted])", text
+    assert redact_browser(None, browser) is None and redact_browser("no URL here", browser) == "no URL here"
+
+
 def test_settings_read_the_run_record_shape():
     stored = {"profiles": ["mobile"], "stages": ["home", "pdp"], "locale": "en", "repeats": 1,
               "browser": {"mode": "launch", "product": "Chromium/141", "headless": False},
-              "anchors_version": "anchors.v1", "profiles_version": "profiles.v1"}
+              "anchors_version": "anchors.v2", "profiles_version": "profiles.v1"}
     s = EngagementSettings.from_dict(stored, url="https://shop.example/")
     assert (s.url, s.browser, s.headless, s.profiles, s.stages, s.lang) == (
         "https://shop.example/", "launch", False, ["mobile"], ["home", "pdp"], "en-US")
@@ -198,6 +221,26 @@ def test_steps_are_appended_and_a_torn_last_line_is_ignored(tmp_path):
     assert [s["step"] for s in store.read_steps(run_id)] == [0, 1, 2]
     store.append_step(run_id, {"step": 4})  # A later append ends the torn line instead of joining it.
     assert [s["step"] for s in store.read_steps(run_id)] == [0, 1, 2, 4]
+
+
+def test_a_step_appended_twice_is_read_once_as_its_last_line(tmp_path):
+    """A journey appends an executed step twice with one step number (its execution line, flags.unobserved, then its
+    measurement line): read_steps keeps the last complete line in the place of the first; records without a step
+    number (the crawler's) are all kept, in file order."""
+    store = RunStore(tmp_path)
+    run_id = store.new_run("journey", "https://shop.example/", {}, now=NOW)
+    measured, crawler = {"step": 1, "settle_ms": 5}, {"source": "crawler", "operation": "CLICK"}
+    for record in ({"step": 1, "flags": {"unobserved": True}}, measured, crawler, crawler, {"step": 2}):
+        store.append_step(run_id, record)
+    assert store.read_steps(run_id) == [measured, crawler, crawler, {"step": 2}]
+    store.append_step(run_id, {"step": 3, "flags": {"unobserved": True}})
+    store.append_step(run_id, crawler)
+    assert store.read_steps(run_id)[-2:] == [{"step": 3, "flags": {"unobserved": True}}, crawler]  # unmeasured
+    store.append_step(run_id, {"step": 3, "settle_ms": 7})
+    with open(store.path(run_id) / "steps.jsonl", "a") as f:
+        f.write('{"step": 3, "settle_ms": 9, "fla')  # a torn measurement line never replaces a complete one
+    assert store.read_steps(run_id)[-2:] == [{"step": 3, "settle_ms": 7}, crawler]
+    assert [s.get("step") for s in store.read_steps(run_id)] == [1, None, None, 2, 3, None]
 
 
 UPDATER = """
