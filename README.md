@@ -289,7 +289,7 @@ Anything else is **escalated** to Claude: no verdict is stored, `task["escalatio
 
 **In the report.** Jev's verdicts count in `llm_share` like Claude's. The footer names who judged what (Jev's rubrics and model, Claude's rubrics and the tasks Jev passed on) and how many TypeSafe requests the run made. Three samples of one model are a stability check, not three independent raters; a Jev verdict is one sample plus an order check, not a second opinion.
 
-**What is not known yet.** The rubrics' criteria are Italian and are sent as written, while TypeSafe says non-English text works "not equally well". How well Jev reads them, how often it escalates and how stable its labels are is for the live smoke below to show; nothing is claimed here.
+**What is not known yet.** The rubrics' criteria are Italian and are sent as written, while TypeSafe says non-English text works "not equally well". The two committed smoke runs ([Live smoke](#live-smoke-jev)) record what Jev answered on 14 tasks: every one accepted, none escalated, and identical labels on the 3 tasks that were judged three times. No run compared a label with a reference answer, so how well Jev reads the criteria is still not measured, and 14 tasks on two shops say nothing general about escalation or stability.
 
 ### Who pilots a journey
 
@@ -313,7 +313,7 @@ Every lookup is recorded: `probes.jev_fallback` on the page it was asked on (cho
 
 ### Live smoke (Jev)
 
-Automated tests are offline: they replace `jev_ultrafast.model.post_json` (or the agent's `choose`) with fakes that validate the request body and answer with schema-valid choices, so the real request builders and `validate_choice` run. The one script that calls TypeSafe for real is started by you; it prints what it measured and writes `smoke_summary.json`, and you decide what to claim. This README publishes no Jev result: none is committed yet.
+Automated tests are offline: they replace `jev_ultrafast.model.post_json` (or the agent's `choose`) with fakes that validate the request body and answer with schema-valid choices, so the real request builders and `validate_choice` run. The one script that calls TypeSafe for real is started by you; it prints what it measured and writes `smoke_summary.json`, and you decide what to claim. This README publishes only the Jev results of the two runs committed in `docs/evidence/` ([Committed runs](#committed-runs) below).
 
 ```bash
 cp .env.example .env     # TYPESAFE_API_KEY (and TEXT_MODEL_API_KEY for text fields); .env is git-ignored
@@ -332,6 +332,25 @@ It reads `./.env`, the file named by `JEV_ENGAGEMENT_ENV` or the environment, an
 
 Every TypeSafe and text-helper request goes through a recording wrapper of `post_json`, so the printed counts, latencies and tokens are measured independently and compared with what the runs record. It then prints the checks and exits 0 when all required ones pass, 1 otherwise: the audit finished, the crawler, judge and journey request counts match the runs' (text requests sent = `text` + `text_failed`), no judge verdict was reused from a cache, every TypeSafe answer validated, the key was accepted (after an HTTP 401 or 403 the later TypeSafe phases are skipped), Jev piloted the journey and every Jev task was settled or escalated. In fixture mode it also requires the listing to come through the fallback, the cart to be reached, at least one Jev verdict accepted, the oracle to pass and no request but GET and HEAD to reach the shop (no order, no payment). `--url` mode relaxes those fixture-specific checks. Timings are printed, never asserted; it warns above 1.5 s or 20,000 input tokens per request. `--dump-requests DIR` writes each request with its answer (never the key), so the labels can be read against the page.
 
+#### Committed runs
+
+Two `smoke_summary.json` files are committed, each from a single execution on 2026-10-10, on one machine (macOS, Chrome) and one network, with `jev-1.13.0` answering for `jev-latest` and no text helper. Every number below is copied from those files. They describe those two executions; they are not a speed, accuracy or reliability measurement.
+
+| | [`smoke-fixture-2026-10-10.json`](docs/evidence/smoke-fixture-2026-10-10.json) | [`smoke-localhost-8090-2026-10-10.json`](docs/evidence/smoke-localhost-8090-2026-10-10.json) |
+| --- | --- | --- |
+| Mode | `fixture` (the test shop) | `url` (a shop served at `http://localhost:8090/`), `--repeat 2` |
+| Result (`passed`) | `false`: `journey_verified_by_the_oracle` failed, the other 14 checks passed | `true`: 13 of 14 checks passed; `plp_through_jev_fallback` is informational in this mode and false, because the lexicon found the listing |
+| Audit | `complete`; home, plp, pdp, cart and checkout_entry reached | `partial`; home, plp, pdp and cart reached; checkout_entry not reached (`checkout_cta_not_found`) |
+| Crawler fallback | 1 request, 568 ms, 2,236 input tokens: plp through a `CLICK` (probability 0.94) | 1 request, 364 ms, 1,316 input tokens: checkout_entry lookup answered `BLOCKED` (`jev_blocked`), nothing clicked |
+| Judge requests | 4; latency p50 297 ms, p95 371 ms; 14,451 input tokens (largest request 5,462) | 2; latency p50 279 ms, p95 360 ms; 4,568 input tokens (largest request 2,961) |
+| Jev's verdicts | 11 of 11 accepted, none escalated, none reused; mean probability per rubric 0.99 to 1.0 | 3 of 3 accepted, none escalated, none reused; mean probability per rubric 0.985 and 1.0 |
+| Tasks left open (not Jev's) | 4 | 3 |
+| Repeats | not run | 4 more requests (p50 273 ms, p95 290 ms); identical labels on 3 of 3 tasks over 3 runs |
+| Journey | 1 decision (268 ms): `blocked` on the first page; the oracle did not pass | 3 decisions (p50 355 ms, p95 360 ms; 6,735 input and 454 output tokens); `done`, the oracle passed; `timing_ms`: decision 1,000, site 12,371 |
+| Score | ERS 87.2, Confidenza A (copertura 97 %), `llm_share` 0.074 | ERS 61.6, Confidenza A (copertura 92 %), `llm_share` 0.024 |
+
+How to read them. With one to four requests per phase, p50 and p95 are close to single observations. The fixture journey failed: Jev chose `BLOCKED` on its first decision and the summary does not record the offered elements or the probabilities, so the cause (the state the journey offered or Jev's reading of it) is open until a run with `--dump-requests`. The labels were not compared with a reference answer in either run, and the three-run agreement covers three tasks of one shop. In both files the artifact paths were made relative to the repository root after the run; no measured value changed.
+
 Limits of the smoke: it is paid and not part of the checks; fixture mode forces only the listing lookup, so the product, cart, add-to-cart and checkout lookups run only if the lexicon misses them; one fixture shop (invented, with known truths) shows how Jev reads those snippets, not how accurate it is in general; latencies include your machine's network; Jev's output has no seed, so a repeat that agrees once is evidence of stability on those tasks only.
 
 ### Safety
@@ -349,7 +368,7 @@ Limits of the smoke: it is paid and not part of the checks; fixture mode forces 
 - Consent banners change the first page and can block clicks; the landing is measured as it is and the choice is recorded.
 - It is a synthetic agent: a host's choices vary between runs (so may Jev's), one variant of any A/B test is seen from one place with a cold cache on an emulated device, and lab timings are not field data. The mobile profile approximates Lighthouse's preset and its scores are not comparable with Lighthouse or PageSpeed Insights.
 - Italian and English lexicons; first checkout step only; one audit at a time per server process.
-- Jev reads text only (no image input), and its accuracy on the rubrics' Italian criteria is untested until the live smoke runs. Request size matters: TypeSafe limits a request's state plus its longest question to 32k tokens, and a judged page carries up to eight 600-character snippets per task.
+- Jev reads text only (no image input), and its accuracy on the rubrics' Italian criteria is not measured: the committed smoke runs record its labels and probabilities on 14 tasks, without a reference answer to compare them with. Request size matters: TypeSafe limits a request's state plus its longest question to 32k tokens, and a judged page carries up to eight 600-character snippets per task.
 - A stage found through the crawler fallback is flagged "not reproducible across runs", and Jev's journey choices have no seed either: repeat a journey from the CLI to get medians. Only the deterministic crawl repeats by construction. The fallback sees the viewport only.
 - With `host` (no TypeSafe key) every journey step is an MCP round trip plus Claude's deliberation; that time is recorded apart (`decision_latency_ms`) and never counted as the shop's.
 - A shop behind HTTP authentication cannot be audited: a start URL with `user:password@` is refused, since the credentials would reach the run, its progress messages and the shared report.
