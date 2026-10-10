@@ -257,7 +257,8 @@ MCP tools (server `engagement`, stdio). Each returns a compact summary and file 
 <artifacts>/<host>/<run id>/
   run.json           pages, observations, judgments, scores, warnings, model_calls (the full record)
   steps.jsonl        executed actions, each logged before its result is observed: a journey step as an
-                     execution line, then a measurement line with the same step number; an audit click as one line
+                     execution line, then a measurement line with the same step number; an audit click as one line;
+                     a journey decision that executed nothing (DONE, BLOCKED, a stale or refused choice) as one line
   snapshots/         one audit payload per page
   shots/             optional screenshots
   report.json        the report as data

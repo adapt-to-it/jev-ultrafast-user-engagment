@@ -1915,6 +1915,7 @@ def test_the_smoke_never_reuses_a_cached_jev_verdict(service, monkeypatch, tmp_p
     judged = smoke.run_judge(svc, control, again)
     assert judged["requests"] == 4 and len(stand_in.pages) == 12 and judged["reused"] == 0
     assert again["judge"]["judged_a_copy"] and again["judge"]["earlier"] > 0
+    assert again["judge"]["errors"] == [] and again["judge"]["error_groups"] == []  # the service's shape
     assert again["judge"]["accepted_in_run"] == judged["accepted"] > 0  # this call's, never the cached ones
     assert svc.store.load(control)["judgments"] == before["judgments"]  # nothing stored
     assert svc.store.load(control)["model_calls"] == before["model_calls"]

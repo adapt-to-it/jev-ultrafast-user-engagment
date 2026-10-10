@@ -59,6 +59,7 @@ from urllib.parse import urlsplit
 
 from jev_ultrafast import model
 from jev_ultrafast.engagement import cli, crawler, judges, judgments, mcp_server
+from jev_ultrafast.engagement import service as service_module
 from jev_ultrafast.engagement.oracles import parse_params
 from jev_ultrafast.engagement.schemas import STAGES
 from jev_ultrafast.engagement.service import EngagementService
@@ -297,7 +298,9 @@ def run_judge(service, run_id, summary: dict) -> dict:
         run["judgments"], run["model_calls"] = {}, {}
         judge = judges.JevJudge()
         raw = judges.judge_with_jev(run, judge, use_cache=False)
-        judged = {**raw, "model": raw.get("model") or judge.model, "accepted": raw["judged"], "error_groups": []}
+        judged = {**raw, "model": raw.get("model") or judge.model, "accepted": raw["judged"],  # the service's shape
+                  "errors": [service_module._compact(e) for e in raw["errors"][:10]],
+                  "error_groups": service_module._error_groups(raw["errors"])}
     else:
         judged = service.judge_with_jev(run_id, use_cache=False)  # every verdict is a live answer, never a cached one
         run = service.store.load(run_id)

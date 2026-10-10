@@ -2605,6 +2605,23 @@ def test_an_empty_cart_control_neither_empties_a_full_cart_nor_is_the_cart_link(
     assert audit["nav"]["cart_link"]["href"].endswith("/cart/")
 
 
+@pytest.mark.parametrize("lang, header, actions", [
+    ("en", '<div>Shop</div> <a href="/cart/flush">Empty cart</a> <a href="/cart/">Cart (1)</a>', ""),  # a logo
+    ("en", '<a href="/cart/">Cart (1)</a>', '<div class="actions">\n  <a href="/cart/flush">Empty cart</a>\n  '
+     '<button type="submit">Update cart</button>\n</div>'),
+    ("en", '<a href="/cart/">Cart (1)</a>', '<p>Changed your mind? <a href="/cart/flush">Empty cart</a></p>'),
+    ("it", '<div>Bottega</div> <a href="/cart/flush">Svuota carrello</a> <a href="/cart/">Carrello (1)</a>', ""),
+])
+def test_an_empty_cart_control_beside_other_text_leaves_a_full_cart_full(lab, lang, header, actions):
+    """The control shares a block with a logo, an "Update cart" button or a sentence: the block is read on its text
+    outside controls, so the link's own words never say the cart is empty."""
+    audit = page_audit(lab, f"""<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><title>Cart</title>
+      </head><body><header>{header}</header><main><h1>Cart</h1><table><tr><td>Wool scarf</td>
+      <td><input type="number" value="1" aria-label="Qty"></td><td>29,00 €</td></tr></table><p>Total 29,00 €</p>
+      {actions}</main></body></html>""", "/cart/")
+    assert not audit["cart"]["empty"] and audit["cart"]["line_items"]
+
+
 @pytest.mark.parametrize("lang, body", [
     ("en", "<h1>Empty cart</h1><p>Nothing here yet.</p>"),
     ("en", "<h1>Basket</h1><p>You have an empty basket.</p>"),

@@ -371,6 +371,7 @@ def _sub_index(members, anchors):
         "limiting_kpis": [k["id"] for k in lowest if k["normalized"] < 100][: anchors.get("limiting_kpis", 3)],
         "_exact": score,
         "_coverage": coverage,
+        "_llm_share": judged / assessed_weight,
     }
 
 
@@ -458,7 +459,8 @@ def ers(sub_indices, dpr_score, anchors) -> dict:
     covered = {n: sub_indices[n].get("_coverage", sub_indices[n]["coverage"]) for n in sub_indices}  # unrounded gates
     coverage = sum(weights[n] * covered[n] for n in weights) / total
     evidence = sum(weights[n] * covered[n] for n in weights)
-    llm_share = sum(weights[n] * covered[n] * sub_indices[n]["llm_share"] for n in weights)
+    shares = {n: sub_indices[n].get("_llm_share", sub_indices[n]["llm_share"]) for n in sub_indices}  # unrounded too
+    llm_share = sum(weights[n] * covered[n] * shares[n] for n in weights)
     llm_share = llm_share / evidence if evidence else 0.0
     present = {n: s.get("_exact", s["score"]) for n, s in sub_indices.items() if n in weights}
     present = {n: s for n, s in present.items() if s is not None}
@@ -515,6 +517,7 @@ def score(observations, anchors=None, *, journey=None, judged=None) -> dict:
     for sub in sub_indices.values():
         sub.pop("_exact", None)
         sub.pop("_coverage", None)
+        sub.pop("_llm_share", None)
     return {
         "anchors_version": anchors["version"],
         "weights": dict(anchors["weights"]),

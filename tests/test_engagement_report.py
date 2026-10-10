@@ -979,6 +979,28 @@ def test_a_coverage_just_under_grade_a_reads_84_percent_with_grade_b():
     assert data["headline"]["coverage"] == 0.849
 
 
+def test_the_headline_llm_share_is_rounded_once_from_the_unrounded_sub_index_shares():
+    """The ERS llm_share combines the sub-indices' unrounded shares (TRI 0.1212, CCL 0.1905 here), never their stored
+    three decimals, which would add up to 0.1049 and read as 10 % instead of the exact 10.5 %, 11 %."""
+    run = load("audit_complete")
+    for row in run["observations"]:
+        if row["kpi_id"] in {"FAI.CART_EDITABLE", "FAI.FORCED_ACCOUNT", "TRI.CONTACT_INFO"}:
+            row.update(assessed=False, value=None, reason="timeout")
+    scores = score_run(run)
+    overall = scores["overall"]
+    exact = [0.0, 0.0]
+    for name, weight in overall["weights"].items():
+        members = [k for k in overall["kpis"] if k["owner"] == name and k["weight"] > 0 and k["applicable"]]
+        scored = [k for k in members if k["assessed"] and k["normalized"] is not None]
+        total = sum(k["weight"] for k in members)
+        exact[0] += weight * sum(k["weight"] for k in scored if k["source"] == "judged") / total
+        exact[1] += weight * sum(k["weight"] for k in scored) / total
+    assert exact[0] / exact[1] == pytest.approx(0.10503, abs=1e-5) and overall["ers"]["llm_share"] == 0.105
+    assert all("_llm_share" not in sub for sub in overall["sub_indices"].values())
+    _, html = report.build_report(run, scores)
+    assert "Quota inferita da LLM <b>11 %</b>" in html
+
+
 def test_a_coverage_reads_the_same_in_the_unpublished_reason_and_its_card():
     """A major sub-index at 2.5 / 13.5 = 18.52 %: 19 % in the reason and on the card (catalogue 3.5), never 18 %."""
     run = load("audit_complete")

@@ -687,7 +687,8 @@
   // A link whose GET changes the cart ("?add-to-cart=7", "/cart/change?line=1&quantity=0", "?remove_item=..."): never
   // a product or cart link, whatever it is called.
   const CONTROL = 'a,button,[role="button"],[role="link"]';
-  const inControl = b => !!closest(b.el, CONTROL) || (b.holders.length > 0 && b.holders.every(h => closest(h, CONTROL)));
+  // a block's text outside its controls (a header's logo beside an "Empty cart" link, a sentence holding the link)
+  const outsideControls = b => closest(b.el, CONTROL) ? '' : b.holders.filter(h => !closest(h, CONTROL)).map(ownText).join(' ');
   const cartAction = a => { let p = urlPart(a.href); try { p = decodeURIComponent(p); } catch (e) { /* as is */ } return hit('cart_action_url', p); };
   const cardPrices = prices.filter(p => p.kind === 'price' && p.value > 0 && !p.overlay && p.area !== 'footer');
   const count = new Map();
@@ -1172,10 +1173,10 @@
     checkout_cta: ctaSummary(best(ctaPool.filter(c => c.lexicon_hit === 'checkout'))),
     editable: lineItems.some(i => i.qty_editable || i.removable),
     prechecked_paid: options.filter(o => o.checked).slice(0, 10), paid_options: options.filter(o => !o.checked).slice(0, 10),
-    // a statement, never a control: an "Empty cart" button empties a full cart, a heading "Empty cart" or a linked
-    // "Il carrello è vuoto" states the cart is empty
+    // a statement, never a control: an "Empty cart" link or button empties a full cart (a block that names one is read
+    // on its text outside controls), a heading "Empty cart" or a linked "Il carrello è vuoto" states the cart is empty
     fees, empty: blocks.some(b => !b.overlay && b.text.length <= 200 && hit('empty_cart', b.text) &&
-      !(hit('clear_cart', b.text) && inControl(b))),
+      (!hit('clear_cart', b.text) || hit('empty_cart', outsideControls(b)))),
   };
 
   // ------------------------------------------------------------------ trust
