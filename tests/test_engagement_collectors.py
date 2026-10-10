@@ -764,8 +764,8 @@ def test_long_tasks_and_event_timing_of_a_trusted_click(lab):
     for kind in ("mousePressed", "mouseReleased"):
         collector.transport.call("Input.dispatchMouseEvent", browser.session, type=kind, x=60, y=35, button="left",
                                  clickCount=1)
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline and not collector.since(browser, mark)["event_timing_max_ms"]:
+    deadline = time.monotonic() + 5  # the press can report its own short entry before the slow click's arrives
+    while time.monotonic() < deadline and (collector.since(browser, mark)["event_timing_max_ms"] or 0) < 140:
         time.sleep(0.1)
     since = collector.since(browser, mark)
     assert since["event_timing_max_ms"] >= 140 and since["first_response_ms"] >= 140 and since["mutations"] >= 1
@@ -2610,6 +2610,7 @@ def test_an_empty_cart_control_neither_empties_a_full_cart_nor_is_the_cart_link(
     ("en", '<a href="/cart/">Cart (1)</a>', '<div class="actions">\n  <a href="/cart/flush">Empty cart</a>\n  '
      '<button type="submit">Update cart</button>\n</div>'),
     ("en", '<a href="/cart/">Cart (1)</a>', '<p>Changed your mind? <a href="/cart/flush">Empty cart</a></p>'),
+    # a guard: no Italian clear_cart text reads as an empty-cart statement, with or without the rule
     ("it", '<div>Bottega</div> <a href="/cart/flush">Svuota carrello</a> <a href="/cart/">Carrello (1)</a>', ""),
 ])
 def test_an_empty_cart_control_beside_other_text_leaves_a_full_cart_full(lab, lang, header, actions):
@@ -2625,6 +2626,10 @@ def test_an_empty_cart_control_beside_other_text_leaves_a_full_cart_full(lab, la
 @pytest.mark.parametrize("lang, body", [
     ("en", "<h1>Empty cart</h1><p>Nothing here yet.</p>"),
     ("en", "<h1>Basket</h1><p>You have an empty basket.</p>"),
+    ("en", "<h1>Basket</h1><p>You have an <strong>empty</strong> basket.</p>"),
+    ("en", "<h1>Your <em>empty</em> cart</h1>"),
+    ("en", '<h1>Bag</h1><p>Your bag is <em>empty</em>. <a href="/bag/flush">Empty bag</a></p>'),
+    ("it", '<h1>Carrello</h1><p>Il <em>carrello</em> è vuoto. <a href="/carrello/svuota">Svuota</a></p>'),
     ("it", '<h1>Carrello</h1><a href="/"><p>Il tuo carrello è vuoto: torna al negozio</p></a>'),
 ])
 def test_a_statement_that_the_cart_is_empty_is_read_outside_a_control(lab, lang, body):

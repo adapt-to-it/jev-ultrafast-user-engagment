@@ -687,8 +687,17 @@
   // A link whose GET changes the cart ("?add-to-cart=7", "/cart/change?line=1&quantity=0", "?remove_item=..."): never
   // a product or cart link, whatever it is called.
   const CONTROL = 'a,button,[role="button"],[role="link"]';
-  // a block's text outside its controls (a header's logo beside an "Empty cart" link, a sentence holding the link)
-  const outsideControls = b => closest(b.el, CONTROL) ? '' : b.holders.filter(h => !closest(h, CONTROL)).map(ownText).join(' ');
+  // a block's text outside its controls, in document order (a header's logo beside an "Empty cart" link, a sentence
+  // holding the link, "Your <em>empty</em> cart" whole)
+  const outsideControls = b => {
+    if (closest(b.el, CONTROL)) return '';
+    const free = new Set(b.holders.filter(h => !closest(h, CONTROL)));
+    if (free.size === b.holders.length) return b.text;
+    let out = '';
+    const it = document.createTreeWalker(b.el, NodeFilter.SHOW_TEXT);
+    for (let t = it.nextNode(); t; t = it.nextNode()) out += free.has(t.parentElement) ? t.nodeValue : ' ';
+    return clean(out);
+  };
   const cartAction = a => { let p = urlPart(a.href); try { p = decodeURIComponent(p); } catch (e) { /* as is */ } return hit('cart_action_url', p); };
   const cardPrices = prices.filter(p => p.kind === 'price' && p.value > 0 && !p.overlay && p.area !== 'footer');
   const count = new Map();
