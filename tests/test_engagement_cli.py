@@ -562,6 +562,42 @@ def test_the_smoke_journey_runs_on_the_audit_run_site(tmp_path, monkeypatch, cap
     assert "TYPESAFE_API_KEY is missing" in capsys.readouterr().err
 
 
+def test_the_smoke_records_the_audit_runs_own_consent(tmp_path, monkeypatch):
+    """--audit-run writes smoke_summary.json into that audit's directory: its audit_consent is the audit's own
+    settings.consent (never the smoke's --consent), and without --consent the journey takes the audit's policy, so the
+    journey scored into it starts as the audit's pages did. An explicit --consent that differs is kept as the
+    journey's, and the info check journey_consent_matches_audit says so. No phase runs: nothing is requested."""
+    smoke = smoke_module()
+    store = RunStore(tmp_path / "art")
+    audit = store.new_run("audit", "https://shop.example/", {"consent": "reject"})
+    monkeypatch.setattr(smoke.cli, "load_environment", lambda: None)
+    monkeypatch.setattr(smoke.mcp_server, "load_keys", lambda: {"typesafe_key": True, "text_helper": None})
+    monkeypatch.setattr(typesafe, "post_json", lambda *a, **k: pytest.fail("no request: every phase is skipped"))
+    monkeypatch.setenv("JEV_ENGAGEMENT_CACHE", str(tmp_path / "cache"))  # main() sets it; restored after the test
+    skip = [arg for phase in ("audit", "judge", "journey", "score") for arg in ("--skip", phase)]
+
+    def summary(*argv):
+        assert smoke.main(["--audit-run", audit, "--artifacts", str(tmp_path / "art"), *skip, *argv]) == 0
+        return json.loads((store.path(audit) / "smoke_summary.json").read_text(encoding="utf-8"))
+    assert {k: summary()[k] for k in ("consent", "audit_consent")} == {"consent": "reject", "audit_consent": "reject"}
+    assert {k: summary("--consent", "auto")[k] for k in ("consent", "audit_consent")} == {
+        "consent": "auto", "audit_consent": "reject"}
+    assert (smoke.parse_args([]).consent, smoke.parse_args([]).consent_given) == ("auto", False)
+    assert smoke.parse_args(["--consent", "auto"]).consent_given is True  # kept over the audit's own policy
+
+    journey = {"policy": "typesafe", "model_calls": {"choose": 3}, "verification": {"passed": True,
+                                                                                    "not_assessable": None}}
+    recorder = smoke.Recorder(None)
+    for consent, ok in (("auto", False), ("reject", True)):
+        results = {c["name"]: c for c in smoke.checks({"journey": journey, "consent": consent,
+                                                        "audit_consent": "reject"}, recorder, None, False)}
+        match = results["journey_consent_matches_audit"]
+        assert (match["ok"], match["required"]) == (ok, False)
+        assert match["detail"] == f"journey {consent}, audit reject"
+    assert "journey_consent_matches_audit" not in {c["name"] for c in smoke.checks(
+        {"journey": journey, "consent": "auto", "audit_consent": None}, recorder, None, False)}
+
+
 def test_the_smoke_checks_count_the_run_and_refuse_a_foreign_journey():
     """jev_judge_accepted_a_verdict counts Jev's accepted verdicts in the run (an --audit-run whose Jev tasks were
     settled earlier asks nothing now), and a score that merged a journey of another host fails the smoke."""

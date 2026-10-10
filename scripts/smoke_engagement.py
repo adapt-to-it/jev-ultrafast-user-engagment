@@ -14,8 +14,10 @@ Fixture mode serves tests/fixtures on 127.0.0.1 (recording every request) and hi
 lexicon crawler (crawler.listing_candidates returns nothing), so the listing page is reached only through Jev's pick;
 Chromium gets a dead proxy, so nothing but the model requests leaves the machine. --url mode audits a real shop
 unchanged. --consent (default auto, as in the audit and the plugin) is the cookie banner policy of the audit and of
-the journey's start page, where the runner applies it before Jev's first decision; the summary records the setting
-(consent) and that step's outcome (journey.consent: choice, reason, clicks, via).
+the journey's start page, where the runner applies it before Jev's first decision; the summary records the journey's
+setting (consent), the audit's (audit_consent: with --audit-run that audit's own settings.consent, which is then the
+journey's default; an explicit --consent that differs is printed and fails the info check
+journey_consent_matches_audit) and the consent step's outcome (journey.consent: choice, reason, clicks, via).
 
 Every TypeSafe and text-helper request goes through a recording wrapper of jev_ultrafast.model.post_json (and every
 answer through model.validate_choice), so the printed counts, latencies and tokens are measured independently of what
@@ -528,6 +530,9 @@ def checks(summary: dict, recorder: Recorder, shop: ShopServer | None, fixture: 
               f"sent {sent} TypeSafe + {texts} text, run records {calls.get('choose')} decisions + "
               f"{calls.get('failed') or 0} failed + {calls.get('text')} text + {calls.get('text_failed') or 0} "
               "text failed")
+    if journey and summary.get("audit_consent"):  # info: a journey under another policy than the audit it joins
+        check("journey_consent_matches_audit", summary.get("consent") == summary["audit_consent"], False,
+              f"journey {summary.get('consent')}, audit {summary['audit_consent']}")
     if score:
         foreign = [w for w in score["warnings"] if w.startswith(FOREIGN_HOST)]
         check("journey_on_the_audit_host", not foreign, True, "; ".join(foreign))
@@ -557,8 +562,9 @@ def parse_args(argv=None):
     parser.add_argument("--browser", default="auto", help="auto | launch | harness | cdp:<DevTools URL>")
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--locale", default="it")
-    parser.add_argument("--consent", choices=("auto", "reject", "accept", "none"), default="auto",
-                        help="cookie banner policy of the audit and of the journey's start page (default: auto)")
+    parser.add_argument("--consent", choices=("auto", "reject", "accept", "none"), default=None,
+                        help="cookie banner policy of the audit and of the journey's start page (default: auto; with "
+                             "--audit-run, that audit's own setting)")
     parser.add_argument("--max-steps", type=cli._integer(1, MAX_STEPS), default=30)  # checked before any request
     parser.add_argument("--artifacts", help="run directory root (default: a new temporary directory)")
     parser.add_argument("--audit-run", metavar="RUN_ID", help="judge and score this audit of --artifacts instead")
@@ -566,7 +572,10 @@ def parse_args(argv=None):
     parser.add_argument("--repeat", type=cli._integer(0), default=0, metavar="N",
                         help="judge N more copies (label agreement)")
     parser.add_argument("--dump-requests", type=Path, metavar="DIR", help="write each request and answer as JSON")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.consent_given = args.consent is not None  # an explicit --consent wins over an --audit-run audit's own policy
+    args.consent = args.consent or "auto"
+    return args
 
 
 def load_audit_run(args) -> tuple[dict | None, str | None]:
@@ -637,6 +646,14 @@ def main(argv=None) -> int:
     if problem or (wrong_site and "journey" not in args.skip):
         print(problem or wrong_site, file=sys.stderr)
         return 2
+    # the audit's own cookie banner policy (run.json settings.consent): with --audit-run it is the journey's default,
+    # so the journey scored into that audit starts as the audit's pages did; an explicit --consent may differ (said)
+    audit_consent = (audit.get("settings") or {}).get("consent") if audit else None
+    if audit_consent and not args.consent_given:
+        args.consent = audit_consent
+    elif audit_consent and args.consent != audit_consent and "journey" not in args.skip:
+        print(f"--consent {args.consent}: the journey's start page is handled otherwise than audit {args.audit_run} "
+              f"(consent {audit_consent}), which score_run merges it into", file=sys.stderr)
     try:
         cli.load_environment()  # ./.env, then the plugin's env file when JEV_ENGAGEMENT_ENV names one
     except (OSError, ValueError) as exc:  # the reason, never the file's content
@@ -672,7 +689,10 @@ def main(argv=None) -> int:
     summary = {"mode": mode, "audit_mode": audit_mode(args, args.audit_run) if args.audit_run else mode, "url": url,
                "started_at": datetime.now(UTC).isoformat(),
                "typesafe_model": os.environ.get("TYPESAFE_MODEL") or "jev-latest", "text_helper": keys["text_helper"],
-               "consent": args.consent,
+               "consent": args.consent,  # the journey's (and this smoke's audit's) cookie banner policy
+               # the audit's own: --audit-run's stored setting (this summary is written into that audit's directory),
+               # else this smoke's (None: no audit)
+               "audit_consent": audit_consent if audit else args.consent if "audit" not in args.skip else None,
                "artifacts": shown_path(artifacts), "judge_cache": shown_path(cache), "errors": {}, "skipped": {}}
     audit_id, journey_id = args.audit_run, None
 

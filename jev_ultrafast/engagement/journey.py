@@ -72,7 +72,9 @@ Agent a guarded view of one tab in an isolated browser context with the device p
   it (text_helper_unavailable) or the guard refused the text it wrote (text_refused): the pilot's chosen path was
   denied, so a failed outcome is confounded on whichever page it failed; the refused attempt,
   checks.text_withheld_at and the final page's dead clicks stay recorded, and a run whose pilot never chose to type is
-  assessed as any other; nor is an outcome the oracle cannot read without a guess (the oracle's own reason stays).
+  assessed as any other; nor after the consent step left the tab on another site and no pilot step ran
+  (consent_left_shop: the harness's click ended the journey, not the shop); nor is an outcome the oracle cannot read
+  without a guess (the oracle's own reason stays).
 - What deciding cost is stored after every decision and at the end (finish(), close() for an abandoned run), so a run
   the server abandons while its thread still runs keeps what was spent until then: journey["model_calls"] {choose:
   decisions (TypeSafe requests answered with a valid choice, or host choices), text: text helper calls that returned
@@ -98,15 +100,33 @@ Consent step (settings.consent, default "auto"; run.json settings.consent): once
 anti-bot page, where the run stops as the audit's funnel does) and before the Agent's first observation, the runner
 applies the policy to the banner the landing's audit saw, with the audit's own chain (crawler.Tab.consent, as
 Crawl.home applies it: each control at most once, CheckoutGuard on every click, a click logged before its effect is
-read and never sent again, no Jev fallback). Its clicks go to steps.jsonl with source "consent" and no step number:
-no pilot action (friction.executed, the oracle's step list, the report's count and timeline leave them out). The
-outcome is the start page's PageRecord.consent in run["pages"] ("none": no consent field, the banner stays offered
-to the pilot like any element). Its time is inside timing_ms.wall (from start(), the start page's load included) and
-in no step, so neither in timing_ms.site nor in FAI.TIME_ON_TASK_SITE. Its CDP events (the Page.frame events
-crawler.Tab.act drains, the rest drained before the first input) never reach a step's settle: _seen is unset until
-the first observation, so even a consent click that loads a new document is no NAVIGATION record. A gone session or
-a closed transport during it fails the start like any start error; a control that could not be clicked is only
-recorded (PageRecord.consent.reason).
+read and never sent again, no Jev fallback). A start page where the run stops gets no click: a checkout page (its type,
+a checkout URL or observed payment fields, the first observation's own test; even a link away, which the guard lets
+through on a checkout page, such as a "manage" link to a cookie page) records reason "checkout_boundary" and the first
+observation stops the run at the boundary; an anti-bot page gets no click and no record. A landing whose audit failed
+is read and classified once more (read-only) and that read's type gates the step; a page still unread gets no click
+and reason "audit_unavailable" (never "no_consent_banner": a banner there stays with the pilot; the first observation
+handles it as a checkout page). Its clicks go to steps.jsonl with source "consent" and no
+step number: no pilot action (friction.executed, the oracle's step list, the report's count and timeline leave them
+out). The outcome is the start page's PageRecord.consent in run["pages"] ("none": no consent field, the banner stays
+offered to the pilot like any element). After a click that may have reached the page the runner waits for the page to
+settle as after a step (no main-frame load, no request in flight, page-side quiet; at least dead_window_s), so a CMP
+that reloads once it stored the choice (at once, after its own request, or on a short timer) does so before the first
+observation. Its time, that settle included, is inside timing_ms.wall (from start(), the start page's load included)
+and in no step, so neither in timing_ms.site nor in FAI.TIME_ON_TASK_SITE. Its CDP events (the Page.frame events
+crawler.Tab.act drains, the rest drained after that settle) never reach a step's settle, and _seen is unset until the
+first observation, so a new document whose load starts during the consent step or its settle is no NAVIGATION record.
+A reload the page starts later (a longer timer, a request held past inflight_max_s) is the page navigating by itself
+between steps: a NAVIGATION record (unexpected_nav), as after a pilot click whose settle had ended. After that settle
+a tab the step opened (a "manage" link with target _blank) is closed and listed in PageRecord.consent.closed_tabs,
+never charged to the first pilot step (flags.new_tab, FAI.UNEXPECTED_NAV); a step that left the tab on another page (a
+"manage" link to a cookie policy page, another site) records it as PageRecord.consent.url_after with a consent_moved
+warning: the pilot's first observation is not the start page, and the runner never navigates back. On another site
+that first observation ends the journey (left_shop) before any pilot decision, so a failed oracle there is the consent
+step's: FAI.JOURNEY_SUCCESS is not assessable (consent_left_shop; the oracle's reading stays as evidence, the run is
+partial), whereas a pilot's own click to another site stays a failed goal. A gone session or a closed transport
+during it fails the start like any start error; a control that could not be clicked is only recorded
+(PageRecord.consent.reason).
 """
 
 import os
@@ -472,6 +492,9 @@ class JourneyRunner:
         self._left: str | None = None  # the URL of another site the tab is on: the journey ends there
         self._broken: str | None = None  # a page that did not load (chrome-error://): the journey ends there
         self._start_failed = False  # the start page itself did not load
+        # the URL of another site the consent step left the tab on (a "manage" link to a CMP's or a policy page off
+        # the shop): a journey that then ends before any pilot step is not assessable (consent_left_shop)
+        self._consent_left: str | None = None
         self._documents: dict[str, str] = {}  # main-frame document requests in flight: requestId -> URL
         self._net_error: dict | None = None  # {url, error} of the latest main-frame document request that failed
         self._seen: dict | None = None  # {url, document, type} the journey last saw: a change with no step is the
@@ -605,11 +628,47 @@ class JourneyRunner:
     def _consent(self, landing: dict, profile: str) -> None:
         """settings.consent on the start page's banner, before the Agent's first observation (module docstring): the
         audit's crawler.Tab.consent on the landing's audit, through a crawler.Tab bound to the journey's own tab
-        (source "consent": its clicks are logged without a step number; no chooser, so Jev is never asked). The
-        outcome becomes the start page's PageRecord.consent. A gone session or a closed transport raises."""
+        (source "consent": its clicks are logged without a step number; no chooser, so Jev is never asked). A landing
+        whose audit failed is read once more (read-only) and classified from that read, so the step is gated on the
+        page's real type: an anti-bot page gets no click (nothing recorded, as start() skips one it already knew);
+        still unread: nothing clicked, reason "audit_unavailable" (never "no_consent_banner": nothing says there is
+        none). A page where the run stops at the boundary (guard.should_stop on its type and _consent_view: a checkout
+        type, URL or payment fields) gets no click either, reason "checkout_boundary": not even a link away the guard
+        would let through there. After a click that may have reached the page the page
+        settles as after a step, before the first observation; a tab the step opened is closed then
+        (PageRecord.consent.closed_tabs: never the first pilot step's new_tab), and a step that left the tab on
+        another page (a "manage" link to a cookie policy page) says so (url_after and a consent_moved warning: the
+        pilot did not start on the start page; the runner never navigates back; on another site the outcome is not
+        assessable, consent_left_shop). The outcome becomes the start page's PageRecord.consent. A gone session or a
+        closed transport raises."""
         tab = crawler.Tab(self.collector, self.guard, profile=profile, policy=self.settings.consent, source="consent")
         tab.browser = self.tab  # no tab of its own: Tab.load and Tab.lost are never called here
-        outcome = tab.consent(dict(landing), self.settings.consent, stage=landing.get("stage") or "extra")
+        page, audit = landing, landing.get("audit")
+        if not audit:  # the stored record keeps its own audit, notes and classification (from no audit: "other")
+            audit = tab.fresh_audit()
+            if audit:  # crawler.Tab.act hands the guard this record's type: the page's, not the unread landing's
+                url, language = audit.get("url") or landing.get("final_url") or "", audit.get("lexicon_lang")
+                page = {**landing, "audit": audit,
+                        "classification": classify(audit, url, locale=language or self.settings.locale)}
+        if not audit:
+            outcome = {"policy": self.settings.consent, "choice": "none", "reason": "audit_unavailable"}
+        elif crawler._type(page) == "challenge":
+            return  # the first observation reads it again and stops the run there (bot_challenge)
+        elif self.guard.should_stop(crawler._type(page), self._consent_view(tab, audit, landing)):
+            # a checkout start page (its type, a checkout URL or payment fields: the first observation's own test):
+            # nothing is clicked on a page where the run stops, not even a link away the guard would let through
+            # there (a banner's "manage" link to a cookie page); the first observation stops the run at the boundary
+            outcome = {"policy": self.settings.consent, "choice": "none", "reason": "checkout_boundary"}
+        else:
+            outcome = tab.consent(page, self.settings.consent, stage=landing.get("stage") or "extra")
+        if tab.sent:  # executed, or failed after it may have been delivered (Tab.act): its effect may still come
+            # a CMP that reloads once it stored the choice (at once, after its own request, or on a short timer) does
+            # so within this settle (main-frame load, requests in flight, page-side quiet; at least the dead-click
+            # window), so the first observation reads the settled document; _drain() keeps these events out of the
+            # first step's settle. Not a step: its time is in timing_ms.wall only
+            self._settle(time.monotonic(), self.dead_window_s, mark=None)
+            self._drain()
+            self._consent_effect(landing, outcome)
         landing["consent"] = outcome
         page_id = landing.get("page_id")
 
@@ -619,6 +678,50 @@ class JourneyRunner:
                 page["consent"] = outcome
 
         self.store.update(self.run_id, record)
+
+    @staticmethod
+    def _consent_view(tab, audit: dict, landing: dict) -> dict:
+        """The start page as the guard's checkout test reads it before the consent step: a read-only snapshot.js
+        observation (its fields and their guard tuples, so observed payment fields count, as at the first
+        observation), else its URL alone (the classifier's type and the checkout URL rule still apply). A gone session
+        or a closed transport raises."""
+        try:
+            observed = tab.observe()
+        except (RuntimeError, OSError, TimeoutError) as exc:
+            if isinstance(exc, ConnectionError) or (isinstance(exc, RuntimeError) and session_gone(exc)):
+                raise
+            observed = None
+        return observed or {"url": audit.get("url") or landing.get("final_url") or landing.get("url") or "",
+                            "actions": []}
+
+    def _consent_effect(self, landing: dict, outcome: dict) -> None:
+        """Where the consent step left the browser, once settled, into its outcome: a tab it opened (a "manage" link
+        with target _blank) is closed here and listed (closed_tabs), so the first pilot step's settle never finds it;
+        a tab no longer on the start page (a "manage" link to a cookie settings or policy page, another site) is
+        recorded (url_after) with a consent_moved warning, as the pilot's first observation is not the start page then
+        (left_shop and the step counts follow from there); another site is also kept (_consent_left): finish() makes a
+        failed outcome with no pilot step not assessable (consent_left_shop). The same URL is no move: a CMP that
+        reloads the page stays silent. A gone session or a closed transport raises; another failed read leaves the
+        outcome as it is."""
+        try:
+            opened = self._close_new_tabs()
+        except (RuntimeError, OSError) as exc:
+            if isinstance(exc, ConnectionError) or (isinstance(exc, RuntimeError) and session_gone(exc)):
+                raise
+            opened = []
+        if opened:
+            outcome["closed_tabs"] = [u[:200] for u in opened]
+        href = self._read("location.href")
+        start = landing.get("final_url") if _web(landing.get("final_url")) else landing.get("url")
+        if not isinstance(href, str) or friction.page_url(href) == friction.page_url(start):
+            return
+        outcome["url_after"] = href[:200]
+        where = ("a page that did not load" if not _web(href) else "another site" if not self.guard.same_site(href)
+                 else "another page")
+        if where == "another site":  # the first observation ends the journey there (left_shop): no pilot decision
+            self._consent_left = href[:200]
+        self._warn(f"consent_moved: the consent step left the tab on {where} ({href[:200]}); the pilot's first "
+                   "observation is not the start page")
 
     def close(self) -> None:
         """Release the browser without verification (finish() does both). An unfinished run is left partial."""
@@ -759,6 +862,10 @@ class JourneyRunner:
                     reason = "journey_error"
                 elif broken:  # a page the browser did not load: the cause cannot be verified from the run
                     reason = "navigation_error"
+                elif self._consent_left is not None and self._executed == 0:
+                    # the harness's own consent click left the shop and no pilot step ran: the outcome is the consent
+                    # step's, not the shop's (a pilot's own click to another site stays a failed goal)
+                    reason = "consent_left_shop"
                 elif self._withheld and verification["passed"] is False:  # the guard withheld controls (unread page)
                     reason = "page_unreadable"
                 elif self._text_withheld and verification["passed"] is False:
@@ -784,7 +891,7 @@ class JourneyRunner:
             if page:
                 page.setdefault("notes", []).append(f"journey verification: {self.journey['oracle']}")
             unassessed = ("bot_challenge" if self._challenge
-                          else "navigation_error" if reason == "navigation_error" else None)
+                          else reason if reason in ("navigation_error", "consent_left_shop") else None)
             self._save(run_status=run_status, observations=observations, page=page, finished=True,
                        not_assessable={"stage": None, "profile": self.journey["profile"], "kpi_id": None,
                                        "reason": unassessed} if unassessed else None)

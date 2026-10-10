@@ -422,8 +422,10 @@ def _error_groups(errors) -> list[dict]:
 
 def _jev_undecided(summary: dict) -> bool:
     """A Jev journey that stopped before its first step because TypeSafe gave no decision (a refused or expired key,
-    an unreachable provider): nothing was executed, so a host journey with the same goal repeats no browser action. A
-    browser failure (no failed request) or a failure after some steps does not qualify."""
+    an unreachable provider): no pilot step was executed (the consent step's clicks on the start page's banner, if
+    any, are no pilot steps), so a host journey with the same goal and consent policy (the summary's next names it)
+    repeats no pilot action; only its own consent step clicks the banner again, in its fresh context. A browser
+    failure (no failed request) or a failure after some steps does not qualify."""
     calls = summary.get("model_calls") if isinstance(summary.get("model_calls"), dict) else {}
     checks = (summary.get("verification") or {}).get("checks") or {}
     return (summary.get("policy") == "typesafe" and summary.get("status") == "error"
@@ -920,9 +922,15 @@ class EngagementService:
             "next": f"score_run(<audit run_id>, journey_run_ids=['{result['run_id']}'])",
         }
         if _jev_undecided(summary):  # the skill's fallback: the host pilots the same journey once
-            summary["next"] = ("run_journey(the same url, goal, oracle, oracle_params and profile, policy='host'): Jev "
-                               "could not decide (see warnings) and nothing was executed; you pilot it with "
-                               "journey_act, and score_run takes that journey's run id instead of this one")
+            # the run's own consent policy, named: the tool's default (auto) is not necessarily what this run used, and
+            # the host journey's consent step repeats this one's clicks only under the same policy
+            consent = (run.get("settings") or {}).get("consent") or "auto"
+            summary["next"] = ("run_journey(the same url, goal, oracle, oracle_params and profile, "
+                               f"consent={consent!r}, policy='host'): Jev could not decide (see warnings) and no pilot "
+                               "step was executed (only the consent step's clicks on the start page's banner, if any, "
+                               "which the host journey's own consent step repeats in its fresh context under the same "
+                               "consent policy); you pilot it with journey_act, and score_run takes that journey's run "
+                               "id instead of this one")
         return summary
 
     def _ensure_reaper(self) -> None:

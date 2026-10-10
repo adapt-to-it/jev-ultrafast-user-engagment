@@ -2638,7 +2638,7 @@ def test_a_control_not_found_after_its_scroll_keeps_the_scroll_in_its_probe(monk
     click keeps the click's "scroll" (requested_y, the page y of FAR's centre, and what scroll_to read), so a
     control_not_found in run.json says where the scroll left the page; the search probe's search_field_not_observed
     too. Nothing is clicked."""
-    read = {"scroll_y": 444, "in_view": False, "via": "window"}
+    read = {"scroll_y": 444, "in_view": False, "via": "window", "dx": 0, "dy": 0}
     monkeypatch.setattr(Tab, "scroll_to", lambda self, rect: dict(read) if rect == FAR else None)
     shop = FarShop(variant=step == "variant")
     crawl = crawl_of(shop)
@@ -2657,7 +2657,7 @@ def test_a_control_not_found_after_its_scroll_keeps_the_scroll_in_its_probe(monk
         assert probe["reason"] == "control_not_found"
     assert probe["scroll"] == {"requested_y": 866, **read} and crawl.tab.browser.acted == []
     assert Tab.scrolled(FAR, None) == {"scroll": {"requested_y": 866, "scroll_y": None, "in_view": None,
-                                                  "via": None}}  # the evaluation failed
+                                                  "via": None, "dx": None, "dy": None}}  # the evaluation failed
     assert Tab.scrolled(None, read) == Tab.scrolled({"x": 58}, read) == {}  # no scroll was asked for
 
 

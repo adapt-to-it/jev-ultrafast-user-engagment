@@ -1761,8 +1761,11 @@ def test_jev_pilots_a_journey_on_the_fixture_shop_by_default(chromium, shop_serv
 def test_a_refused_key_ends_the_jev_journey_before_any_step_and_names_the_host_journey(
         chromium, shop_server, service, monkeypatch):
     """Ruling on an invalid or expired TypeSafe key: policy auto still chooses Jev (presence, never a probe); the
-    first decision's HTTP 401 costs one request, nothing is executed, and journey_finish says so (status error,
-    journey_error, choose 0, failed 1, steps 0) with next naming a host journey, which the host then drives."""
+    first decision's HTTP 401 costs one request, no pilot step is executed (steps.jsonl holds the consent step's
+    click only), and journey_finish says so (status error, journey_error, choose 0, failed 1, steps 0) with next
+    naming a host journey, which the host then drives (its own consent step clicks the bar again). next names the
+    run's own consent policy (here accept, not the tool's default auto): a host journey started without it would
+    reject the bar this run accepted, so its consent step would not repeat this one's."""
     monkeypatch.setattr(PageCollector, "net_quiet_s", 0.8)
     monkeypatch.setattr(PageCollector, "lcp_quiet_s", 0.8)
     monkeypatch.setenv("TYPESAFE_API_KEY", "revoked-key")
@@ -1778,7 +1781,7 @@ def test_a_refused_key_ends_the_jev_journey_before_any_step_and_names_the_host_j
     url = shop_server.url("shop/index.html")
     since = len(shop_server.requests)
     journey = {"url": url, "goal": "Aggiungi al carrello un prodotto", "oracle": "cart_not_empty",
-               "profile": "desktop"}
+               "profile": "desktop", "consent": "accept"}
 
     async def scenario(client):
         started = await call(client, "run_journey", **journey)
@@ -1797,9 +1800,32 @@ def test_a_refused_key_ends_the_jev_journey_before_any_step_and_names_the_host_j
     assert finished["model_calls"]["choose"] == 0 and finished["model_calls"]["failed"] == 1
     assert any("HTTP 401" in warning for warning in finished["warnings"])
     assert finished["next"].startswith("run_journey(the same url, goal, oracle, oracle_params and profile, "
-                                       "policy='host'): Jev could not decide")
+                                       "consent='accept', policy='host'): Jev could not decide")
+    # what the hint says was executed is what the evidence holds: the consent step's click, no pilot step
+    assert "no pilot step was executed (only the consent step's clicks" in finished["next"]
+    (click,) = svc.store.read_steps(started["run_id"])
+    assert click["source"] == "consent" and click["status"] == "executed" and "step" not in click
+    assert click["purpose"] == "consent_accept"
+    (again,) = svc.store.read_steps(hosted["run_id"])  # its own consent step, under the same policy: the same click
+    assert (again["source"], again["purpose"], again["label"]) == ("consent", "consent_accept", click["label"])
+    assert {svc.store.load(run_id)["settings"]["consent"] for run_id in (started["run_id"], hosted["run_id"])} == {
+        "accept"}
     assert hosted["policy"] == "host" and hosted["observation"]["elements"] and len(sent) == 1
     assert not [r for r in shop_server.requests[since:] if r["method"] != "GET" or r["path"].startswith("/pay")]
+
+
+def test_the_host_journey_hint_names_the_runs_own_consent_policy(service):
+    """The fallback's next carries the consent policy the failed run used (run.json settings.consent), never the
+    tool's default by omission; a run record without it (older runs) reads as auto, the default it ran with."""
+    svc = service()
+    journey = {"policy": "typesafe", "status": "error",
+               "model_calls": {"choose": 0, "text": 0, "stale_or_refused": 0, "failed": 1}}
+    result = {"run_id": "20261010T120000000000Z_journey_shop.example", "status": "error", "steps": 0,
+              "verification": {"passed": None, "checks": {"not_assessable": "journey_error"}}}
+    for settings, consent in (({"consent": "none"}, "none"), ({"consent": "reject"}, "reject"), ({}, "auto")):
+        summary = svc._finish_summary(result, run={"settings": settings, "journey": journey})
+        assert summary["next"].startswith("run_journey(the same url, goal, oracle, oracle_params and profile, "
+                                          f"consent='{consent}', policy='host'): Jev could not decide"), summary
 
 
 def test_only_a_jev_journey_that_decided_nothing_names_the_host_journey():

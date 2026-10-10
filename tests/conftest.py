@@ -2,8 +2,10 @@
 
 import json
 import threading
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -40,8 +42,15 @@ class _Handler(SimpleHTTPRequestHandler):
         text = kind.startswith("text/") or kind in ("application/javascript", "application/json")
         return f"{kind}; charset=utf-8" if text else kind
 
+    def _delay(self):
+        """A "delay=<ms>" query key holds the answer that long (at most 10 s): a slow image, a slow consent POST."""
+        value = (parse_qs(urlsplit(self.path).query).get("delay") or ["0"])[0]
+        if value.isdigit():
+            time.sleep(min(int(value), 10000) / 1000)
+
     def do_GET(self):
         self._record()
+        self._delay()
         super().do_GET()
 
     def do_HEAD(self):
@@ -50,6 +59,7 @@ class _Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         self._record(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+        self._delay()
         body = json.dumps({"ok": True}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

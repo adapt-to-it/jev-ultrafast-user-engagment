@@ -147,6 +147,10 @@ REASONS = {
     "no_verification": "verifica indipendente non eseguita",
     "journey_error": "percorso interrotto da un errore del sistema di prova, non del sito",
     "left_shop": "percorso uscito dal negozio verso un altro sito",
+    "consent_moved": ("il passo del consenso ha lasciato la scheda su un'altra pagina: il pilota non è partito dalla "
+                      "pagina iniziale"),
+    "consent_left_shop": ("il passo del consenso ha portato la scheda su un altro sito prima di ogni decisione del "
+                          "pilota: l'esito non è del negozio"),
     "page_unreadable": "controlli trattenuti: la pagina non è stata letta dall'audit",
     "text_helper_unavailable": ("aiuto testuale non disponibile: TYPE_TEXT scelto da Jev e rifiutato (nessuna "
                                 "chiave per l'aiuto testuale)"),
@@ -582,12 +586,15 @@ JOURNEY_FIELDS = ("goal", "oracle", "oracle_params", "profile", "policy", "statu
 
 def _start_consent(run) -> dict | None:
     """The journey's consent step (journey.py): PageRecord.consent of its start page ("<profile>-journey-start"), as
-    {policy, choice, via, clicks, reason}; None without one (consent "none", a run before the step existed)."""
+    {policy, choice, via, clicks, reason}, plus url_after (the step left the tab on another page) and closed_tabs (tabs
+    it opened, closed in the step) when it recorded them; None without one (consent "none", a run before the step
+    existed)."""
     page = next((p for p in run.get("pages") or [] if str(p.get("page_id") or "").endswith("-journey-start")), {})
     consent = page.get("consent")
     if not isinstance(consent, dict) or not consent.get("choice"):
         return None
-    return {k: consent.get(k) for k in ("policy", "choice", "via", "clicks", "reason")}
+    return {**{k: consent.get(k) for k in ("policy", "choice", "via", "clicks", "reason")},
+            **{k: consent[k] for k in ("url_after", "closed_tabs") if consent.get(k)}}
 
 
 def _journey_summary(run, steps) -> dict:
@@ -927,6 +934,12 @@ def _consent_line(consent) -> str:
         why = reason_label(consent.get("reason"))
         text = "nessuna scelta prima della prima decisione" + (f" ({why})" if why else "") + (
             f"; {counted}" if clicks else "")
+    tabs = len(consent.get("closed_tabs") or [])
+    if tabs:
+        text += f"; {tabs} {'scheda aperta dal banner, chiusa' if tabs == 1 else 'schede aperte dal banner, chiuse'}"
+    if consent.get("url_after"):
+        text += (f"; dopo il consenso la scheda era su un'altra pagina ({consent['url_after']}): il pilota non è "
+                 "partito dalla pagina iniziale")
     return f'<p class="muted">{e(f"Banner di consenso: {text}")}</p>'
 
 

@@ -2269,3 +2269,270 @@ def test_a_transport_lost_during_the_consent_step_fails_the_start(journey, shop_
     assert run["status"] == "failed" and runner.status == "error" and runner.agent is None
     assert runner.transport is None and runner.tab is None
     assert runner.finish()["steps"] == 0 and store.load(runner.run_id)["status"] == "failed"
+
+
+@pytest.mark.parametrize("query", ["consent_reload=1200", "consent_post=2500"])
+def test_a_consent_manager_that_reloads_after_the_choice_does_so_before_the_first_observation(journey, shop_server,
+                                                                                            query):
+    """A consent manager that reloads the page once it stored the choice, on a short timer or once its own POST (held
+    2.5 s, past the consent click's own 0.8 s quiet window and the settle's 1 s minimum: a request in flight holds
+    the settle) has returned. Handing over at the click's quiet window let that reload land after the first
+    observation: the pilot's first act went stale and a NAVIGATION record charged the harness's consent click to the
+    shop (FAI.UNEXPECTED_NAV). The consent step now settles the page first, so the reload is loaded before start()
+    returns: the pilot's steps are its own, nothing stale, no NAVIGATION."""
+    make, store = journey
+    runner = make("auto")
+    path = f"/shop/index.html?{query}"
+    since = len(shop_server.requests)
+    started = runner.start(shop_server.url(path), "Aggiungi al carrello un prodotto", oracle="cart_not_empty")
+    run_id, observation = started["run_id"], started["observation"]
+    assert [r["path"] for r in shop_server.requests[since:] if r["path"] == path] == [path, path]  # the reload too
+    assert runner.tab.evaluate("document.readyState") == "complete" and not set(BAR) & set(labels_of(observation))
+    assert act(runner, "SCROLL_DOWN")["status"] == "running"
+    assert act(runner, "DONE")["status"] == "done"
+    finished = runner.finish()
+    records = store.read_steps(run_id)
+    assert [(r.get("source"), r.get("operation")) for r in records] == [
+        ("consent", "CLICK"), (None, "SCROLL_DOWN"), (None, "DONE")]
+    scroll = records[1]
+    assert scroll["step"] == 1 and not any(scroll["flags"][k] for k in ("stale", "new_document", "unexpected_nav"))
+    assert finished["friction"]["FAI.UNEXPECTED_NAV"] == 0
+    run = store.load(run_id)
+    assert run["journey"]["model_calls"]["stale_or_refused"] == 0
+    assert {k: run["pages"][0]["consent"][k] for k in ("choice", "clicks")} == {"choice": "reject", "clicks": 1}
+
+
+def test_a_consent_reload_at_once_is_loaded_before_the_first_observation_not_in_the_first_step(journey,
+                                                                                               shop_server):
+    """A consent manager that reloads at once, on a page whose load lasts 2 s (one slow image): the consent click's
+    wait ended at the new document's commit, so the first observation read a page still loading and the pilot's first
+    step absorbed the rest of the harness's reload (its settle_ms, timing_ms.site, FAI.TIME_ON_TASK_SITE). The consent
+    step's settle waits for the load: the first step's settle is the step's own."""
+    make, store = journey
+    runner = make("auto")
+    started = runner.start(shop_server.url("shop/index.html?consent_reload=0&slow=2000"),
+                           "Aggiungi al carrello un prodotto", oracle="cart_not_empty")
+    assert runner.tab.evaluate("document.readyState") == "complete"
+    assert not set(BAR) & set(labels_of(started["observation"]))
+    assert act(runner, "SCROLL_DOWN")["status"] == "running"
+    act(runner, "DONE")
+    runner.finish()
+    records = store.read_steps(started["run_id"])
+    assert [r.get("source") for r in records] == ["consent", None, None]
+    scroll = records[1]
+    assert scroll["operation"] == "SCROLL_DOWN" and scroll["settle_ms"] < 500 and not scroll["flags"]["new_document"]
+    assert not [r for r in records if r.get("operation") == "NAVIGATION"]
+    assert store.load(started["run_id"])["journey"]["timing_ms"]["site"] < 1000
+
+
+def failing_audit(monkeypatch, times):
+    """PageCollector.audit raising AuditError on its first `times` calls (None: until failing["on"] is cleared)."""
+    real, failing = PageCollector.audit, {"on": True, "calls": 0}
+
+    def audit(self, browser):
+        failing["calls"] += 1
+        if failing["on"] and (times is None or failing["calls"] <= times):
+            raise AuditError("audit.js threw: TypeError")
+        return real(self, browser)
+
+    monkeypatch.setattr(PageCollector, "audit", audit)
+    return failing
+
+
+def test_a_start_page_whose_audit_failed_is_read_again_before_the_consent_step(journey, shop_server, monkeypatch):
+    """The landing's audit failed (PageCollector.collect kept audit {} and an "audit failed" note): the consent step
+    reads the page once more (read-only) and rejects the bar it then sees; the stored start page keeps its own audit
+    and note. Taking the empty audit for "no banner" left the bar to the pilot."""
+    failing = failing_audit(monkeypatch, 1)
+    make, store = journey
+    runner = make("auto")
+    started = runner.start(shop_server.url("shop/index.html"), "Aggiungi al carrello un prodotto",
+                           oracle="cart_not_empty")
+    assert failing["calls"] >= 2 and not set(BAR) & set(labels_of(started["observation"]))
+    (click,) = store.read_steps(started["run_id"])
+    assert click["source"] == "consent" and click["label"] == "Rifiuta tutti"
+    (start,) = store.load(started["run_id"])["pages"]
+    assert start["audit"] == {} and any(n.startswith("audit failed") for n in start["notes"])
+    assert {k: start["consent"][k] for k in ("choice", "clicks")} == {"choice": "reject", "clicks": 1}
+    runner.close()
+
+
+def test_a_start_page_that_cannot_be_read_is_never_reported_without_a_banner(journey, shop_server, monkeypatch):
+    """The landing's audit and the consent step's second read both fail: nothing is clicked or logged, the outcome is
+    "audit_unavailable" (the bar stays with the pilot) and the report says the page was not read, never that the start
+    page had no cookie banner."""
+    failing = failing_audit(monkeypatch, None)
+    make, store = journey
+    runner = make("auto")
+    started = runner.start(shop_server.url("shop/index.html"), "Aggiungi al carrello un prodotto",
+                           oracle="cart_not_empty")
+    run_id = started["run_id"]
+    assert store.read_steps(run_id) == []
+    assert store.load(run_id)["pages"][0]["consent"] == {"policy": "auto", "choice": "none",
+                                                         "reason": "audit_unavailable"}
+    failing["on"] = False
+    act(runner, "DONE")
+    runner.finish()
+    from jev_ultrafast.engagement.report import write_report
+
+    html = open(write_report(store, run_id)["report_html"], encoding="utf-8").read()
+    assert "Banner di consenso: nessuna scelta prima della prima decisione (pagina non letta dall&#x27;audit)" in html
+    assert "nessun banner dei cookie" not in html
+
+
+def test_a_consent_step_that_leaves_the_start_page_says_so(journey, shop_server):
+    """A blocking modal without a reject whose "Personalizza" is a link to the privacy page: the chain presses
+    "manage" (the banner is in the way) and the tab loads that page, where the chain goes on. The step's outcome
+    records where it left the tab (url_after) and the run warns (consent_moved): the pilot's first observation is not
+    the start page. Before, nothing said so and the start page's record held no URL: the run read as a journey from the
+    start URL. A CMP reload of the same URL stays silent (the consent_reload tests)."""
+    make, store = journey
+    runner = make("auto")
+    started = runner.start(shop_server.url("shop/index.html?dark=1&consent_manage=page"),
+                           "Aggiungi al carrello un prodotto", oracle="cart_not_empty")
+    run_id, privacy = started["run_id"], shop_server.url("shop/privacy.html")
+    assert started["observation"]["url"] == privacy and started["observation"]["step"] == 0
+    assert [r["purpose"] for r in store.read_steps(run_id)][:1] == ["consent_manage"]
+    run = store.load(run_id)
+    consent = run["pages"][0]["consent"]
+    assert consent["url_after"] == privacy and "closed_tabs" not in consent
+    assert [w for w in run["warnings"] if w.startswith("consent_moved")] == [
+        f"consent_moved: the consent step left the tab on another page ({privacy}); the pilot's first observation is "
+        "not the start page"]
+    act(runner, "DONE")
+    finished = runner.finish()
+    assert finished["verification"]["passed"] is False  # the shop's own site: the pilot could go on from there
+    assert "not_assessable" not in finished["verification"]["checks"]
+    assert not [s for s in store.read_steps(run_id) if s.get("operation") == "NAVIGATION"]
+    from jev_ultrafast.engagement.report import write_report
+
+    html = open(write_report(store, run_id)["report_html"], encoding="utf-8").read()
+    assert ("dopo il consenso la scheda era su un&#x27;altra pagina (" + privacy + "): il pilota non è partito dalla "
+            "pagina iniziale") in html
+
+
+def test_a_consent_step_that_leaves_the_shop_makes_the_outcome_not_assessable(journey, shop_server):
+    """The same modal whose "Personalizza" links to a page on another site (a CMP's or a policy page off the shop):
+    the chain presses it, the first observation is that site's page and the run ends there (left_shop) before the
+    pilot is asked anything. The oracle's failure on that page is the consent step's, not the shop's: FAI.JOURNEY_SUCCESS
+    is not assessed (consent_left_shop, the oracle's reading kept as evidence) and the run is partial. Before, the
+    journey read as the shop failing the goal with zero pilot decisions, and score_run merged that failure into the
+    ERS. A pilot's own click to another site stays a failed goal (test_another_site_ends_the_journey_...)."""
+    make, store = journey
+    runner = make("auto")
+    started = runner.start(shop_server.url("shop/index.html?dark=1&consent_manage=offsite"),
+                           "Aggiungi al carrello un prodotto", oracle="cart_not_empty")
+    run_id, elsewhere = started["run_id"], shop_server.url("shop/privacy.html").replace("127.0.0.1", "localhost")
+    assert (started["status"], started["observation"]["url"], started["observation"]["step"]) == (
+        "blocked", elsewhere, 0)
+    assert [r["purpose"] for r in store.read_steps(run_id)] == ["consent_manage"]  # the other site's bar: refused
+    run = store.load(run_id)
+    assert run["pages"][0]["consent"]["url_after"] == elsewhere
+    assert [w.split(":", 1)[0] for w in run["warnings"]] == ["consent_moved", "left_shop"]
+    finished = runner.finish()
+    verification = finished["verification"]
+    assert verification["passed"] is None and verification["checks"]["not_assessable"] == "consent_left_shop"
+    assert verification["checks"]["oracle_passed"] is False and finished["steps"] == 0
+    assert finished["friction"]["FAI.JOURNEY_SUCCESS"] is None
+    run = store.load(run_id)
+    row = next(o for o in run["observations"] if o["kpi_id"] == "FAI.JOURNEY_SUCCESS")
+    assert (row["assessed"], row["reason"]) == (False, "consent_left_shop")
+    assert run["status"] == "partial" and [n["reason"] for n in run["not_assessable"]] == ["consent_left_shop"]
+    from jev_ultrafast.engagement.report import write_report
+
+    html = open(write_report(store, run_id)["report_html"], encoding="utf-8").read()
+    assert "il passo del consenso ha portato la scheda su un altro sito prima di ogni decisione del pilota" in html
+
+
+def test_a_tab_the_consent_step_opened_is_closed_in_that_step_not_charged_to_the_first(journey, shop_server):
+    """The same modal with its "Personalizza" link opening the privacy page in a new tab: the chain presses it, the
+    banner stays and is accepted (no reject anywhere, it blocks the page). The new tab is closed in the consent step and
+    listed there (closed_tabs); the first pilot step finds no tab of its own to close, so it is no new_tab and no
+    unexpected navigation (FAI.UNEXPECTED_NAV 0). Before, step 1's settle closed it and charged it to the pilot."""
+    make, store = journey
+    runner = make("auto")
+    started = runner.start(shop_server.url("shop/index.html?dark=1&consent_manage=tab"),
+                           "Aggiungi al carrello un prodotto", oracle="cart_not_empty")
+    run_id = started["run_id"]
+    run = store.load(run_id)
+    consent = run["pages"][0]["consent"]
+    assert consent["closed_tabs"] == [shop_server.url("shop/privacy.html")] and "url_after" not in consent
+    assert (consent["choice"], [r["purpose"] for r in store.read_steps(run_id)]) == (
+        "accept", ["consent_manage", "consent_accept"])
+    assert not [w for w in run["warnings"] if w.startswith("consent_moved")]
+    assert started["observation"]["url"] == shop_server.url("shop/index.html?dark=1&consent_manage=tab")
+    assert act(runner, "SCROLL_DOWN")["status"] == "running"
+    act(runner, "DONE")
+    finished = runner.finish()
+    first = next(s for s in store.read_steps(run_id) if s.get("step") == 1)
+    assert first["operation"] == "SCROLL_DOWN" and not first["flags"]["new_tab"]
+    assert not first["flags"]["unexpected_nav"] and finished["friction"]["FAI.UNEXPECTED_NAV"] == 0
+
+
+def test_a_re_read_start_page_is_classified_from_that_read_before_the_consent_step(journey, shop_server,
+                                                                                   monkeypatch):
+    """The landing's audit failed, so the start page was classified from no audit ("other"). The consent step's
+    second read sees a checkout page (here at a URL the guard's URL rule misses and with no payment field: a summary
+    step a script renders), and that read's own type now gates the step: a page where the run stops gets no consent
+    click (reason checkout_boundary) and the first observation stops the run there. Before, the guard got "other" and
+    the banner was rejected on a checkout page."""
+    failing_audit(monkeypatch, 1)
+    monkeypatch.setattr(CheckoutGuard, "_checkout_path", lambda self, parts: False)
+    monkeypatch.setattr(CheckoutGuard, "_payment_fields", lambda self, page: False)
+    make, store = journey
+    runner = make("auto")
+    started = runner.start(shop_server.url("shop/checkout.html"), "Aggiungi al carrello un prodotto",
+                           oracle="cart_not_empty")
+    run_id = started["run_id"]
+    assert store.read_steps(run_id) == []
+    (start,) = store.load(run_id)["pages"]
+    assert start["audit"] == {} and start["classification"]["type"] == "other"  # the stored record keeps its own
+    assert start["consent"] == {"policy": "auto", "choice": "none", "reason": "checkout_boundary"}
+    assert started["status"] == "stopped_at_checkout_boundary"
+    runner.finish()
+
+
+@pytest.mark.parametrize("policy, rule", [("auto", "page_type"), ("reject", "page_type"), ("auto", "url")])
+def test_a_checkout_start_page_gets_no_consent_click(journey, shop_server, monkeypatch, policy, rule):
+    """A journey that starts on a checkout page (the dark modal there has no reject and its "Personalizza" is a link
+    to the privacy page) stops at the boundary before anything is clicked: the consent step clicks nothing on a page
+    where the run stops (reason checkout_boundary), whether the classifier or only the guard's checkout URL rule (rule
+    "url": the classifier reads it as "other") says it is one. Before, the chain pressed that link, which the guard
+    lets through on a checkout page as a link away: the tab left the checkout, the first observation was the privacy
+    page and the run went on past the first checkout page."""
+    if rule == "url":
+        from jev_ultrafast.engagement import collectors, journey as runner_module, pagetypes
+
+        def blind(audit, url, **kwargs):
+            return {**pagetypes.classify(audit, url, **kwargs), "type": "other"}
+
+        monkeypatch.setattr(collectors, "classify", blind)
+        monkeypatch.setattr(runner_module, "classify", blind)
+    make, store = journey
+    runner = make(policy)
+    url = shop_server.url("shop/checkout.html?dark=1&consent_manage=page")
+    started = runner.start(url, "Aggiungi al carrello un prodotto", oracle="cart_not_empty")
+    run_id = started["run_id"]
+    assert store.read_steps(run_id) == []
+    assert started["status"] == "stopped_at_checkout_boundary" and started["observation"]["url"] == url
+    run = store.load(run_id)
+    (start,) = run["pages"]
+    assert start["classification"]["type"] == ("checkout" if rule == "page_type" else "other")
+    assert start["consent"] == {"policy": policy, "choice": "none", "reason": "checkout_boundary"}
+    assert not [w for w in run["warnings"] if w.startswith("consent_moved")]
+    assert runner.tab.evaluate("localStorage.getItem('ps-consent')") is None
+    assert runner.finish()["status"] == "stopped_at_checkout_boundary"
+
+
+def test_a_re_read_anti_bot_start_page_gets_no_consent_click(journey, shop_server, monkeypatch):
+    """The landing's audit failed and the second read shows the shop's anti-bot page: no consent step there (as on a
+    landing already known to be one: nothing recorded), and the first observation stops the run (blocked)."""
+    failing_audit(monkeypatch, 1)
+    make, store = journey
+    runner = make("auto")
+    started = runner.start(shop_server.url("shop/challenge.html"), "Aggiungi al carrello un prodotto",
+                           oracle="cart_not_empty")
+    (start,) = store.load(started["run_id"])["pages"]
+    assert "consent" not in start and store.read_steps(started["run_id"]) == []
+    assert started["status"] == "blocked"
+    runner.finish()

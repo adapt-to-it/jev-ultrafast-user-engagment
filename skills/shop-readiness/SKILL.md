@@ -104,11 +104,13 @@ clicks are not journey steps). The result names the pilot:
   text model, so a TYPE_TEXT Jev chooses is refused before any input; a goal that needed typing then ends "non
   valutabile (text_helper_unavailable)", which is not the shop's fault).
   If Jev could not take a single decision (`status` `error`, `verification.checks.not_assessable` `journey_error`,
-  `model_calls.choose` 0, `model_calls.failed` above 0 and `steps` 0; its `next` then names a host journey), nothing
-  was executed: start exactly one new journey with the same url, goal, oracle, oracle_params and profile and
-  `policy="host"`, drive it as in the next point, and tell the user in one line why, quoting the warning (for HTTP
-  401 or 403: "Jev non ha potuto decidere (HTTP 401: chiave TypeSafe rifiutata o scaduta): guido io il journey"; for
-  another error name that error instead). Keep the failed run id for step 4 and pass only the host journey's run id
+  `model_calls.choose` 0, `model_calls.failed` above 0 and `steps` 0; its `next` then names a host journey), no
+  pilot step was executed (only the consent step's clicks, if any, which the new journey's consent step repeats
+  under the same consent policy): start exactly one new journey with the same url, goal, oracle, oracle_params,
+  profile and `consent` (the value its `next` names) and `policy="host"`, drive it as in the next point, and tell
+  the user in one line why, quoting the warning (for HTTP 401 or 403:
+  "Jev non ha potuto decidere (HTTP 401: chiave TypeSafe rifiutata o scaduta): guido io il journey"; for another
+  error name that error instead). Keep the failed run id for step 4 and pass only the host journey's run id
   to `score_run`. If Jev failed after some steps (`steps` above 0), do not start another journey: report its
   `journey_error` and offer the user a journey that you pilot.
 - `policy` `host` (the result has `observation`): you drive it step by step with `journey_act` following the

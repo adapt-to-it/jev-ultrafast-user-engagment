@@ -20,8 +20,14 @@ Chrome aborted (a 204 answer, a download: the tab keeps the previous document) i
 and a listing candidate that lands on the home page is no listing: both are "extra" and the next candidate is tried.
 Browser.observe() lists the viewport only, so a control audit.js located (its rect: the variant, the add-to-cart, the
 checkout CTA, the search field) is first brought to mid-viewport, instantly (CSS smooth scrolling would leave the page
-where it was) and through the element at that rect when there is one (an inner scroller moves too); a control still
-not found records where that scroll left the page in its probe ("scroll": Tab.scrolled).
+where it was) and through the element at that rect when there is one (an inner scroller moves too; the retry's scroll
+finds the control where the first one left it: the same node, or one of its size the page re-rendered in its place);
+how far its page position moved since the audit (what an inner scroller moved it, or a position: sticky control's own
+move with the window) is taken back wherever observed controls are compared with audit.js rects (shifted(): pick's
+nearness, own_controls), and a control still not found records where that scroll left the page in its probe ("scroll":
+Tab.scrolled). audit.js takes the window's scroll back, not an inner scroller's, so the audit select_variant reads
+after its pick is taken with every element scroller back at 0 (UNSCROLL_JS): its rects, above_fold, pdp.price and
+add-to-cart stay in the load audit's frame.
 
 Overlays: after a home or listing page is accepted (and its repeats loaded), its interrupting non-consent overlays
 (modal or blocking newsletter, promo) are closed with their observed close or decline control, as a shopper would
@@ -120,20 +126,41 @@ NAV_EVENTS = ("Page.frameRequestedNavigation", "Page.frameStartedLoading", "Page
 WORD = re.compile(r"[^\W\d_]{4,}")
 # Tab.scroll_to: the element whose page rect (getBoundingClientRect + scrollX/scrollY) is audit.js's rect within 2 px
 # (the first match in document order, then its innermost matching descendant) goes to mid-viewport through
-# scrollIntoView, which moves inner scrollers too; no element: the window. "instant" overrides CSS scroll-behavior:
-# smooth, which would leave the page where it was when observe() reads it. Two animation frames later (or 200 ms: a
-# throttled tab) it reads whether the element's centre (no element: the rect's) is inside the viewport, as snapshot.js
-# requires. Read-only apart from the scroll: no click, no focus.
+# scrollIntoView, which moves inner scrollers too; no element: the window. Each call that used an element keeps it for
+# that rect on this document with the shift it measured (window.__jevScrollTarget {key, ref: a WeakRef, dx, dy}: no
+# DOM attribute; a new document starts without it), because once an inner scroller moved, audit.js's rect no longer
+# finds the control (the StalePage retry of click() and probe_search()): a later call for the same rect uses the kept
+# node while it is connected and rendered, whatever its size now (a new label), else the element of audit.js's size
+# at the kept shift, i.e. where the last scroll left the control (a node the page re-rendered in its place), and only
+# then audit.js's rect. "instant" overrides CSS scroll-behavior: smooth, which would leave the page where it was when
+# observe() reads it. Two animation frames later (or 200 ms: a throttled tab) it reads whether the element's centre
+# (no element: the rect's) is inside the viewport, as snapshot.js requires, and dx, dy: the element's page position
+# now minus audit.js's rect, i.e. how far inner scrollers moved it since the audit, or how far a position: sticky
+# element moved with the window (stuck, it keeps its viewport place); 0 for an element in the page flow when only the
+# window moved, and on the window path. Read-only apart from the scroll: no click, no focus.
 SCROLL_JS = """((x, y, w, h) => new Promise(resolve => {
   const near = (a, b) => Math.abs(a - b) <= 2;
-  let el = null;
-  if ([x, w, h].every(v => typeof v === 'number') && w > 0 && h > 0) {
+  const box = [x, w, h].every(v => typeof v === 'number') && w > 0 && h > 0;
+  const key = [x, y, w, h].join(',');
+  const kept = box && window.__jevScrollTarget && window.__jevScrollTarget.key === key ? window.__jevScrollTarget
+    : null;
+  const at = (px, py) => {
+    let found = null;
     for (const e of document.querySelectorAll('body *')) {
       const r = e.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0 && near(r.left + scrollX, x) && near(r.top + scrollY, y) &&
-          near(r.width, w) && near(r.height, h) && (!el || el.contains(e))) el = e;
+      if (r.width > 0 && r.height > 0 && near(r.left + scrollX, px) && near(r.top + scrollY, py) &&
+          near(r.width, w) && near(r.height, h) && (!found || found.contains(e))) found = e;
     }
+    return found;
+  };
+  let el = null;
+  if (kept) {
+    const k = kept.ref.deref();
+    const r = k && k.isConnected ? k.getBoundingClientRect() : null;
+    if (r && r.width > 0 && r.height > 0) el = k;
+    else if (kept.dx || kept.dy) el = at(x + kept.dx, y + kept.dy);
   }
+  if (box && !el) el = at(x, y);
   if (el) el.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'});
   else window.scrollTo({top: Math.max(0, y + (h || 0) / 2 - innerHeight / 2), left: 0, behavior: 'instant'});
   let done = false;
@@ -143,13 +170,25 @@ SCROLL_JS = """((x, y, w, h) => new Promise(resolve => {
     const r = el && el.isConnected ? el.getBoundingClientRect() : null;
     const cx = r ? r.left + r.width / 2 : typeof x === 'number' ? x + (w || 0) / 2 - scrollX : innerWidth / 2;
     const cy = r ? r.top + r.height / 2 : y + (h || 0) / 2 - scrollY;
+    const dx = r ? Math.round(r.left + scrollX - x) : 0, dy = r ? Math.round(r.top + scrollY - y) : 0;
+    if (r && typeof WeakRef === 'function') window.__jevScrollTarget = {key, ref: new WeakRef(el), dx, dy};
     resolve({scroll_y: Math.round(scrollY), in_view: cx >= 0 && cy >= 0 && cx < innerWidth && cy < innerHeight,
-             via: el ? 'element' : 'window'});
+             via: el ? 'element' : 'window', dx, dy});
   };
   requestAnimationFrame(() => requestAnimationFrame(finish));
   setTimeout(finish, 200);
 }))(%s)"""
-TOP_JS = "window.scrollTo({top: 0, left: 0, behavior: 'instant'}), scrollY"  # never a smooth scroll still under way
+# Crawl.fallback_link asks at the top of its page: the window and every element scrolled down go back to the top (an
+# inner scroller scroll_to moved would keep a header inside it out of the viewport), instantly (never a smooth scroll
+# still under way when observe() reads the page)
+TOP_JS = ("[...document.querySelectorAll('body, body *')].forEach(e => { if (e.scrollTop > 0) "
+          "e.scrollTo({top: 0, behavior: 'instant'}); }), window.scrollTo({top: 0, left: 0, behavior: 'instant'}), "
+          "scrollY")
+# Crawl.select_variant reads the audit again with every element scroller back at 0 (the window stays): audit.js's
+# rects and above_fold take the window's scroll back but not an inner scroller's, which scroll_to may have moved, and
+# pdp.price and the add-to-cart are chosen by above_fold first. Instantly; read-only apart from the scroll
+UNSCROLL_JS = ("[...document.querySelectorAll('body, body *')].forEach(e => { if (e.scrollTop > 0 || "
+               "e.scrollLeft > 0) e.scrollTo({top: 0, left: 0, behavior: 'instant'}); }), true")
 # latency from the end of typing (since = when this evaluation starts); options already there count as 0 ms
 OPTIONS_JS = """((since, before, windowMs) => new Promise(resolve => {
   const count = () => [...document.querySelectorAll('[role="option"]')].filter(e => {
@@ -242,11 +281,25 @@ def _named(action: dict) -> bool:
 
 
 def _page_rect(page: dict, action: dict) -> dict | None:
-    """An observed action's rect (viewport coordinates) in page coordinates at the page's scroll, for pick(near=)."""
+    """An observed action's rect (viewport coordinates) in page coordinates at the page's scroll, the scrolled-to
+    control's shift since the audit taken back (shifted()), for pick(near=)."""
     r = action.get("rect") or {}
     if not isinstance(r.get("y"), (int, float)):
         return None
-    return {"y": r["y"] + ((page.get("scroll") or {}).get("y") or 0), "h": r.get("h") or 0}
+    return {"y": r["y"] + ((page.get("scroll") or {}).get("y") or 0) - ((page.get("shift") or {}).get("y") or 0),
+            "h": r.get("h") or 0}
+
+
+def shifted(page: dict, done: dict | None) -> dict:
+    """The observation as pick(), _page_rect() and own_controls() compare it with audit.js rects after
+    Tab.scroll_to (done: what it read): with "shift" {x, y}, how far the scrolled-to control's page position moved
+    since the audit (its dx, dy: what inner scrollers moved it, or a position: sticky control's own move with the
+    window), which they take back, so that control, and any control that moved with it, is compared in the audit's
+    frame; no shift (an element in the page flow when only the window moved, the window path, no scroll): the
+    observation as it is. A copy: act() keeps the observation itself."""
+    dx, dy = ((done or {}).get(key) for key in ("dx", "dy"))
+    shift = {"x": dx if isinstance(dx, (int, float)) else 0, "y": dy if isinstance(dy, (int, float)) else 0}
+    return {**page, "shift": shift} if shift["x"] or shift["y"] else page
 
 
 def _reads(lx: dict, action: dict, *keys: str) -> bool:
@@ -334,8 +387,10 @@ def own_controls(buttons, audit: dict):
     inside one of their rects), never another control with the same label elsewhere on the page (a cart line's "×"
     before a newsletter's "×"). audit.js rects are page coordinates at the audit's scroll (viewport.scroll_y); an
     observed rect is in viewport coordinates: it matches at the page's scroll now (a box in the page flow) or at the
-    audit's scroll (a fixed overlay, which keeps its viewport place while the page scrolls). A button without a rect
-    matches nothing."""
+    audit's scroll (a fixed overlay, which keeps its viewport place while the page scrolls) or, after Tab.scroll_to
+    moved the scrolled-to control (page["shift"], shifted(): an inner scroller, or a sticky control's move with the
+    window), at the page's scroll now with that shift taken back (a control that moved with it). A button without a
+    rect matches nothing."""
     rects = [b["rect"] for b in buttons or [] if isinstance(b, dict) and isinstance(b.get("rect"), dict)]
     then = (audit.get("viewport") or {}).get("scroll_y") or 0
 
@@ -349,7 +404,10 @@ def own_controls(buttons, audit: dict):
             return False
         x, y = r["x"] + (r.get("w") or 0) / 2, r["y"] + (r.get("h") or 0) / 2
         now = (page.get("scroll") or {}).get("y") or 0
-        return any(inside(x, y + scroll, rect) for rect in rects for scroll in (now, then))
+        shift = page.get("shift") or {}
+        sx, sy = shift.get("x") or 0, shift.get("y") or 0
+        return any(inside(x, y + scroll, rect) for rect in rects for scroll in (now, then)) or bool(
+            (sx or sy) and any(inside(x - sx, y + now - sy, rect) for rect in rects))
     return accept
 
 
@@ -612,8 +670,12 @@ class Tab:
 
     def scroll_to(self, rect: dict | None) -> dict | None:
         """Bring a page-coordinate rect (audit.js) to mid-viewport, instantly, through the element at that rect when
-        there is one (SCROLL_JS): observe() lists elements in the viewport only. {"scroll_y", "in_view", "via":
-        "element" | "window"} once two frames have passed, or None (no rect y, or the evaluation failed)."""
+        there is one (SCROLL_JS; for the same rect on this document again, the control where the last call left it:
+        the same node, or one of audit.js's size the page re-rendered there): observe() lists elements in the viewport
+        only. {"scroll_y", "in_view", "via": "element" | "window", "dx", "dy" (the element's page position now minus
+        audit.js's rect: what inner scrollers moved it, or a position: sticky element's own move with the window; 0
+        for an element in the page flow when only the window moved, and on the window path: shifted())} once two
+        frames have passed, or None (no rect y, or the evaluation failed)."""
         if not rect or not isinstance(rect.get("y"), (int, float)):
             return None
         box = [rect.get(key) if isinstance(rect.get(key), (int, float)) else None for key in ("x", "y", "w", "h")]
@@ -623,12 +685,12 @@ class Tab:
     @staticmethod
     def scrolled(rect: dict | None, done: dict | None) -> dict:
         """The probe's record of the scroll before a control that was not found: {"scroll": {"requested_y" (the page
-        y of the rect's centre, brought to mid-viewport), "scroll_y", "in_view", "via"}} (None each: the evaluation
-        failed), or {} when no scroll was asked for (no rect y)."""
+        y of the rect's centre, brought to mid-viewport), "scroll_y", "in_view", "via", "dx", "dy"}} (None each: the
+        evaluation failed), or {} when no scroll was asked for (no rect y)."""
         if not rect or not isinstance(rect.get("y"), (int, float)):
             return {}
         return {"scroll": {"requested_y": round(rect["y"] + (rect.get("h") or 0) / 2),
-                           **{key: (done or {}).get(key) for key in ("scroll_y", "in_view", "via")}}}
+                           **{key: (done or {}).get(key) for key in ("scroll_y", "in_view", "via", "dx", "dy")}}}
 
     # ---------------------------------------------------------------- actions
     @staticmethod
@@ -636,10 +698,11 @@ class Tab:
              near: dict | None = None, strict: bool = False, accept=None) -> dict | None:
         """The observed action whose label (for a select option: the option's label) equals one of labels
         (casefolded), else one whose label matches the lexicon key; several: the one closest to near (a
-        page-coordinate rect). strict (an overlay's own controls): no lexicon match anywhere on the page, only a label
-        that contains one of labels or is contained in one ("Rifiuta" and "Rifiuta tutti i cookie"). accept(action,
-        page): only actions it accepts are candidates (the control a caller verified, not another one with its
-        label)."""
+        page-coordinate rect, compared at the page's scroll with the scrolled-to control's shift taken back:
+        shifted()).
+        strict (an overlay's own controls): no lexicon match anywhere on the page, only a label that contains one of
+        labels or is contained in one ("Rifiuta" and "Rifiuta tutti i cookie"). accept(action, page): only actions it
+        accepts are candidates (the control a caller verified, not another one with its label)."""
         actions = [a for a in page.get("actions") or [] if a.get("kind") in kinds
                    and (roles is None or a.get("role") in roles) and (accept is None or accept(a, page))]
         wanted = {_norm(label) for label in labels if _norm(label)}
@@ -661,7 +724,7 @@ class Tab:
             return None
         if near and isinstance(near.get("y"), (int, float)):
             target = near["y"] + (near.get("h") or 0) / 2
-            scroll = (page.get("scroll") or {}).get("y") or 0
+            scroll = ((page.get("scroll") or {}).get("y") or 0) - ((page.get("shift") or {}).get("y") or 0)
 
             def distance(a):
                 r = a.get("rect") or {}
@@ -741,8 +804,12 @@ class Tab:
         offer only) both take ("jev_fallback": True; never for a select). Jev's element that met a stale page is
         picked again on the re-observed page by its label (the one nearest to where it was), without a second
         request, and its outcome updates the same probe; gone: "control_not_found". rect (audit.js, page
-        coordinates): scroll_to() brings it to mid-viewport before each observation, and a "control_not_found" says
-        where that scroll left the page ("scroll": scrolled())."""
+        coordinates): scroll_to() brings it to mid-viewport before each observation (the retry's scroll finds the
+        control where the first one left it, the same node or one the page re-rendered in its place, and measures the
+        whole shift since the audit again), picking and the accept and offer filters compare the observation with
+        audit.js rects with the scrolled-to control's shift taken back (shifted(): a related product's same-label
+        button below an app shell's CTA is never nearer), act() gets the observation itself, and a
+        "control_not_found" says where that scroll left the page ("scroll": scrolled())."""
         result: dict = {"executed": False, "reason": "not_observed"}
         jev, chosen = None, None  # Jev's probe, and its element's (label, page rect), once Jev chose one
         done = None  # what the last scroll_to() read
@@ -766,15 +833,16 @@ class Tab:
             page = self.observe()
             if page is None:
                 continue
+            view = shifted(page, done)  # for picking and the filters only; act() gets the observation itself
             if chosen is None:
-                action = self.pick(page, self.lexicon(record), labels=labels, key=key, near=rect, roles=roles,
+                action = self.pick(view, self.lexicon(record), labels=labels, key=key, near=rect, roles=roles,
                                    kinds=kinds, strict=strict, accept=accept)
                 if action is None and self.chooser is not None and "click" in kinds:
-                    action, probe = self.chooser(record, page, purpose, labels, offered)
+                    action, probe = self.chooser(record, view, purpose, labels, offered)
                     if action is not None:
-                        jev, chosen = probe, (str(action.get("label") or ""), _page_rect(page, action))
+                        jev, chosen = probe, (str(action.get("label") or ""), _page_rect(view, action))
             else:  # the stale re-observe of Jev's element: its label again, never a new request
-                action = self.pick(page, self.lexicon(record), labels=[chosen[0]], near=chosen[1], accept=offered)
+                action = self.pick(view, self.lexicon(record), labels=[chosen[0]], near=chosen[1], accept=offered)
                 if action is None:
                     jev.update(executed=False, reason="control_not_found")
             if action is None:
@@ -960,7 +1028,7 @@ class Tab:
             page = self.observe()
             if page is None:
                 continue
-            action = self.pick(page, lx, labels=[search.get("label")], key="search", kinds=("fill",),
+            action = self.pick(shifted(page, done), lx, labels=[search.get("label")], key="search", kinds=("fill",),
                                near=search.get("rect"))
             if action is None:
                 return {**out, "reason": "search_field_not_observed", **self.scrolled(search.get("rect"), done)}
@@ -1194,11 +1262,12 @@ class Crawl:
         start when needed): nothing asked (probe reason "max_pages"). The tab goes back to start (reloaded as "extra"
         when it has left it, unless here: the current document is start; a reload that fails asks nothing:
         "not_observed", with probe["reload"] saying why: "timeout", "renderer_crashed", "navigation_error",
-        "bot_challenge") and to its top; one observation, one request over the offer (link_offer: only links visit()
-        would load). The element's href is loaded like a lexicon candidate (visit(): same site, no checkout, no
-        cart-action URL); one without a usable href ("#", a script, a button) is clicked once and its navigation
-        collected; under a blocking consent banner only links are offered (a GET, never a click under the banner;
-        none: "consent_blocking", nothing asked). The page is then accepted by the stage's own test (accept_link)."""
+        "bot_challenge") and to its top (TOP_JS: the window and any inner scroller); one observation, one request over
+        the offer (link_offer: only links visit() would load). The element's href is loaded like a lexicon candidate
+        (visit(): same site, no checkout, no cart-action URL); one without a usable href ("#", a script, a button) is
+        clicked once and its navigation collected; under a blocking consent banner only links are offered (a GET,
+        never a click under the banner; none: "consent_blocking", nothing asked). The page is then accepted by the
+        stage's own test (accept_link)."""
         if not self.jev or self.fallbacks.get(stage):
             return None
         asked = start
@@ -1576,7 +1645,8 @@ class Crawl:
 
     def select_variant(self, product: PageRecord, audit: dict, probe: dict) -> dict:
         """A variant group with no selected option (audit.js: selected false) gets its first available option, one
-        observed click or select, never retried; the audit is then read again (the price may change). Jev's lookup
+        observed click or select, never retried; the audit is then read again (the price may change), with every
+        element scroller back at 0 (UNSCROLL_JS: in the load audit's frame, whatever scroll_to moved). Jev's lookup
         (the fallback on, a click the lexicon missed) is offered only the controls inside that option's audit.js rect
         (own_controls; no rect: nothing offered, nothing asked)."""
         groups = (audit.get("pdp") or {}).get("variant_groups") or []
@@ -1601,6 +1671,9 @@ class Crawl:
             raise Stop("cart", "consent_blocking" if clicked["reason"] == "consent_blocking" else "variant_required")
         with recorded(self.jev_probe(product, "select_variant") if clicked.get("jev_fallback") else None):
             self.tab.await_effect(clicked["origin"], expect_navigation=False, timeout=5.0)
+            # in the load audit's frame: an inner scroller scroll_to moved would shift every rect and above_fold of
+            # its content (the add-to-cart's scroll_to finds its rect again from there)
+            self.tab.value(UNSCROLL_JS)
             return self.tab.fresh_audit() or audit
 
     def cart_url(self, product: PageRecord) -> str | None:

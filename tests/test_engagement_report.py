@@ -417,6 +417,17 @@ def test_the_journey_card_counts_the_pilots_steps_and_names_the_consent_step():
              "scelta prima della prima decisione</p>")):
         assert f"Banner di consenso: {line}" in report._consent_line(consent), consent
     assert report._consent_line(None) == ""
+    # where the consent step left the browser (journey.py): a tab it opened and closed, a tab it left on another page
+    moved = {"policy": "auto", "choice": "reject", "via": "manage", "clicks": 2, "reason": "reject behind manage",
+             "url_after": "https://shop.example/privacy", "closed_tabs": ["https://shop.example/cookie"]}
+    run["pages"][0]["consent"] = moved
+    data, html = build(run, steps=[*clicks, *steps()])
+    assert data["journey"]["consent"] == {k: moved[k] for k in ("policy", "choice", "via", "clicks", "reason",
+                                                                 "url_after", "closed_tabs")}
+    assert ("(2 click, non contano tra le azioni); 1 scheda aperta dal banner, chiusa; dopo il consenso la scheda era "
+            "su un&#x27;altra pagina (https://shop.example/privacy): il pilota non è partito dalla pagina iniziale"
+            ) in html
+    assert "schede aperte dal banner, chiuse" in report._consent_line({**moved, "closed_tabs": ["a", "b"]})
 
 
 def test_report_vocabulary():
