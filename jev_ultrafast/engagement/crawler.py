@@ -18,6 +18,10 @@ Chrome's error page keeps that page as "extra" evidence and stops the funnel ("n
 does not lead to a cart (a "#" mini-cart link, a login redirect) is "extra" too and stops it ("not_found"). A load
 Chrome aborted (a 204 answer, a download: the tab keeps the previous document) is a failed load like its error page,
 and a listing candidate that lands on the home page is no listing: both are "extra" and the next candidate is tried.
+Browser.observe() lists the viewport only, so a control audit.js located (its rect: the variant, the add-to-cart, the
+checkout CTA, the search field) is first brought to mid-viewport, instantly (CSS smooth scrolling would leave the page
+where it was) and through the element at that rect when there is one (an inner scroller moves too); a control still
+not found records where that scroll left the page in its probe ("scroll": Tab.scrolled).
 
 Overlays: after a home or listing page is accepted (and its repeats loaded), its interrupting non-consent overlays
 (modal or blocking newsletter, promo) are closed with their observed close or decline control, as a shopper would
@@ -93,6 +97,7 @@ repeats and the deception tests are never asked. Every lookup is recorded in Pag
 list) of the page it was asked on, with a note; a click it chose is logged with note "jev_fallback".
 """
 
+import json
 import re
 import time
 from contextlib import contextmanager
@@ -113,7 +118,38 @@ CANDIDATES = 3  # listing and product candidates tried at most
 PROBE_WINDOW_MS = 800
 NAV_EVENTS = ("Page.frameRequestedNavigation", "Page.frameStartedLoading", "Page.frameNavigated")
 WORD = re.compile(r"[^\W\d_]{4,}")
-SCROLL_JS = "window.scrollTo(0, Math.max(0, %s - innerHeight / 2)), scrollY"
+# Tab.scroll_to: the element whose page rect (getBoundingClientRect + scrollX/scrollY) is audit.js's rect within 2 px
+# (the first match in document order, then its innermost matching descendant) goes to mid-viewport through
+# scrollIntoView, which moves inner scrollers too; no element: the window. "instant" overrides CSS scroll-behavior:
+# smooth, which would leave the page where it was when observe() reads it. Two animation frames later (or 200 ms: a
+# throttled tab) it reads whether the element's centre (no element: the rect's) is inside the viewport, as snapshot.js
+# requires. Read-only apart from the scroll: no click, no focus.
+SCROLL_JS = """((x, y, w, h) => new Promise(resolve => {
+  const near = (a, b) => Math.abs(a - b) <= 2;
+  let el = null;
+  if ([x, w, h].every(v => typeof v === 'number') && w > 0 && h > 0) {
+    for (const e of document.querySelectorAll('body *')) {
+      const r = e.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && near(r.left + scrollX, x) && near(r.top + scrollY, y) &&
+          near(r.width, w) && near(r.height, h) && (!el || el.contains(e))) el = e;
+    }
+  }
+  if (el) el.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'});
+  else window.scrollTo({top: Math.max(0, y + (h || 0) / 2 - innerHeight / 2), left: 0, behavior: 'instant'});
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    const r = el && el.isConnected ? el.getBoundingClientRect() : null;
+    const cx = r ? r.left + r.width / 2 : typeof x === 'number' ? x + (w || 0) / 2 - scrollX : innerWidth / 2;
+    const cy = r ? r.top + r.height / 2 : y + (h || 0) / 2 - scrollY;
+    resolve({scroll_y: Math.round(scrollY), in_view: cx >= 0 && cy >= 0 && cx < innerWidth && cy < innerHeight,
+             via: el ? 'element' : 'window'});
+  };
+  requestAnimationFrame(() => requestAnimationFrame(finish));
+  setTimeout(finish, 200);
+}))(%s)"""
+TOP_JS = "window.scrollTo({top: 0, left: 0, behavior: 'instant'}), scrollY"  # never a smooth scroll still under way
 # latency from the end of typing (since = when this evaluation starts); options already there count as 0 ms
 OPTIONS_JS = """((since, before, windowMs) => new Promise(resolve => {
   const count = () => [...document.querySelectorAll('[role="option"]')].filter(e => {
@@ -574,10 +610,25 @@ class Tab:
         except StalePage:
             return None
 
-    def scroll_to(self, rect: dict | None) -> None:
-        """Bring a page-coordinate rect (audit.js) to mid-viewport: observe() lists elements in the viewport only."""
-        if rect and isinstance(rect.get("y"), (int, float)):
-            self.value(SCROLL_JS % float(rect["y"] + (rect.get("h") or 0) / 2))
+    def scroll_to(self, rect: dict | None) -> dict | None:
+        """Bring a page-coordinate rect (audit.js) to mid-viewport, instantly, through the element at that rect when
+        there is one (SCROLL_JS): observe() lists elements in the viewport only. {"scroll_y", "in_view", "via":
+        "element" | "window"} once two frames have passed, or None (no rect y, or the evaluation failed)."""
+        if not rect or not isinstance(rect.get("y"), (int, float)):
+            return None
+        box = [rect.get(key) if isinstance(rect.get(key), (int, float)) else None for key in ("x", "y", "w", "h")]
+        done = self.value(SCROLL_JS % json.dumps(box)[1:-1], timeout=3.0, promise=True)
+        return done if isinstance(done, dict) else None
+
+    @staticmethod
+    def scrolled(rect: dict | None, done: dict | None) -> dict:
+        """The probe's record of the scroll before a control that was not found: {"scroll": {"requested_y" (the page
+        y of the rect's centre, brought to mid-viewport), "scroll_y", "in_view", "via"}} (None each: the evaluation
+        failed), or {} when no scroll was asked for (no rect y)."""
+        if not rect or not isinstance(rect.get("y"), (int, float)):
+            return {}
+        return {"scroll": {"requested_y": round(rect["y"] + (rect.get("h") or 0) / 2),
+                           **{key: (done or {}).get(key) for key in ("scroll_y", "in_view", "via")}}}
 
     # ---------------------------------------------------------------- actions
     @staticmethod
@@ -689,9 +740,12 @@ class Tab:
         fallback) may choose one among the observed clicks that accept and offer (the lookup's own filter, for Jev's
         offer only) both take ("jev_fallback": True; never for a select). Jev's element that met a stale page is
         picked again on the re-observed page by its label (the one nearest to where it was), without a second
-        request, and its outcome updates the same probe; gone: "control_not_found"."""
+        request, and its outcome updates the same probe; gone: "control_not_found". rect (audit.js, page
+        coordinates): scroll_to() brings it to mid-viewport before each observation, and a "control_not_found" says
+        where that scroll left the page ("scroll": scrolled())."""
         result: dict = {"executed": False, "reason": "not_observed"}
         jev, chosen = None, None  # Jev's probe, and its element's (label, page rect), once Jev chose one
+        done = None  # what the last scroll_to() read
 
         def offered(action: dict, page: dict) -> bool:
             return (accept is None or accept(action, page)) and (offer is None or offer(action, page))
@@ -708,7 +762,7 @@ class Tab:
                     if blocking_banner(audit):
                         return {**result, "reason": "consent_blocking"}  # never a click under a blocking banner
             if rect:
-                self.scroll_to(rect)
+                done = self.scroll_to(rect)
             page = self.observe()
             if page is None:
                 continue
@@ -724,7 +778,7 @@ class Tab:
                 if action is None:
                     jev.update(executed=False, reason="control_not_found")
             if action is None:
-                return {**result, "reason": "control_not_found"}
+                return {**result, "reason": "control_not_found", **self.scrolled(rect, done)}
             acting = False
             try:
                 origin = self.value("performance.timeOrigin")
@@ -902,14 +956,14 @@ class Tab:
                 out["stale_reobserved"] = 1
                 if blocking_banner(self.clear_way(record, stage=stage)[0]):
                     return {**out, "reason": "consent_blocking"}
-            self.scroll_to(search.get("rect"))
+            done = self.scroll_to(search.get("rect"))
             page = self.observe()
             if page is None:
                 continue
             action = self.pick(page, lx, labels=[search.get("label")], key="search", kinds=("fill",),
                                near=search.get("rect"))
             if action is None:
-                return {**out, "reason": "search_field_not_observed"}
+                return {**out, "reason": "search_field_not_observed", **self.scrolled(search.get("rect"), done)}
             before = self.value(COUNT_OPTIONS_JS, promise=True) or {}
             mark = self.value("performance.now()")
             executed, reason = self.act(action, page, _type(record), purpose="search_probe", stage=stage, text=word)
@@ -1173,7 +1227,7 @@ class Crawl:
                 return None
             self.close_overlays(asked, "extra")
         blocked = blocking_banner(self.tab.fresh_audit() or _audit(asked))
-        self.tab.value("window.scrollTo(0, 0), scrollY")
+        self.tab.value(TOP_JS)
         page = self.tab.observe()
         action, probe = self.ask(asked, page, stage, GOALS[stage], self.link_offer(stage, asked, blocked))
         if blocked and probe["reason"] == "no_click_actions":
@@ -1505,7 +1559,8 @@ class Crawl:
         clicked = self.tab.click(product, purpose="add_to_cart", stage="pdp", labels=[control.get("label")] if present
                                  else (), key="add_to_cart" if present else None, rect=rect, clear=True,
                                  offer=self.add_offer(product, audit) if self.jev else None)
-        probe.update(executed=clicked["executed"], reason=clicked["reason"], label=clicked.get("label"))
+        probe.update(executed=clicked["executed"], reason=clicked["reason"], label=clicked.get("label"),
+                     **({"scroll": clicked["scroll"]} if "scroll" in clicked else {}))
         probe["overlays"] += clicked.get("cleared") or []
         if clicked.get("stale_reobserved"):
             probe["stale_reobserved"] = 1
@@ -1537,7 +1592,8 @@ class Crawl:
         clicked = self.tab.click(product, purpose="select_variant", stage="pdp", labels=[option], kinds=kinds,
                                  rect=group.get("rect"), clear=True,
                                  offer=own_controls([group], audit) if self.jev else None)
-        variant.update(executed=clicked["executed"], reason=clicked["reason"])
+        variant.update(executed=clicked["executed"], reason=clicked["reason"],
+                       **({"scroll": clicked["scroll"]} if "scroll" in clicked else {}))
         if clicked.get("jev_fallback"):
             variant["jev_fallback"] = True
         probe["overlays"] += clicked.get("cleared") or []

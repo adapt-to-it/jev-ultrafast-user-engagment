@@ -110,7 +110,8 @@ class Snippet(TypedDict):
 class AuditPayload(TypedDict, total=False):
     """Output of audit.js: one Runtime.evaluate over the whole document (not only the viewport).
 
-    Rects are page coordinates {x, y, w, h}; `above_fold` means rect.y < viewport height at scroll 0.
+    Rects are page coordinates {x, y, w, h}; `above_fold` means the rect's centre lies on the first screen at scroll 0
+    (0 <= x + w/2 < viewport width and 0 <= y + h/2 < viewport height): a box with only an edge on screen is not.
     Sections are dicts so audit.js can grow without breaking readers; readers must use .get().
     """
 

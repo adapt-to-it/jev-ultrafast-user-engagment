@@ -7,8 +7,10 @@ known minimum path, a failed goal for goal-time KPIs) has a reason starting with
 of coverage. The agent's DONE is never evidence: success comes from the independent oracle (`success`).
 
 Definitions (docs/engagement-kpi.md, sections 4.1, 4.2 and 5.3):
-- executed steps: CLICK, TYPE_TEXT, SELECT, SCROLL_UP, SCROLL_DOWN and WAIT steps that reached the browser (stale
-  decisions and guard refusals are logged but never executed); interactions: CLICK, TYPE_TEXT, SELECT.
+- executed steps: CLICK, TYPE_TEXT, SELECT, SCROLL_UP, SCROLL_DOWN and WAIT steps of the pilot that reached the
+  browser (stale decisions and guard refusals are logged but never executed); interactions: CLICK, TYPE_TEXT, SELECT.
+  The consent step's clicks before the first decision (records with source "consent", no step number) are no
+  pilot's: no KPI here counts them.
 - effect of a step: visible feedback, i.e. a mutation (self-updating tickers excluded) or a navigation since it
   (vitals.js since()), a tab it opened, another site or a page that failed to load, a layout shift the input caused
   (hadRecentInput), visible text that changed while nothing at all mutated (CSS-only feedback such as a :focus-within
@@ -90,9 +92,16 @@ def page_url(url: str | None) -> str | None:
     return normalize_url(url) if web else None
 
 
+def pilot(step: dict) -> bool:
+    """A record of the journey's pilot. A record with a source key is a click the harness made on its own account:
+    the consent step before the first decision ("consent"), like the audit's crawler and deception clicks."""
+    return "source" not in step
+
+
 def executed(step: dict) -> bool:
     flags = step.get("flags") or {}
-    return step.get("operation") in EXECUTED and not flags.get("stale") and not flags.get("guard_blocked")
+    return (pilot(step) and step.get("operation") in EXECUTED and not flags.get("stale")
+            and not flags.get("guard_blocked"))
 
 
 def interaction(step: dict) -> bool:

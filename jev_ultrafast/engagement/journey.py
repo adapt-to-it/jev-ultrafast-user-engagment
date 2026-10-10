@@ -93,6 +93,20 @@ after the harness's freshness check (a snapshot.js read), right before the input
 (host or model, from the first delivery of an observation to the choice) and text generation are recorded apart and
 never counted. Page records: the landing page and the cart page an oracle read are stored in run["pages"] (stage
 "extra") as evidence; journey steps are not page audits.
+
+Consent step (settings.consent, default "auto"; run.json settings.consent): once the start page loaded (not an
+anti-bot page, where the run stops as the audit's funnel does) and before the Agent's first observation, the runner
+applies the policy to the banner the landing's audit saw, with the audit's own chain (crawler.Tab.consent, as
+Crawl.home applies it: each control at most once, CheckoutGuard on every click, a click logged before its effect is
+read and never sent again, no Jev fallback). Its clicks go to steps.jsonl with source "consent" and no step number:
+no pilot action (friction.executed, the oracle's step list, the report's count and timeline leave them out). The
+outcome is the start page's PageRecord.consent in run["pages"] ("none": no consent field, the banner stays offered
+to the pilot like any element). Its time is inside timing_ms.wall (from start(), the start page's load included) and
+in no step, so neither in timing_ms.site nor in FAI.TIME_ON_TASK_SITE. Its CDP events (the Page.frame events
+crawler.Tab.act drains, the rest drained before the first input) never reach a step's settle: _seen is unset until
+the first observation, so even a consent click that loads a new document is no NAVIGATION record. A gone session or
+a closed transport during it fails the start like any start error; a control that could not be clicked is only
+recorded (PageRecord.consent.reason).
 """
 
 import os
@@ -107,7 +121,7 @@ from ..agent import Agent
 from ..browser import StalePage, browser_operation, session_gone
 from ..model import action_space
 from ..questions import MAX_STEPS
-from . import friction, oracles
+from . import crawler, friction, oracles
 from .collectors import AuditError, PageCollector
 from .judgments import RUBRICS_VERSION
 from .lexicon import lexicon_for
@@ -473,7 +487,8 @@ class JourneyRunner:
     def start(self, url: str, goal: str, *, oracle: str, oracle_params: dict | None = None, profile: str = "mobile",
               policy: str = "host", max_steps: int = 40, optimal_steps: int | None = None,
               optimal_pages: int | None = None) -> dict:
-        """Open url in a fresh context and deliver the first observation: {run_id, status, observation}.
+        """Open url in a fresh context, apply settings.consent to the start page's banner (the consent step, module
+        docstring) and deliver the first observation: {run_id, status, observation}.
 
         optimal_steps: the minimum number of interactions for the goal (FAI.ACTIONS_RATIO); optimal_pages: the minimum
         number of distinct pages, start page included (Lostness R). Unknown minimums leave those KPIs not applicable.
@@ -515,7 +530,12 @@ class JourneyRunner:
             self.store.update(self.run_id, lambda run: run.update(journey=dict(self.journey), status="running"))
             self.status = "running"
             try:
-                self._launch(url, profile)
+                landing = self._launch(url, profile)
+                # before the Agent's first observation; an anti-bot start page stops the run, as it stops the audit's
+                # funnel before its consent step
+                if (self.settings.consent != "none" and not self._start_failed
+                        and (landing.get("classification") or {}).get("type") != "challenge"):
+                    self._consent(landing, profile)
                 self.host = HostPolicy() if policy == "host" else None
                 if self.host is not None:
                     text_policy = self.host.text
@@ -541,11 +561,12 @@ class JourneyRunner:
         s = self.settings
         return {"profiles": [profile], "browser": {"mode": public_browser(s.browser), "product": None,
                                                    "headless": s.headless},
-                "locale": s.locale, "consent": "none", "anchors_version": load_anchors()["version"],
+                "locale": s.locale, "consent": s.consent, "anchors_version": load_anchors()["version"],
                 "rubrics_version": RUBRICS_VERSION, "profiles_version": PROFILES_VERSION, "repeats": 1,
                 "settle_timeout_s": s.settle_timeout_s, "screenshots": s.screenshots}
 
-    def _launch(self, url: str, profile: str) -> None:
+    def _launch(self, url: str, profile: str) -> dict:
+        """Open the tab on url and store its start page (stage "extra"); returns that PageRecord."""
         s = self.settings
         factory = self.transport_factory or (lambda: open_transport(s.browser, headless=s.headless, lang=s.lang))
         opened = factory()
@@ -579,6 +600,25 @@ class JourneyRunner:
 
         self.store.update(self.run_id, record)
         self.proxy = _GuardedBrowser(self, self.tab)
+        return landing
+
+    def _consent(self, landing: dict, profile: str) -> None:
+        """settings.consent on the start page's banner, before the Agent's first observation (module docstring): the
+        audit's crawler.Tab.consent on the landing's audit, through a crawler.Tab bound to the journey's own tab
+        (source "consent": its clicks are logged without a step number; no chooser, so Jev is never asked). The
+        outcome becomes the start page's PageRecord.consent. A gone session or a closed transport raises."""
+        tab = crawler.Tab(self.collector, self.guard, profile=profile, policy=self.settings.consent, source="consent")
+        tab.browser = self.tab  # no tab of its own: Tab.load and Tab.lost are never called here
+        outcome = tab.consent(dict(landing), self.settings.consent, stage=landing.get("stage") or "extra")
+        landing["consent"] = outcome
+        page_id = landing.get("page_id")
+
+        def record(run):
+            page = next((p for p in run["pages"] if p.get("page_id") == page_id), None)
+            if page is not None:
+                page["consent"] = outcome
+
+        self.store.update(self.run_id, record)
 
     def close(self) -> None:
         """Release the browser without verification (finish() does both). An unfinished run is left partial."""
@@ -690,7 +730,7 @@ class JourneyRunner:
             steps = list(self.steps)
             try:
                 self._moved_since_observed()  # a navigation after the last observation is logged before the read
-                steps = self._recorded_steps()
+                steps = [s for s in self._recorded_steps() if friction.pilot(s)]  # not the consent step's clicks
                 if self._challenge:
                     verification["checks"]["not_assessable"] = "bot_challenge"
                     raise _NotVerified

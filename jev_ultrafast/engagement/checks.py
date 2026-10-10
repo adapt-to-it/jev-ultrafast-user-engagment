@@ -51,7 +51,7 @@ from .kpis import KPI_LIST, Kpi
 from .lexicon import compile_lexicon, lexicon_for
 from .schemas import STAGES, Observation, PageRecord
 
-CHECKS_VERSION = "checks.v1"
+CHECKS_VERSION = "checks.v2"  # v2: above the fold read at the element's centre (audit.js fold)
 PRODUCERS = ("checks", "deception")
 MIN_PROSE_WORDS = 30  # readability of fewer words is noise (listings and carts are mostly labels)
 LARGE_ASSORTMENT = 24  # CCL.CHOICE_SUPPORT: the editorial threshold of the catalogue

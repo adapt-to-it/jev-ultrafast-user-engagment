@@ -93,7 +93,9 @@ words and the price. For a cart goal that names a product, keep the product word
 If no oracle covers the goal (for example "trova la politica di resi" or "iscriviti alla newsletter"), tell the user
 which goals can be verified (the table above), do not start the journey, and go on with step 3.
 
-Call `run_journey(url, goal, oracle, oracle_params, profile="mobile", policy="auto")`. The result names the pilot:
+Call `run_journey(url, goal, oracle, oracle_params, profile="mobile", policy="auto")` (its `consent` defaults to
+`auto`, as the audit's: the server handles the start page's cookie banner before the first decision, and those
+clicks are not journey steps). The result names the pilot:
 
 - `policy` `typesafe` (the result has `next`): Jev drives the journey by itself on the server. Do not call
   `journey_act`. Call `wait_run(run_id)` again and again while `timed_out` is true, then `journey_finish(run_id)` once.

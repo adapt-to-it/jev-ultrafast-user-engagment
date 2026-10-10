@@ -6,6 +6,7 @@ import json
 import re
 from html import escape
 
+from .friction import pilot as pilot_step
 from .judgments import JEV_JUDGE_ID, RUBRICS_VERSION, load_rubrics
 from .kpis import KPIS
 from .schemas import RISK_INDEX, SCHEMA_VERSION, SUB_INDICES
@@ -249,6 +250,13 @@ JOURNEY_STATUS = {
 }
 POLICIES = {"host": "agente host (strumenti MCP)", "typesafe": "TypeSafe (automatica)"}
 PILOTS = {"host": "agente host", "typesafe": "Jev (TypeSafe)"}  # the journey card's pilot line
+CONSENT_CHOICES = {  # crawler.Tab.consent's (choice, via) on a journey's start page: the journey card's consent line
+    ("reject", "first_layer"): "rifiutato",
+    ("reject", "manage"): "rifiutato nel livello delle preferenze",
+    ("reject", "close"): "chiuso con la X (vale come rifiuto secondo le linee guida del Garante 2021)",
+    ("accept", "first_layer"): "accettato",
+    ("accept", "manage"): "accettato nel livello delle preferenze",
+}
 STAGE_NAMES = {  # schemas.STAGES, plus "extra": an evidence page that feeds no stage's KPIs (a journey's start page,
     # the cart an oracle read, a bot challenge, an error page, a rejected candidate); the "Tipo" column says what it is
     "home": "home",
@@ -572,9 +580,20 @@ JOURNEY_FIELDS = ("goal", "oracle", "oracle_params", "profile", "policy", "statu
                   "started_at", "finished_at", "policy_requested", "text_helper", "model_calls", "timing_ms", "usage")
 
 
+def _start_consent(run) -> dict | None:
+    """The journey's consent step (journey.py): PageRecord.consent of its start page ("<profile>-journey-start"), as
+    {policy, choice, via, clicks, reason}; None without one (consent "none", a run before the step existed)."""
+    page = next((p for p in run.get("pages") or [] if str(p.get("page_id") or "").endswith("-journey-start")), {})
+    consent = page.get("consent")
+    if not isinstance(consent, dict) or not consent.get("choice"):
+        return None
+    return {k: consent.get(k) for k in ("policy", "choice", "via", "clicks", "reason")}
+
+
 def _journey_summary(run, steps) -> dict:
+    """steps: the pilot's records only (build_report leaves the consent step's out)."""
     summary = {k: (run.get("journey") or {}).get(k) for k in JOURNEY_FIELDS}
-    summary.update(run_id=run.get("run_id"), steps=len(steps))
+    summary.update(run_id=run.get("run_id"), steps=len(steps), consent=_start_consent(run))
     return summary
 
 
@@ -635,12 +654,14 @@ def build_report(run, scores, *, steps=None, journeys=None, thumbnails=None, anc
 
     steps: this run's journey steps; journeys: linked journey runs as [{"run": RunRecord, "steps": [...]}] (the ones
     merged by score_run(journeys=...)); thumbnails: {page_id: data:image/... URI}; anchors: defaults to anchors.json.
+    Only the pilot's records are counted and listed: the consent step's clicks (source "consent") are not.
     """
     anchors = anchors or load_anchors()
     overall = scores.get("overall") or {}
     journey = run.get("journey") or None
-    steps = list(steps if steps is not None else (journey or {}).get("steps") or [])
-    linked = [(item.get("run") or {}, list(item.get("steps") or [])) for item in journeys or [] if item]
+    steps = [s for s in (steps if steps is not None else (journey or {}).get("steps") or []) if pilot_step(s)]
+    linked = [(item.get("run") or {}, [s for s in item.get("steps") or [] if pilot_step(s)])
+              for item in journeys or [] if item]
     ers = overall.get("ers") or {}
     risk = overall.get("dpr") or {}
     reason = ers.get("reason")
@@ -887,6 +908,28 @@ def _pilot(journey) -> str:
     return f'<p class="muted">{e(" · ".join(parts))}</p>'
 
 
+def _consent_line(consent) -> str:
+    """The journey card's consent line from _start_consent: what the runner chose on the start page's banner before
+    the first decision and how many clicks it took (never a pilot action). Its reason is shown only as a code with an
+    Italian label (a chosen path's reason is an English sentence of crawler.py: never shown)."""
+    if not consent:
+        return ""
+    choice, clicks = consent.get("choice"), consent.get("clicks") or 0
+    counted = f"{clicks} click, {'non conta' if clicks == 1 else 'non contano'} tra le azioni"
+    if choice in ("reject", "accept"):
+        what = CONSENT_CHOICES.get((choice, consent.get("via")), "rifiutato" if choice == "reject" else "accettato")
+        if choice == "accept" and consent.get("policy") == "auto":
+            what += ", perché il banner bloccava la pagina e non si poteva rifiutare"
+        text = f"{what} prima della prima decisione ({counted})"
+    elif consent.get("reason") == "no_consent_banner":
+        text = "nessun banner dei cookie sulla pagina iniziale"
+    else:
+        why = reason_label(consent.get("reason"))
+        text = "nessuna scelta prima della prima decisione" + (f" ({why})" if why else "") + (
+            f"; {counted}" if clicks else "")
+    return f'<p class="muted">{e(f"Banner di consenso: {text}")}</p>'
+
+
 def _journey(journey, steps, *, linked=False) -> str:
     if not journey:
         return ""
@@ -932,7 +975,7 @@ def _journey(journey, steps, *, linked=False) -> str:
         f"<span>Stato <b>{e(JOURNEY_STATUS.get(journey.get('status'), journey.get('status')))}</b></span>"
         f"<span>Verifica indipendente ({e(ORACLES.get(journey.get('oracle'), journey.get('oracle')))}) "
         f"<b>{e(outcome)}</b></span></div>"
-        f"{pilot}{unverified}{checks_html}{timeline}"
+        f"{pilot}{_consent_line(journey.get('consent'))}{unverified}{checks_html}{timeline}"
         '<p class="muted">Il tempo di decisione del modello è escluso dai tempi attribuiti al sito.</p></div></section>'
     )
 

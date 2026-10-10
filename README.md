@@ -202,9 +202,9 @@ Rapporto: <artifacts>/<host>/<run id>/report.html
 | Command | What it does |
 | --- | --- |
 | `jev-engage audit URL` | Audit one shop. `--profiles mobile,desktop`, `--stages home,plp,pdp,cart,checkout_entry`, `--consent auto\|reject\|accept\|none`, `--repeats 1-5`, `--max-pages N`, `--locale it\|en` |
-| `jev-engage audit URL --goal "..." --oracle cart_not_empty` | Add a journey piloted by Jev (policy `typesafe`; needs `TYPESAFE_API_KEY`, plus `TEXT_MODEL_API_KEY` for text fields); `--oracle-param max_price=50`, `--optimal-steps`, `--optimal-pages`, `--journey-profile` |
+| `jev-engage audit URL --goal "..." --oracle cart_not_empty` | Add a journey piloted by Jev (policy `typesafe`; needs `TYPESAFE_API_KEY`, plus `TEXT_MODEL_API_KEY` for text fields); `--oracle-param max_price=50`, `--optimal-steps`, `--optimal-pages`, `--journey-profile`; the journey takes the audit's `--consent` |
 | `jev-engage audit URL --judge jev\|cli\|api\|openai` | Also run the LLM judgments (see [Who judges what](#who-judges-what)). `jev` needs `TYPESAFE_API_KEY`: Jev judges the rubrics routed to it and leaves the rest open; `cli` (your Claude subscription), `api` and `openai` are the Claude-side backends; `--samples 1-5`, `--judge-model` |
-| `jev-engage journey URL --goal ... --oracle ...` | A `typesafe` (Jev) journey on its own |
+| `jev-engage journey URL --goal ... --oracle ...` | A `typesafe` (Jev) journey on its own; `--consent auto\|reject\|accept\|none` (default `auto`) handles the start page's cookie banner before Jev's first decision |
 | `jev-engage judge RUN_ID [--backend cli\|api\|openai\|jev] [--samples N] [--model M]`, `score RUN_ID [--journey RUN_ID]`, `report RUN_ID [--format summary\|kpis\|paths]`, `list [--host H]` | Work on stored runs; `judge` defaults to `--backend cli` |
 
 With `TYPESAFE_API_KEY` in `./.env` or the environment, `audit` also lets the crawler ask Jev where the lexicon finds nothing (at most six requests per profile); there is no other switch, so unset the key for a purely deterministic audit. `--judge jev` and `judge --backend jev` stop with exit status 1, before any browser starts, when the key is missing.
@@ -240,7 +240,7 @@ MCP tools (server `engagement`, stdio). Each returns a compact summary and file 
 | `audit_shop` | Start the audit in the background and return its `run_id` |
 | `wait_run` | Wait up to 110 s for a run; call again while `timed_out` is true |
 | `get_run` | Run summary: pages, not assessable stages with reasons, judgment progress and escalations, warnings, the TypeSafe requests the run made (`model_calls`), `server` (which keys it holds) |
-| `run_journey` | Open a journey. `policy` `auto` (default): Jev pilots by itself when the server has `TYPESAFE_API_KEY` (then `wait_run`, then `journey_finish`), else you get the first observation and drive it with `journey_act`; `host` and `typesafe` force one |
+| `run_journey` | Open a journey. `policy` `auto` (default): Jev pilots by itself when the server has `TYPESAFE_API_KEY` (then `wait_run`, then `journey_finish`), else you get the first observation and drive it with `journey_act`; `host` and `typesafe` force one. `consent` (default `auto`, as in `audit_shop`) handles the start page's cookie banner before the first observation |
 | `journey_act` | One operation and one offered element index on the latest observation; `observation_id` is required and a stale one executes nothing |
 | `journey_finish` | Verify with the oracle, store the friction KPIs, close the browser; returns what deciding cost (`model_calls`, `timing_ms`) |
 | `judge_with_jev` | Jev judges the rubrics routed to it, one request per page, then finalises; `available` is false without a key. A call asks no new page after about 30 s: call it again while its `next` names it |
@@ -257,7 +257,8 @@ MCP tools (server `engagement`, stdio). Each returns a compact summary and file 
 <artifacts>/<host>/<run id>/
   run.json           pages, observations, judgments, scores, warnings, model_calls (the full record)
   steps.jsonl        executed actions, each logged before its result is observed: a journey step as an
-                     execution line, then a measurement line with the same step number; an audit click as one line;
+                     execution line, then a measurement line with the same step number; an audit click, or a
+                     journey's consent click before its first decision (source "consent", no step), as one line;
                      a journey decision that executed nothing (DONE, BLOCKED, a stale or refused choice) as one line
   snapshots/         one audit payload per page
   shots/             optional screenshots
@@ -327,7 +328,7 @@ It reads `./.env`, the file named by `JEV_ENGAGEMENT_ENV` or the environment, an
 
 1. **Audit (crawler fallback).** Fixture mode serves `tests/fixtures/` on 127.0.0.1 and hides the shop's category links from the lexicon, so the listing page can only come from Jev's pick; Chromium gets a dead proxy, so only the model requests leave the machine. With `--url` a real shop is audited unchanged (and one item goes into its cart, as in any audit).
 2. **Judge.** Jev judges the audit with the cache off, in a fresh cache folder each run (`judge.reused` must stay 0); an `--audit-run` that already holds verdicts is judged as a copy from scratch, nothing stored, so only live answers are reported: per task the rubric, label, probability, evidence id or escalation reason; per request the latency and input tokens; per rubric the mean probability, the number accepted and the escalations by reason. `--repeat N` judges N more copies (cache off, nothing stored) and prints the label agreement per task.
-3. **Journey.** Jev pilots `--goal` (default "Aggiungi al carrello un prodotto", oracle `cart_not_empty`): steps, `model_calls`, `timing_ms`, usage and the oracle's verdict.
+3. **Journey.** Jev pilots `--goal` (default "Aggiungi al carrello un prodotto", oracle `cart_not_empty`): steps, `model_calls`, `timing_ms`, usage and the oracle's verdict. `--consent` (default `auto`) is the cookie banner policy of the audit and of the journey's start page; the summary records it and the journey's consent step (`journey.consent`: choice, reason, clicks).
 4. **Score.** The ERS, the "Confidenza" line, `llm_share` and the report path.
 
 Every TypeSafe and text-helper request goes through a recording wrapper of `post_json`, so the printed counts, latencies and tokens are measured independently and compared with what the runs record. It then prints the checks and exits 0 when all required ones pass, 1 otherwise: the audit finished, the crawler, judge and journey request counts match the runs' (text requests sent = `text` + `text_failed`), no judge verdict was reused from a cache, every TypeSafe answer validated, the key was accepted (after an HTTP 401 or 403 the later TypeSafe phases are skipped), Jev piloted the journey and every Jev task was settled or escalated. In fixture mode it also requires the listing to come through the fallback, the cart to be reached, at least one Jev verdict accepted, the oracle to pass and no request but GET and HEAD to reach the shop (no order, no payment). `--url` mode relaxes those fixture-specific checks. Timings are printed, never asserted; it warns above 1.5 s or 20,000 input tokens per request. `--dump-requests DIR` writes each request with its answer (never the key), so the labels can be read against the page.
@@ -346,7 +347,7 @@ Limits of the smoke: it is paid and not part of the checks; fixture mode forces 
 
 - Bot detection and CAPTCHAs: a challenge page makes the later stages "non valutabile". The browser identity is an ordinary user agent with matching client hints; nothing is evaded.
 - Shadow DOM and iframes: `audit.js` reads open shadow roots, but the controls the crawler clicks and the journeys offer come from `snapshot.js`, which does not enter shadow roots. Listing and product pages (and the cart, once the add-to-cart has been clicked, when only its link sits in a shadow root) are still loaded by their URL, but a step that must click a control in a shadow root, such as the add-to-cart, ends the funnel there with a reason (for example `add_to_cart_failed` or `checkout_cta_not_found`) and the later stages are "non valutabile". Cross-origin iframes (review and payment widgets) and closed shadow roots are only partly read.
-- Consent banners change the first page and can block clicks; the landing is measured as it is and the choice is recorded.
+- Consent banners change the first page and can block clicks; the landing is measured as it is and the choice is recorded. A journey handles its start page's banner the same way before the pilot's first observation (`consent`, default `auto`); those clicks are logged (`source: "consent"`) but are not pilot actions, so no journey KPI counts them.
 - It is a synthetic agent: a host's choices vary between runs (so may Jev's), one variant of any A/B test is seen from one place with a cold cache on an emulated device, and lab timings are not field data. The mobile profile approximates Lighthouse's preset and its scores are not comparable with Lighthouse or PageSpeed Insights.
 - Italian and English lexicons; first checkout step only; one audit at a time per server process.
 - Jev reads text only (no image input), and its accuracy on the rubrics' Italian criteria is untested until the live smoke runs. Request size matters: TypeSafe limits a request's state plus its longest question to 32k tokens, and a judged page carries up to eight 600-character snippets per task.

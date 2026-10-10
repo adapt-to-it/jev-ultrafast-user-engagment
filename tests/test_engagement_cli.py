@@ -56,6 +56,8 @@ def test_the_parser_reads_every_command():
     assert audit.chrome_arg == ["--proxy-server=http://proxy:3128"] and audit.repeats == 2 and audit.json
     assert parse(["journey", SHOP, "--goal", "g", "--oracle", "cart_not_empty", "--profile", "desktop"]).profile \
         == "desktop"
+    assert parse(["journey", SHOP, "--goal", "g", "--oracle", "cart_not_empty"]).consent == "auto"
+    assert parse(["journey", SHOP, "--goal", "g", "--oracle", "cart_not_empty", "--consent", "none"]).consent == "none"
     assert parse(["judge", "r", "--backend", "api", "--samples", "1"]).backend == "api"
     assert parse(["judge", "r", "--backend", "jev"]).backend == "jev"
     assert parse(["audit", SHOP, "--judge", "jev"]).judge == "jev"
@@ -82,6 +84,7 @@ def test_the_parser_reads_every_command():
     ["audit", SHOP, "--goal", "g", "--oracle", "cart_contains_item_under_price", "--oracle-param", "max_prize=50"],
     ["journey", SHOP, "--goal", "g", "--oracle", "cart_contains_item_under_price", "--oracle-param", "max_price=x"],
     ["journey", SHOP, "--goal", "g", "--oracle", "cart_not_empty", "--oracle-param", "query=scarpe"],
+    ["journey", SHOP, "--goal", "g", "--oracle", "cart_not_empty", "--consent", "maybe"],
 ])
 def test_invalid_arguments_exit_with_2(argv, capsys, monkeypatch):
     monkeypatch.setattr(chrome, "sweep_stale_profiles", lambda root=None: pytest.fail("refused before any work"))
@@ -129,6 +132,34 @@ def test_a_journey_that_cannot_start_leaves_the_audit_printed_and_scored(capsys,
     assert code == 1 and started[0]["oracle_params"] == {"max_price": 49.9}
     assert out.startswith(f"Run {run_id}: ") and "Journey non avviato: the journey could not start" in out
     assert "Engagement readiness" in out and RunStore().load(run_id).get("scores")
+
+
+@pytest.mark.parametrize("argv, audit, journey", [
+    (["journey"], None, "auto"),  # the default, as in the audit, the service and the MCP tool
+    (["journey", "--consent", "none"], None, "none"),
+    (["audit"], "auto", "auto"),
+    (["audit", "--consent", "reject"], "reject", "reject"),  # audit --goal: the audit's own --consent
+])
+def test_the_consent_option_reaches_the_audit_and_the_journey(argv, audit, journey, capsys, monkeypatch):
+    from jev_ultrafast.engagement import service
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "not-used")
+    monkeypatch.setattr(chrome, "sweep_stale_profiles", lambda root=None: [])
+    run_id = stored_audit()
+    audits, journeys = [], []
+
+    def audited(self, url, profiles, stages, browser, locale, consent, *args, **kwargs):
+        audits.append(consent)
+        return self.get_run(run_id)
+
+    def no_journey(self, url, **options):
+        journeys.append(options)
+        raise RuntimeError("the journey could not start: TimeoutError: the start page did not load")
+    monkeypatch.setattr(service.EngagementService, "audit_shop", audited)
+    monkeypatch.setattr(service.EngagementService, "run_journey", no_journey)
+    assert cli.main([argv[0], SHOP, *argv[1:], "--goal", "Trova scarpe", "--oracle", "cart_not_empty"]) == 1
+    capsys.readouterr()
+    assert audits == ([audit] if audit else []) and [o["consent"] for o in journeys] == [journey]
 
 
 def test_an_audit_whose_jev_judge_failed_on_every_page_exits_1(capsys, monkeypatch):

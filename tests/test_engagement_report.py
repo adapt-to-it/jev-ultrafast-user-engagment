@@ -374,6 +374,51 @@ def test_journey_report_timeline_and_unpublished_index():
     assert "· tipo: journey (percorso dell&#x27;agente) · stato: completa ·" in html
 
 
+def test_the_journey_card_counts_the_pilots_steps_and_names_the_consent_step():
+    """The consent step's clicks (source "consent", before the first decision) are no pilot steps: report.json's
+    count and the timeline leave them out, for the run and for a linked journey. The card says in one line what the
+    runner did with the start page's banner (PageRecord.consent of "<profile>-journey-start"); a run without that
+    record says nothing, and a reason is shown only as a code with an Italian label."""
+    run = load("journey_run")
+    clicks = [{"source": "consent", "profile": "mobile", "stage": "extra", "purpose": purpose, "operation": "CLICK",
+               "target": "e10", "label": label, "kind": "click", "role": "button", "node": 9, "status": "executed",
+               "url_before": run["site"]["start_url"]} for purpose, label in (("consent_manage", "Personalizza"),
+                                                                              ("consent_reject", "Rifiuta tutti"))]
+    data, html = build(run, steps=[*clicks, *steps()])
+    assert data["journey"]["steps"] == 7 and html.count("<li><b>") == 7 and "Personalizza" not in html
+    assert data["journey"]["consent"] is None and "Banner di consenso" not in html  # no record: nothing shown
+    run["pages"] = [{"page_id": "mobile-journey-start", "stage": "extra", "profile": "mobile", "consent": {
+        "policy": "auto", "choice": "reject", "via": "manage", "clicks": 2, "label": "Rifiuta tutti",
+        "reason": "reject behind manage", "blocking": True, "interrupting": True}}]
+    data, html = build(run, steps=[*clicks, *steps()])
+    assert data["journey"]["consent"] == {"policy": "auto", "choice": "reject", "via": "manage", "clicks": 2,
+                                          "reason": "reject behind manage"}
+    assert ("Banner di consenso: rifiutato nel livello delle preferenze prima della prima decisione (2 click, non "
+            "contano tra le azioni)") in html and "reject behind manage" not in html
+    audit = load("audit_complete")
+    linked, _ = report.build_report(audit, score_run(audit, journeys=[run]),
+                                    journeys=[{"run": run, "steps": [*clicks, *steps()]}])
+    assert linked["journeys"][0]["steps"] == 7 and linked["journeys"][0]["consent"]["choice"] == "reject"
+    for consent, line in (
+            ({"policy": "auto", "choice": "reject", "via": "first_layer", "clicks": 1}, "rifiutato prima della prima "
+             "decisione (1 click, non conta tra le azioni)"),
+            ({"policy": "auto", "choice": "reject", "via": "close", "clicks": 1}, "chiuso con la X (vale come "
+             "rifiuto secondo le linee guida del Garante 2021) prima"),
+            ({"policy": "auto", "choice": "accept", "via": "first_layer", "clicks": 1}, "accettato, perché il banner "
+             "bloccava la pagina e non si poteva rifiutare prima della prima decisione"),
+            ({"policy": "accept", "choice": "accept", "via": "first_layer", "clicks": 1}, "accettato prima"),
+            ({"policy": "auto", "choice": "none", "reason": "no_consent_banner"}, "nessun banner dei cookie sulla "
+             "pagina iniziale"),
+            ({"policy": "auto", "choice": "none", "clicks": 0, "reason": "not_blocking"}, "nessuna scelta prima "
+             "della prima decisione (banner non bloccante, lasciato aperto)"),
+            ({"policy": "reject", "choice": "none", "clicks": 1, "reason": "control_not_found"}, "nessuna scelta "
+             "prima della prima decisione (controllo non trovato); 1 click, non conta tra le azioni"),
+            ({"policy": "auto", "choice": "none", "clicks": 0, "reason": "a sentence nobody mapped"}, "nessuna "
+             "scelta prima della prima decisione</p>")):
+        assert f"Banner di consenso: {line}" in report._consent_line(consent), consent
+    assert report._consent_line(None) == ""
+
+
 def test_report_vocabulary():
     for run, kwargs in ((load("audit_complete"), {}), (load("journey_run"), {"steps": steps()})):
         _, html = build(run, **kwargs)

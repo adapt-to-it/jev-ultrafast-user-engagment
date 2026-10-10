@@ -8,6 +8,7 @@ import json
 import re
 import threading
 import time
+from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
@@ -513,14 +514,18 @@ EURO = re.compile(r"^(\d+),(\d\d) €$")
 
 @pytest.fixture
 def journey(chromium, shop_server, tmp_path, monkeypatch):
+    """(make, store): make(consent) builds a runner on the fixture shop. consent "none" unless a test asks: these
+    tests drive the shop's cookie bar themselves, as an ordinary pilot step (the consent step's own tests pass
+    "auto", the default of the service, the MCP tool and the CLI)."""
     monkeypatch.setattr(PageCollector, "net_quiet_s", 0.4)  # shorter settles for the start and verification pages
     monkeypatch.setattr(PageCollector, "lcp_quiet_s", 0.4)
     store = RunStore(tmp_path)
     settings = EngagementSettings(url=shop_server.url("shop/index.html"), screenshots=False)
     runners = []
 
-    def make():
-        runner = JourneyRunner(settings, store=store, transport_factory=lambda: DirectTransport(chromium.ws_url))
+    def make(consent="none"):
+        runner = JourneyRunner(replace(settings, consent=consent), store=store,
+                               transport_factory=lambda: DirectTransport(chromium.ws_url))
         runners.append(runner)
         return runner
 
@@ -2105,3 +2110,162 @@ def test_close_stores_the_cost_of_an_abandoned_journey(journey, shop_server):
     assert record["model_calls"] == {"choose": 1, "text": 0, "text_failed": 0, "stale_or_refused": 0, "failed": 0}
     assert record["usage"] == {}
     assert 0 <= record["timing_ms"]["site"] <= record["timing_ms"]["wall"]
+
+
+# ---------------------------------------------------------------- the consent step (settings.consent)
+
+BAR = ("Accetta tutti", "Rifiuta tutti", "Personalizza")  # the fixture shop's cookie bar (shop.js, clean)
+
+
+def labels_of(observation):
+    return [e["label"] for e in observation["elements"]]
+
+
+def test_the_consent_step_rejects_the_bar_before_the_first_decision(journey, shop_server):
+    """consent "auto" (the default everywhere): before the first observation the runner rejects the shop's cookie bar
+    with the audit's chain (crawler.Tab.consent); the click is logged with source "consent" and no step number, the
+    start page records the choice, and the pilot never sees the bar. That click is no pilot action: the steps, the
+    friction KPIs (FAI.ACTIONS_TO_GOAL, the site time), the oracle and the report count the pilot's only; the
+    journey's own navigation and settle bookkeeping is untouched (the first click's new document, no NAVIGATION)."""
+    make, store = journey
+    runner = make("auto")
+    since = len(shop_server.requests)
+    started = runner.start(shop_server.url("shop/index.html"),
+                           "Aggiungi al carrello un paio di scarpe da corsa che costi meno di 50 euro",
+                           oracle="cart_contains_item_under_price", oracle_params={"max_price": 50}, optimal_steps=4)
+    run_id, observation = started["run_id"], started["observation"]
+    assert observation["page_type"] == "home" and observation["step"] == 0 and observation["observation_id"] == 1
+    assert not set(BAR) & set(labels_of(observation))  # the bar is gone before the pilot's first observation
+    assert runner.tab.evaluate("JSON.parse(localStorage.getItem('ps-consent')).choice") == "none"  # "Rifiuta tutti"
+    (click,) = store.read_steps(run_id)
+    assert click["source"] == "consent" and click["purpose"] == "consent_reject" and "step" not in click
+    assert click["label"] == "Rifiuta tutti" and click["status"] == "executed" and click["stage"] == "extra"
+    run = store.load(run_id)
+    assert run["settings"]["consent"] == "auto"
+    (start,) = run["pages"]
+    assert start["page_id"] == "mobile-journey-start" and start["consent"]["policy"] == "auto"
+    assert {k: start["consent"][k] for k in ("choice", "via", "clicks", "label")} == {
+        "choice": "reject", "via": "first_layer", "clicks": 1, "label": "Rifiuta tutti"}
+
+    seen = [observation]
+    for _ in range(20):
+        operation, target = scripted_host(observation)
+        result = act(runner, operation, target)
+        observation = result["observation"]
+        seen.append(observation)
+        if result["status"] != "running":
+            break
+    assert result["status"] == "done" and not [o for o in seen if set(BAR) & set(labels_of(o))]
+    finished = runner.finish()
+    assert finished["verification"]["passed"] is True and finished["verification"]["checks"]["matching"] >= 1
+
+    records = store.read_steps(run_id)
+    assert records[0] == click  # appended before any step, never again
+    pilot = records[1:]
+    assert [s["step"] for s in pilot] == list(range(1, len(pilot) + 1)) and not [s for s in pilot if "source" in s]
+    executed = [s for s in pilot if step_executed(s)]
+    assert finished["steps"] == len(executed) == len(pilot) - 1  # + DONE
+    clicked = [s["label"] for s in executed if s["operation"] == "CLICK"]
+    assert len(clicked) == 4 and clicked[0] == "Scarpe da corsa" and clicked[2:] == ["Aggiungi al carrello",
+                                                                                     "Vai al carrello"]
+    assert executed[0]["flags"]["new_document"] and executed[0]["page_changed"] and executed[0]["settle_ms"] is not None
+    assert not [s for s in pilot if s["operation"] == "NAVIGATION"]  # the consent click's events are no navigation
+    assert not step_executed(click) and finished["friction"]["FAI.ACTIONS_TO_GOAL"] == 4
+    assert finished["friction"]["FAI.ACTIONS_RATIO"] == 1.0 and finished["friction"]["FAI.DEAD_CLICK_RATE"] == 0
+    run = store.load(run_id)
+    site = round(sum(s["execution_ms"] + s["settle_ms"] for s in executed))
+    assert run["journey"]["timing_ms"]["site"] == site  # the consent step is in no step: only wall holds it
+    assert next(o for o in run["observations"] if o["kpi_id"] == "FAI.TIME_ON_TASK_SITE")["value"] == site
+    assert friction.metrics(records, optimal_steps=4, success=True, profile="mobile") == friction.metrics(
+        pilot, optimal_steps=4, success=True, profile="mobile")
+    assert run["pages"][0]["consent"]["choice"] == "reject"  # finish() keeps the start page's record
+    assert_never_offered_a_pay_control(seen, shop_server.requests[since:])
+
+    from jev_ultrafast.engagement.report import write_report
+
+    paths = write_report(store, run_id)
+    data = json.loads(open(paths["report_json"], encoding="utf-8").read())
+    html = open(paths["report_html"], encoding="utf-8").read()
+    assert data["journey"]["steps"] == len(pilot) and data["journey"]["consent"]["choice"] == "reject"
+    assert ("Banner di consenso: rifiutato prima della prima decisione (1 click, non conta tra le azioni)"
+            in html)
+    timeline = html.split('<ol class="timeline">', 1)[1].split("</ol>", 1)[0]
+    assert timeline.count("<li>") == len(pilot) and "Rifiuta tutti" not in timeline
+
+
+def test_consent_none_leaves_the_bar_to_the_pilot(journey, shop_server):
+    """consent "none": no consent step, nothing logged, no consent record on the start page; the bar's buttons are
+    offered to the pilot like any element (the tests above drive it so)."""
+    make, store = journey
+    runner = make("none")
+    started = runner.start(shop_server.url("shop/index.html"), "Aggiungi al carrello un prodotto",
+                           oracle="cart_not_empty")
+    assert set(BAR) <= set(labels_of(started["observation"]))
+    run = store.load(started["run_id"])
+    assert run["settings"]["consent"] == "none" and "consent" not in run["pages"][0]
+    assert store.read_steps(started["run_id"]) == []
+    runner.close()
+
+
+def test_a_start_page_without_a_banner_records_none(journey, shop_server):
+    """A start page whose audit saw no consent banner: nothing clicked or logged, choice "none" with reason
+    "no_consent_banner" on the start page, the report says so in one line."""
+    make, store = journey
+    runner = make("auto")
+    started = runner.start(shop_server.url("shop/listing-api.html"), "Aggiungi al carrello un prodotto",
+                           oracle="cart_not_empty", profile="desktop")
+    run_id = started["run_id"]
+    assert store.read_steps(run_id) == []
+    assert store.load(run_id)["pages"][0]["consent"] == {"policy": "auto", "choice": "none",
+                                                         "reason": "no_consent_banner"}
+    act(runner, "DONE")
+    runner.finish()
+    from jev_ultrafast.engagement.report import write_report
+
+    html = open(write_report(store, run_id)["report_html"], encoding="utf-8").read()
+    assert "Banner di consenso: nessun banner dei cookie sulla pagina iniziale" in html
+
+
+def test_the_consent_step_is_never_jevs_and_jev_first_sees_the_page_without_the_bar(journey, shop_server,
+                                                                                    monkeypatch):
+    """Policy typesafe with consent "auto": the consent step asks no model (no chooser: the first TypeSafe request is
+    the first decision), and that request offers no element of the bar, so Jev decides on the page as the audit leaves
+    it (the Mac probes: BLOCKED over a page whose bar was still offered)."""
+    jev_env(monkeypatch)
+    requests = []
+
+    def decide(body):
+        return "DONE", None
+
+    monkeypatch.setattr(model, "post_json", typesafe(decide, requests))
+    make, store = journey
+    runner = make("auto")
+    started = runner.start(shop_server.url("shop/index.html"), "Aggiungi al carrello un prodotto",
+                           oracle="cart_not_empty", policy="typesafe")
+    assert requests == [] and store.read_steps(started["run_id"])[0]["source"] == "consent"
+    result = runner.run_auto()
+    assert result["status"] == "done" and len(requests) == 1
+    offered = [e["label"] for e in requests[0]["state"]["elements"]]
+    assert "Scarpe da corsa" in offered and not set(BAR) & set(offered)
+    finished = runner.finish()
+    assert finished["steps"] == 0 and store.load(started["run_id"])["journey"]["model_calls"]["choose"] == 1
+
+
+def test_a_transport_lost_during_the_consent_step_fails_the_start(journey, shop_server, monkeypatch):
+    """A closed transport (or a gone session) raising out of the consent step's click fails the start like any start
+    error: the click that may have reached the page is logged first (status error), never sent again, the run is
+    failed and the browser released; no pilot observation is delivered."""
+    def closed(self, action, page, text=None):
+        raise ConnectionError("the DevTools transport closed")
+
+    monkeypatch.setattr(Browser, "act", closed)
+    make, store = journey
+    runner = make("auto")
+    with pytest.raises(ConnectionError, match="transport closed"):
+        runner.start(shop_server.url("shop/index.html"), "Aggiungi al carrello un prodotto", oracle="cart_not_empty")
+    (click,) = store.read_steps(runner.run_id)
+    assert click["source"] == "consent" and click["status"] == "error" and "ConnectionError" in click["note"]
+    run = store.load(runner.run_id)
+    assert run["status"] == "failed" and runner.status == "error" and runner.agent is None
+    assert runner.transport is None and runner.tab is None
+    assert runner.finish()["steps"] == 0 and store.load(runner.run_id)["status"] == "failed"

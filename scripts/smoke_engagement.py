@@ -13,7 +13,9 @@ journey stop at the first checkout page and never fill or submit it.
 Fixture mode serves tests/fixtures on 127.0.0.1 (recording every request) and hides the shop's category links from the
 lexicon crawler (crawler.listing_candidates returns nothing), so the listing page is reached only through Jev's pick;
 Chromium gets a dead proxy, so nothing but the model requests leaves the machine. --url mode audits a real shop
-unchanged.
+unchanged. --consent (default auto, as in the audit and the plugin) is the cookie banner policy of the audit and of
+the journey's start page, where the runner applies it before Jev's first decision; the summary records the setting
+(consent) and that step's outcome (journey.consent: choice, reason, clicks, via).
 
 Every TypeSafe and text-helper request goes through a recording wrapper of jev_ultrafast.model.post_json (and every
 answer through model.validate_choice), so the printed counts, latencies and tokens are measured independently of what
@@ -328,7 +330,7 @@ def run_audit(service, url, args, fixture: bool, summary: dict) -> str | None:
         crawler.listing_candidates = lambda *a, **k: []
     try:
         audited = service.audit_shop(url, profiles=[args.profile], browser=args.browser, locale=args.locale,
-                                     wait=True, progress=say, headless=not args.headed)
+                                     consent=args.consent, wait=True, progress=say, headless=not args.headed)
     finally:
         crawler.listing_candidates = original
     run_id = audited["run_id"]
@@ -424,16 +426,31 @@ def run_repeats(service, run_id, times: int, summary: dict) -> None:
     summary["repeat"] = {"runs": times + 1, "agreement": agreement, "stable": stable}
 
 
+def start_consent(run: dict) -> dict | None:
+    """The journey's consent step (journey.py): {choice, reason, clicks, via} of its start page's PageRecord.consent,
+    None when it did not run (consent none, a start page that did not load)."""
+    page = next((p for p in run.get("pages") or [] if str(p.get("page_id") or "").endswith("-journey-start")), {})
+    consent = page.get("consent")
+    return {k: consent.get(k) for k in ("choice", "reason", "clicks", "via")} if isinstance(consent, dict) else None
+
+
 def run_journey(service, url, args, params, summary: dict) -> dict:
-    heading(f"Journey (policy auto): {args.goal!r}, oracle {args.oracle}{f' {params}' if params else ''}")
+    heading(f"Journey (policy auto, consent {args.consent}): {args.goal!r}, oracle {args.oracle}"
+            f"{f' {params}' if params else ''}")
     finished = service.run_journey(url, args.goal, args.oracle, params, profile=args.profile, policy="auto",
-                                   max_steps=args.max_steps, browser=args.browser, locale=args.locale, wait=True,
-                                   headless=not args.headed)
+                                   max_steps=args.max_steps, browser=args.browser, locale=args.locale,
+                                   consent=args.consent, wait=True, headless=not args.headed)
     run_id = finished["run_id"]
     run = service.store.load(run_id)
     journey = run.get("journey") or {}
+    consent = start_consent(run)
+    print(f"  consent step: {json.dumps(consent, ensure_ascii=False) if consent else 'not run'}")
     for step in service.store.read_steps(run_id):
         flags = [k for k, v in (step.get("flags") or {}).items() if v]
+        if step.get("source"):  # the consent step's click: before the first decision, no pilot action
+            print(f"  {step['source']:>3} {step.get('operation'):10} {str(step.get('label') or '')[:50]:50} "
+                  f"{step.get('purpose')} {step.get('status')}")
+            continue
         print(f"  {step.get('step')!s:>3} {step.get('operation'):10} {str(step.get('label') or '')[:50]:50} "
               f"{step.get('page_type') or '-':9} decision {step.get('decision_latency_ms')} ms {' '.join(flags)}")
     verification = journey.get("verification") or {}
@@ -446,6 +463,7 @@ def run_journey(service, url, args, params, summary: dict) -> dict:
     summary["journey"] = {"run_id": run_id, "status": journey.get("status"), "run_status": run.get("status"),
                           **{k: journey.get(k) for k in ("policy", "policy_requested", "text_helper", "model_calls",
                                                          "timing_ms", "usage")},
+                          "consent": consent,  # the consent step's outcome; summary["consent"]: the setting
                           "verification": {"passed": verification.get("passed"),
                                            "not_assessable": (verification.get("checks") or {}).get("not_assessable")}}
     return summary["journey"]
@@ -539,6 +557,8 @@ def parse_args(argv=None):
     parser.add_argument("--browser", default="auto", help="auto | launch | harness | cdp:<DevTools URL>")
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--locale", default="it")
+    parser.add_argument("--consent", choices=("auto", "reject", "accept", "none"), default="auto",
+                        help="cookie banner policy of the audit and of the journey's start page (default: auto)")
     parser.add_argument("--max-steps", type=cli._integer(1, MAX_STEPS), default=30)  # checked before any request
     parser.add_argument("--artifacts", help="run directory root (default: a new temporary directory)")
     parser.add_argument("--audit-run", metavar="RUN_ID", help="judge and score this audit of --artifacts instead")
@@ -652,6 +672,7 @@ def main(argv=None) -> int:
     summary = {"mode": mode, "audit_mode": audit_mode(args, args.audit_run) if args.audit_run else mode, "url": url,
                "started_at": datetime.now(UTC).isoformat(),
                "typesafe_model": os.environ.get("TYPESAFE_MODEL") or "jev-latest", "text_helper": keys["text_helper"],
+               "consent": args.consent,
                "artifacts": shown_path(artifacts), "judge_cache": shown_path(cache), "errors": {}, "skipped": {}}
     audit_id, journey_id = args.audit_run, None
 

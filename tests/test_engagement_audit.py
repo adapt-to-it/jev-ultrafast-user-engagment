@@ -2613,6 +2613,54 @@ def test_an_add_to_cart_audit_js_did_not_find_is_asked_by_the_product_s_price(mo
     assert scrolled == [price] and stand_in.asked == ["add_to_cart"]
 
 
+FAR = {"x": 58, "y": 842, "w": 246, "h": 47}  # audit.js's rect of a control the observation never lists
+
+
+class FarShop(ScriptedShop):
+    """Every control audit.js located (search field, variant, add-to-cart, checkout CTA) at FAR, none observed."""
+
+    def __init__(self, variant=False):
+        group = {"label": "Taglia", "kind": "buttons", "selected": False, "first_available": "42", "rect": FAR}
+        super().__init__(pdp={"add_to_cart": {"present": True, "label": "Aggiungi al carrello", "rect": FAR},
+                              "price": {"value": 49.9}, "variant_groups": [group] if variant else []})
+
+    def audit(self):
+        return {**super().audit(), "forms": {"guest_option": False},
+                "search": {"present": True, "label": "Cerca", "rect": FAR},
+                "nav": {"categories": [{"label": "Scarpe da corsa"}]},
+                "cart": {"line_items": [{"title": "Scarpa", "price_value": 49.9}], "total_value": 49.9,
+                         "checkout_cta": {"present": True, "label": "Procedi al pagamento", "rect": FAR}}}
+
+
+@pytest.mark.parametrize("step", ["add_to_cart", "variant", "checkout_entry", "search"])
+def test_a_control_not_found_after_its_scroll_keeps_the_scroll_in_its_probe(monkeypatch, step):
+    """A control audit.js located that the observation after scroll_to() does not list: the probe that records the
+    click keeps the click's "scroll" (requested_y, the page y of FAR's centre, and what scroll_to read), so a
+    control_not_found in run.json says where the scroll left the page; the search probe's search_field_not_observed
+    too. Nothing is clicked."""
+    read = {"scroll_y": 444, "in_view": False, "via": "window"}
+    monkeypatch.setattr(Tab, "scroll_to", lambda self, rect: dict(read) if rect == FAR else None)
+    shop = FarShop(variant=step == "variant")
+    crawl = crawl_of(shop)
+    page = {"page_id": "mobile-x-1", "profile": "mobile", "url": f"{SHOP}x", "final_url": f"{SHOP}x",
+            "classification": {"type": "cart" if step == "checkout_entry" else "pdp"}, "audit": shop.audit()}
+    if step == "search":
+        probe = crawl.tab.probe_search(page, stage="home")
+        assert probe["reason"] == "search_field_not_observed"
+    else:
+        stop = "checkout_cta_not_found" if step == "checkout_entry" else "variant_required" if step == "variant" \
+            else "add_to_cart_failed"
+        with pytest.raises(Stop, match=stop):
+            crawl.checkout(page) if step == "checkout_entry" else crawl.add_to_cart(page)
+        probe = page["probes"]["checkout_entry" if step == "checkout_entry" else "add_to_cart"]
+        probe = probe["variant"] if step == "variant" else probe
+        assert probe["reason"] == "control_not_found"
+    assert probe["scroll"] == {"requested_y": 866, **read} and crawl.tab.browser.acted == []
+    assert Tab.scrolled(FAR, None) == {"scroll": {"requested_y": 866, "scroll_y": None, "in_view": None,
+                                                  "via": None}}  # the evaluation failed
+    assert Tab.scrolled(None, read) == Tab.scrolled({"x": 58}, read) == {}  # no scroll was asked for
+
+
 @pytest.mark.parametrize("failure, href", [("navigation_error", None), ("renderer_crashed", None),
                                            ("bot_challenge", None), ("bot_challenge", "/sporta")])
 def test_a_jev_link_that_fails_keeps_the_stage_s_reason_unless_it_stops_every_funnel(monkeypatch, jev, failure,
