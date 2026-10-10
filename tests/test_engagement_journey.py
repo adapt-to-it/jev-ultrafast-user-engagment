@@ -148,6 +148,14 @@ def test_text_is_only_for_type_text_and_never_personal_data():
     ("Mario Rossi", None), ("Air Max 90", None), ("Xbox 360", None), ("corso di yoga 10", None),
     ("via col vento dvd", None), ("Street Fighter 6", None), ("running shoes at discount", None),
     ("tazza 12/24", None), ("calendario 2027", None), ("iPhone 15 Pro Max 256", None),
+    # an email address with blanks around its @, or spelt with compatibility characters (read in NFKC form): the
+    # fullwidth ＠ (U+FF20), the small ﹫ (U+FE6B), the fullwidth full stop ． (U+FF0E), fullwidth letters
+    ("mario.rossi @ gmail.com", "an email address"), ("mario.rossi@ gmail.com", "an email address"),
+    ("mario.rossi\t@ gmail.com", "an email address"), ("mario＠gmail.com", "an email address"),
+    ("mario﹫gmail.com", "an email address"), ("mario@gmail．com", "an email address"),
+    ("mario.rossi ＠ gmail．com", "an email address"), ("ｍａｒｉｏ＠ｇｍａｉｌ．ｃｏｍ", "an email address"),
+    ("scarpe @ 50% di sconto", None), ("taglia 42 @ nike", None),
+    ("４１１１ １１１１ １１１１ １１１１", "a card, phone or account number"),
 ])
 def test_text_that_looks_like_an_address_a_date_or_a_security_code_is_refused(text, what):
     assert personal_text(text) == what

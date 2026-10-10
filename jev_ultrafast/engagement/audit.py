@@ -14,6 +14,8 @@ found through the Jev fallback: not reproducible across runs" (its own lookup op
 reached after a Jev pick (add_to_cart): not reproducible across runs" (a click on the way was Jev's). Without the key
 nothing of this exists.
 A Chromium this function launched is always closed, and so is the transport, whatever happens.
+A cdp: browser value is stored and shown without its credentials (settings.public_browser: no userinfo, query or
+fragment, where a hosted browser's API key travels), and so are the errors that quote it (settings.redact_browser).
 """
 
 import os
@@ -29,7 +31,7 @@ from .profiles import PROFILES_VERSION, close_context, new_context
 from .safety import CheckoutGuard
 from .schemas import STAGES
 from .scoring import load_anchors
-from .settings import EngagementSettings
+from .settings import EngagementSettings, public_browser, redact_browser
 from .store import RunStore, iso_now
 from .transport import open_transport
 
@@ -39,7 +41,8 @@ ACCEPTED = ("not_requested",)  # reasons that do not make a run partial
 def _settings_snapshot(settings: EngagementSettings) -> dict:
     return {
         "profiles": list(settings.profiles), "stages": list(settings.stages),
-        "browser": {"mode": settings.browser, "product": None, "headless": settings.headless, "transport": None},
+        "browser": {"mode": public_browser(settings.browser), "product": None, "headless": settings.headless,
+                    "transport": None},
         "locale": settings.locale, "consent": settings.consent, "repeats": settings.repeats,
         "max_pages": settings.max_pages, "settle_timeout_s": settings.settle_timeout_s,
         "screenshots": settings.screenshots, "anchors_version": load_anchors()["version"],
@@ -80,7 +83,7 @@ def audit_shop(settings: EngagementSettings, *, store: RunStore | None = None, t
     store.update(run_id, lambda run: run.update(status="running"))
     transport = launched = None
     try:
-        say(f"opening the browser ({settings.browser})")
+        say(f"opening the browser ({public_browser(settings.browser)})")
         transport, launched = _open(settings, transport_factory)
         try:
             product = transport.call("Browser.getVersion").get("product")
@@ -96,12 +99,12 @@ def audit_shop(settings: EngagementSettings, *, store: RunStore | None = None, t
             try:
                 _audit_profile(settings, profile, transport, store, run_id, say)
             except Exception as exc:  # e.g. no browser context: the next profile may still work
-                message = f"{profile}: {type(exc).__name__}: {str(exc)[:300]}"
+                message = redact_browser(f"{profile}: {type(exc).__name__}: {str(exc)[:300]}", settings.browser)
                 store.update(run_id, lambda run: run["errors"].append(message))
         say("deterministic observations")
         store.update(run_id, lambda run: run.update(observations=checks.observations(run)))
     except Exception as exc:  # recorded in the run; the caller gets the run_id either way
-        message = f"audit: {type(exc).__name__}: {str(exc)[:300]}"
+        message = redact_browser(f"audit: {type(exc).__name__}: {str(exc)[:300]}", settings.browser)
         store.update(run_id, lambda run: run["errors"].append(message))
     finally:
         for closer in (transport, launched):

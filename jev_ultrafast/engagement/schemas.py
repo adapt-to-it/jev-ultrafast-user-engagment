@@ -305,8 +305,12 @@ class JourneyStep(TypedDict, total=False):
     page_type: NotRequired[str | None]  # classification of the page the action was taken on
     execution_ms: NotRequired[float | None]  # input dispatch (site-attributable, with settle_ms)
     settle_reason: NotRequired[str | None]  # "quiet" | "timeout"
-    # flags may also hold new_tab, new_document, unexpected_nav and uncertain (an input whose execution was not
-    # confirmed); steps with flags.stale or flags.guard_blocked executed nothing and are not counted as actions
+    # flags may also hold new_tab, new_document, unexpected_nav, uncertain (an input whose execution was not
+    # confirmed) and unobserved (the execution line, appended right after the input: url_after, since and the settle
+    # are not known; its measurement line, appended next with the same step number, replaces it in
+    # RunStore.read_steps, so a step still unobserved there is an executed, unmeasured one: the process stopped
+    # before its settle ended); steps with flags.stale or flags.guard_blocked executed nothing and are not counted as
+    # actions
     # operation "NAVIGATION": the page navigated by itself between two steps (no input was sent); since is {}, it is
     # not counted as an action, and its flags (new_document, external_nav, backtrack, unexpected_nav, follows_timeout)
     # feed FAI.UNEXPECTED_NAV and the visit sequence (backtrack, Lostness)
@@ -338,10 +342,13 @@ class JourneyRecord(TypedDict, total=False):
     text_helper: NotRequired[str | None]  # text model of TYPE_TEXT under policy "typesafe"; None: no
     #                                       TEXT_MODEL_API_KEY, so fill actions were withheld from Jev
     model_calls: NotRequired[dict]  # {choose: decisions (TypeSafe requests answered with a valid choice, or host
-    #                                 choices), text: text helper calls, stale_or_refused: decisions that executed
-    #                                 nothing, failed: TypeSafe calls without a valid decision, model: the versioned
-    #                                 TypeSafe model of the latest decision (typesafe only, e.g. "jev-1.13.0")}
-    timing_ms: NotRequired[dict]  # {decision, text, site (execution + settle of executed steps), wall}
+    #                                 choices), text: text helper calls that answered, text_failed: text helper calls
+    #                                 that raised (no usable value, HTTP error), stale_or_refused: decisions that
+    #                                 executed nothing, failed: TypeSafe calls without a valid decision, model: the
+    #                                 versioned TypeSafe model of the latest decision (typesafe only, e.g.
+    #                                 "jev-1.13.0")}; written after every decision and at the end
+    timing_ms: NotRequired[dict]  # {decision, text (failed calls included), site (execution + settle of executed
+    #                               steps), wall}
     usage: NotRequired[dict]  # {input_tokens, output_tokens} summed over the decisions ({} for host)
 
 

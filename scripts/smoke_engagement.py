@@ -19,6 +19,10 @@ Every TypeSafe and text-helper request goes through a recording wrapper of jev_u
 answer through model.validate_choice), so the printed counts, latencies and tokens are measured independently of what
 the runs record, and the two are compared. --dump-requests writes each request with its answer (never the key).
 --repeat N judges copies of the audit N more times (cache off, nothing stored) and prints the label agreement per task.
+A smoke never reuses a cached Jev verdict: the judge runs with the cache off (judge_with_jev(use_cache=False)) in a
+judge-cache directory of its own, new at every invocation, and the required check judge_reused_no_cached_verdict fails
+if a verdict was reused all the same (summary judge.reused). --max-steps (1 to 60) and --repeat (0 or more) are checked
+before anything runs (exit 2).
 
 Once TypeSafe refuses the key (HTTP 401 or 403: wrong, revoked or expired) the later TypeSafe phases (judge, repeat,
 journey) are skipped and the check typesafe_key_accepted fails: they would only be refused again.
@@ -57,6 +61,7 @@ from jev_ultrafast.engagement.oracles import parse_params
 from jev_ultrafast.engagement.schemas import STAGES
 from jev_ultrafast.engagement.service import EngagementService
 from jev_ultrafast.engagement.store import RunStore
+from jev_ultrafast.questions import MAX_STEPS
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -280,14 +285,15 @@ def run_audit(service, url, args, fixture: bool, summary: dict) -> str | None:
 
 
 def run_judge(service, run_id, summary: dict) -> dict:
-    heading("Jev judge (one TypeSafe request per page)")
-    judged = service.judge_with(run_id, "jev", 1)
+    heading("Jev judge (one TypeSafe request per page, cache off)")
+    judged = service.judge_with_jev(run_id, use_cache=False)  # every verdict is a live answer, never a cached one
     run = service.store.load(run_id)
     rows = jev_readings(run)
     in_run = sum(1 for row in rows if not row["escalated"])  # Jev's accepted verdicts, this call's and earlier ones
     print(f"available={judged['available']} model={judged['model']} requests={judged['requests']} "
           f"latency={judged['latency_ms']} ms input_tokens={judged['input_tokens']} accepted={judged['accepted']} "
-          f"(in the run {in_run}) escalated={judged['escalated']} open_tasks={judged['open_tasks']}")
+          f"(in the run {in_run}) reused={judged.get('reused')} escalated={judged['escalated']} "
+          f"open_tasks={judged['open_tasks']}")
     for row in rows:
         verdict = f"evidence {','.join(row['evidence']) or '-'}" if not row["escalated"] else \
             f"escalated: {row['escalated']}"
@@ -302,7 +308,7 @@ def run_judge(service, run_id, summary: dict) -> dict:
     jev_tasks = [t for t in run["judgments"].get("tasks") or [] if judgments.routing(t, rubric_map) == "jev"]
     final = {f["task_id"] for f in run["judgments"].get("final") or []}
     summary["judge"] = {**{k: judged.get(k) for k in ("available", "model", "requests", "latency_ms", "input_tokens",
-                                                      "accepted", "escalated", "open_tasks", "errors",
+                                                      "accepted", "reused", "escalated", "open_tasks", "errors",
                                                       "error_groups")},
                         "accepted_in_run": in_run, "per_task": rows, "per_rubric": rubrics, "jev_tasks": len(jev_tasks),
                         "jev_tasks_open": [t["task_id"] for t in jev_tasks
@@ -400,6 +406,8 @@ def checks(summary: dict, recorder: Recorder, shop: ShopServer | None, fixture: 
         sent = len(recorder.of("judge"))
         check("judge_calls_match_the_run", sent == judge["requests"], True,
               f"sent {sent}, judge reports {judge['requests']}")
+        reused = judge.get("reused") or 0  # cached verdicts: no live answer behind them (the judge runs cache off)
+        check("judge_reused_no_cached_verdict", reused == 0, True, f"{reused} cached verdicts reused")
     if journey:
         calls = journey.get("model_calls") or {}
         check("journey_piloted_by_jev", journey.get("policy") == "typesafe" and (calls.get("choose") or 0) > 0, True,
@@ -408,9 +416,11 @@ def checks(summary: dict, recorder: Recorder, shop: ShopServer | None, fixture: 
               f"passed {journey['verification']['passed']} ({journey['verification']['not_assessable']})")
         sent, texts = len(recorder.of("journey")), len(recorder.of("journey", "text"))
         recorded = (calls.get("choose") or 0) + (calls.get("failed") or 0)  # failed: no valid decision came back
-        check("journey_calls_match_the_run", sent == recorded and texts == calls.get("text"), True,
+        written = (calls.get("text") or 0) + (calls.get("text_failed") or 0)  # text_failed: no usable value came back
+        check("journey_calls_match_the_run", sent == recorded and texts == written, True,
               f"sent {sent} TypeSafe + {texts} text, run records {calls.get('choose')} decisions + "
-              f"{calls.get('failed') or 0} failed + {calls.get('text')} text")
+              f"{calls.get('failed') or 0} failed + {calls.get('text')} text + {calls.get('text_failed') or 0} "
+              "text failed")
     if score:
         foreign = [w for w in score["warnings"] if w.startswith(FOREIGN_HOST)]
         check("journey_on_the_audit_host", not foreign, True, "; ".join(foreign))
@@ -440,11 +450,12 @@ def parse_args(argv=None):
     parser.add_argument("--browser", default="auto", help="auto | launch | harness | cdp:<DevTools URL>")
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--locale", default="it")
-    parser.add_argument("--max-steps", type=int, default=30)
+    parser.add_argument("--max-steps", type=cli._integer(1, MAX_STEPS), default=30)  # checked before any request
     parser.add_argument("--artifacts", help="run directory root (default: a new temporary directory)")
     parser.add_argument("--audit-run", metavar="RUN_ID", help="judge and score this audit of --artifacts instead")
     parser.add_argument("--skip", action="append", default=[], choices=("audit", "judge", "journey", "score"))
-    parser.add_argument("--repeat", type=int, default=0, metavar="N", help="judge N more copies (label agreement)")
+    parser.add_argument("--repeat", type=cli._integer(0), default=0, metavar="N",
+                        help="judge N more copies (label agreement)")
     parser.add_argument("--dump-requests", type=Path, metavar="DIR", help="write each request and answer as JSON")
     return parser.parse_args(argv)
 
@@ -497,6 +508,13 @@ def journey_site(args, audit: dict | None) -> tuple[bool, str | None, str | None
     return False, start, None
 
 
+def fresh_cache(artifacts: Path) -> Path:
+    """A new, empty judge-cache directory under the artifacts for this invocation only (judge-cache-XXXXXXXX): a
+    rerun with the same --artifacts never finds the verdicts of an earlier one."""
+    artifacts.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="judge-cache-", dir=artifacts))
+
+
 def key_refused(recorder: Recorder) -> dict | None:
     """The first TypeSafe request refused with HTTP 401 or 403 (a wrong, revoked or expired key), else None."""
     return next((c for c in recorder.calls if c["kind"] == "typesafe" and c["error"]
@@ -526,12 +544,13 @@ def main(argv=None) -> int:
         print(f"--oracle-param: {exc}", file=sys.stderr)
         return 2
     artifacts = Path(args.artifacts or tempfile.mkdtemp(prefix="jev-smoke-")).resolve()
-    os.environ["JEV_ENGAGEMENT_CACHE"] = str(artifacts / "judge-cache")  # a smoke never reuses a cached verdict
+    cache = fresh_cache(artifacts)  # a smoke never reuses a cached verdict: new and empty at every invocation
+    os.environ["JEV_ENGAGEMENT_CACHE"] = str(cache)
     if fixture:
         os.environ.setdefault("JEV_CHROME_ARGS", "--proxy-server=http://127.0.0.1:9")  # only model requests go out
     print(f"TypeSafe model {os.environ.get('TYPESAFE_MODEL') or 'jev-latest'}; text helper "
           f"{keys['text_helper'] or 'missing (TEXT_MODEL_API_KEY): a TYPE_TEXT Jev chooses is refused'}")
-    print(f"artifacts: {artifacts}")
+    print(f"artifacts: {artifacts} (judge cache {cache.name}, not read)")
 
     shop = ShopServer() if fixture else None
     url = shop.url(FIXTURE_PATH.lstrip("/")) if fixture else url
@@ -544,7 +563,7 @@ def main(argv=None) -> int:
     summary = {"mode": mode, "audit_mode": audit_mode(args, args.audit_run) if args.audit_run else mode, "url": url,
                "started_at": datetime.now(UTC).isoformat(),
                "typesafe_model": os.environ.get("TYPESAFE_MODEL") or "jev-latest", "text_helper": keys["text_helper"],
-               "artifacts": str(artifacts), "errors": {}, "skipped": {}}
+               "artifacts": str(artifacts), "judge_cache": str(cache), "errors": {}, "skipped": {}}
     audit_id, journey_id = args.audit_run, None
 
     def phase(name, fn):

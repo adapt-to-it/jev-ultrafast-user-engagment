@@ -19,7 +19,9 @@ Definitions (docs/engagement-kpi.md, sections 4.1, 4.2 and 5.3):
   or a focus change reads as dead; a CSS animation that changes the visible text hides a dead click (under-reported,
   never invented).
 - measured interaction: one with page-side counts (since() read and available). The PERF KPIs use measured
-  interactions only; interactions without any measurement give "no_measurement" (assessed=False, in coverage).
+  interactions only; interactions without any measurement give "no_measurement" (assessed=False, in coverage). A
+  step whose record still carries flags.unobserved (its execution line: the process stopped before the step was
+  measured) is an executed, unmeasured interaction.
 - dead click: a CLICK on a button or link (or a step recorded without a role) without any effect. The rate counts
   measured clicks only.
 - rage event: three or more consecutive interactions on the same node, none of which had an effect (WAIT steps in

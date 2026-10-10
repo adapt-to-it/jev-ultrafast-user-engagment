@@ -282,6 +282,9 @@ LEXICON: dict[str, dict[str, list[str]]] = {
             r"\bvoucher\b",
         ],
         "remove": [r"rimuovi", r"\belimina", r"\bcancella\b", r"\btogli\b"],
+        # a control that empties the whole cart ("Svuota carrello", a cart's bare "Svuota"): the crawler's Jev offers
+        # leave it out with "remove"; audit.js does not read it (FAI.CART_EDITABLE counts per-line controls)
+        "clear_cart": [r"\bsvuot(a|are|alo|arlo)\b", r"\bazzera\s+(il\s+)?(carrello|borsa|cestino)"],
         "subtotal": [r"subtotale", r"(totale|somma)\s+parziale", r"totale\s+(prodotti|articoli|merce)"],
         "total": [r"^\s*totale", r"totale\s+(ordine|complessivo|da\s+pagare)", r"importo\s+totale", r"da\s+pagare"],
         # a tax line of a cart summary ("IVA 22%", "Imposte"): never an unexplained fee (checks.py)
@@ -539,6 +542,10 @@ LEXICON: dict[str, dict[str, list[str]]] = {
         "quantity": [r"quantity", r"\bqty\b"],
         "coupon": [r"coupon", r"promo(tional)?\s+code", r"discount\s+code", r"voucher", r"gift\s+card"],
         "remove": [r"\bremove\b", r"\bdelete\b"],
+        "clear_cart": [
+            r"\b(empty|clear)\s+(the\s+|your\s+|my\s+)?(shopping\s+)?(cart|bag|basket|trolley)\b",
+            r"^\s*(empty|clear)(\s+all)?\s*$",
+        ],
         "subtotal": [r"sub[-\s]?total", r"items\s+total"],
         "total": [r"^\s*total", r"order\s+total", r"grand\s+total", r"amount\s+due", r"total\s+to\s+pay"],
         # English plus the tax names of other languages (MwSt, TVA, IVA...): every language's lexicon merges this list

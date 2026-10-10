@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from jev_ultrafast import model as typesafe
-from jev_ultrafast.engagement import judges, judgments, report
+from jev_ultrafast.engagement import judges, judgments, report, scoring
 from jev_ultrafast.engagement.kpis import KPI_LIST
 from jev_ultrafast.engagement.scoring import load_anchors, score_run
 
@@ -71,13 +71,14 @@ def test_audit_report_content():
     assert data["headline"]["ers"] == overall["ers"]["score"] and data["headline"]["published"] is True
     assert data["headline"]["profiles"] == {
         p: s["ers"]["score"] for p, s in score_run(run)["profiles"].items()}
-    assert data["versions"] == {"schema": "engagement.v1", "anchors": "anchors.v1", "rubrics": "rubrics.v2",
+    anchors = load_anchors()["version"]  # versioned data: the report names the anchors it scored with
+    assert data["versions"] == {"schema": "engagement.v1", "anchors": anchors, "rubrics": "rubrics.v2",
                                 "profiles": "profiles.v1", "report": "report.v1"}
     # the golden run was judged without a TypeSafe key: Claude's three samples on every rubric, nothing escalated
     assert data["judgments"] == {"tasks": 16, "verdicts": 48, "final": 16, "models": ["claude-sonnet-5-5"],
                                  "by_model": {"claude-sonnet-5-5": 16}, "single_sample": 0, "escalated": 0,
                                  "escalated_final": 0, "jev_kpis": [], "jev_models": [], "claude_kpis": sorted(
-                                     {t["kpi_id"] for t in run["judgments"]["tasks"]})}
+                                     {t["kpi_id"] for t in run["judgments"]["tasks"]}), "claude_samples": {"3": 16}}
     assert data["model_calls"] == {} and "Richieste TypeSafe" not in html
     assert {r["kpi_id"] for r in data["not_assessable"] if r["kpi_id"]} == set()  # complete audit
     assert data["not_assessable"][0] == {"stage": "checkout_entry", "profile": "desktop", "kpi_id": None,
@@ -97,7 +98,7 @@ def test_audit_report_content():
     assert "preferisco pagare di più" in html and "Aggiungi Protezione spedizione" in html  # risk evidence
     assert "Confronto per profilo" in html and '<th class="num">desktop</th><th class="num">mobile</th>' in html
     assert "prefers-color-scheme: dark" in html
-    for version in ("anchors.v1", "rubrics.v2", "profiles.v1", "engagement.v1"):
+    for version in (anchors, "rubrics.v2", "profiles.v1", "engagement.v1"):
         assert version in html
     assert "Percorso dell'agente" not in html
     assert data["journeys"] == [] and data["caveats"] == {}
@@ -118,6 +119,7 @@ def test_audit_report_content():
     assert "<td class=\"num\">1,5</td>" in html and "<td class=\"num\">1.5</td>" not in html  # Italian decimals
     assert "<td class=\"num\">0,9</td>" in html  # DPR severities too
     assert "campioni dello stesso modello" in html and "Modelli dei valutatori: claude-sonnet-5-5" in html
+    assert "la maggioranza di 3 valutatori, che sono campioni dello stesso modello" in html  # the real sample count
     # closed codes in Italian: stages and page types, run kind and status (report.json keeps the codes)
     assert "<li>fase primo step del checkout (desktop): tempo scaduto</li>" in html
     assert "<td>listing di categoria</td><td>listing</td>" in html and "<td>checkout_entry</td>" not in html
@@ -719,6 +721,18 @@ def test_journey_verification_reason_is_shown_in_italian():
     ("finished by the host without DONE/BLOCKED", "finished by the host without DONE/BLOCKED"),
     ("left_shop: https://pay.example/", "percorso uscito dal negozio verso un altro sito (https://pay.example/)"),
     ("brand_new_code: detail", "brand_new_code: detail"),
+    ("mobile: cart reached after a Jev pick (add_to_cart): not reproducible across runs",  # audit.py
+     "mobile: fase carrello raggiunta dopo un elemento scelto da Jev con il fallback (aggiunta al carrello): non "
+     "riproducibile tra run diverse"),
+    ("desktop: cart reached after a Jev pick (select_variant, add_to_cart): not reproducible across runs",
+     "desktop: fase carrello raggiunta dopo un elemento scelto da Jev con il fallback (scelta della variante, "
+     "aggiunta al carrello): non riproducibile tra run diverse"),
+    ("mobile: checkout_entry reached after a Jev pick (brand_new): not reproducible across runs",
+     "mobile: fase primo step del checkout raggiunta dopo un elemento scelto da Jev con il fallback (brand_new): non "
+     "riproducibile tra run diverse"),
+    ("text_helper_unavailable: Jev chose TYPE_TEXT into 'Cerca' on https://shop.example/; no TEXT_MODEL_API_KEY",
+     "aiuto testuale non disponibile: TYPE_TEXT scelto da Jev e rifiutato (nessuna chiave per l'aiuto testuale) (Jev "
+     "chose TYPE_TEXT into 'Cerca' on https://shop.example/; no TEXT_MODEL_API_KEY)"),
 ])
 def test_known_warning_patterns_are_shown_in_italian(warning, text):
     assert report.warning_text(warning) == text
@@ -737,10 +751,11 @@ def jev_choice(ids, selected, p=0.9):
             "confidence": (p - 1 / len(ids)) / (1 - 1 / len(ids))}
 
 
-def mixed_run(monkeypatch, tmp_path):
+def mixed_run(monkeypatch, tmp_path, claude_judges=("j1", "j2", "j3")):
     """The golden audit judged again: Jev answers its rubrics with the golden majority label (a request stand-in, no
     network) and flips the reversed head on the golden's uncertain task, which Claude's three golden samples then
-    decide; Claude's rubrics keep their golden samples."""
+    decide; Claude's rubrics keep their golden samples. claude_judges ("j1",): one Claude sample per task, finalised
+    early (judge --samples 1)."""
     run = load("audit_complete")
     golden = run["judgments"]
     finals = {f["task_id"]: f for f in golden["final"]}
@@ -766,10 +781,10 @@ def mixed_run(monkeypatch, tmp_path):
     monkeypatch.setattr(typesafe, "post_json", post)
     summary = judges.judge_with_jev(run, use_cache=False)
     open_tasks = set(summary["finalize"]["pending"])
-    for judge_id in ("j1", "j2", "j3"):
+    for judge_id in claude_judges:
         mine = [v for v in golden["verdicts"] if v["judge_id"] == judge_id and v["task_id"] in open_tasks]
         assert judgments.submit(run, judge_id, "claude-sonnet-5-5", mine, cache=False)["rejected"] == []
-    assert judgments.finalize(run)["pending"] == []
+    assert judgments.finalize(run, samples_required=len(claude_judges))["pending"] == []
     return run, summary
 
 
@@ -784,12 +799,13 @@ def test_report_names_who_judged_with_jev_and_claude(monkeypatch, tmp_path):
                                  "by_model": {"claude-sonnet-5-5": 6, "jev-1.13.0": 10}, "single_sample": 10,
                                  "escalated": 1, "escalated_final": 1, "jev_kpis": jev_kpis,
                                  "jev_models": ["jev-1.13.0"],
-                                 "claude_kpis": ["CCL.VALUE_PROP_CLARITY", "DPR.CONFIRMSHAMING"]}
+                                 "claude_kpis": ["CCL.VALUE_PROP_CLARITY", "DPR.CONFIRMSHAMING"],
+                                 "claude_samples": {"3": 6}}
     assert data["model_calls"]["judge_jev"]["requests"] == 4 and "<p>Richieste TypeSafe: giudice Jev 4.</p>" in html
     sentence = (f"I giudizi di {', '.join(jev_kpis)} sono scelte del modello TypeSafe Jev (jev-1.13.0) fra etichette "
                 "chiuse, con l'evidenza scelta fra gli snippet offerti e un controllo di stabilità a ordine invertito, "
                 "un campione per task; i giudizi di CCL.VALUE_PROP_CLARITY, DPR.CONFIRMSHAMING (e il task che Jev ha "
-                "passato a Claude) sono la maggioranza di più campioni dello stesso modello con lo stesso prompt, con "
+                "passato a Claude) sono la maggioranza di 3 campioni dello stesso modello con lo stesso prompt, con "
                 "citazioni verificate parola per parola sul testo della pagina: la maggioranza controlla la "
                 "stabilità, non un accordo fra valutatori indipendenti. Modelli dei valutatori: claude-sonnet-5-5, "
                 "jev-1.13.0.")
@@ -814,7 +830,7 @@ def test_report_names_who_judged_with_jev_and_claude(monkeypatch, tmp_path):
     state["final"] = [f for f in state["final"] if judgments.routing(
         next(t for t in state["tasks"] if t["task_id"] == f["task_id"])) == "jev"]
     _, html = build(escalated_only)
-    assert report.e("; il giudizio del task che Jev ha passato a Claude è la maggioranza di più campioni") in html
+    assert report.e("; il giudizio del task che Jev ha passato a Claude è la maggioranza di 3 campioni") in html
 
     pending = copy.deepcopy(run)  # Claude has not judged yet: the escalation is pending, no Claude sample exists
     state = pending["judgments"]
@@ -825,7 +841,7 @@ def test_report_names_who_judged_with_jev_and_claude(monkeypatch, tmp_path):
     data, html = build(pending)
     assert (data["judgments"]["escalated"], data["judgments"]["escalated_final"]) == (1, 0)
     assert report.e("ordine invertito, un campione per task. Modelli dei valutatori: jev-1.13.0.") in html
-    assert "passato a Claude" not in html and "maggioranza di più campioni" not in html
+    assert "passato a Claude" not in html and "maggioranza di 3 campioni" not in html
     some = copy.deepcopy(run)  # Claude's rubrics decided, the escalation still pending: only Claude's KPIs named
     state = some["judgments"]
     state["final"] = [f for f in state["final"] if f["task_id"] not in escalated]
@@ -859,7 +875,8 @@ def test_text_helper_and_jev_fallback_reasons_are_shown_in_italian():
     run["journey"]["verification"] = {"passed": None, "checks": {"oracle": "cart_not_empty",
                                                                  "not_assessable": "text_helper_unavailable"}}
     _, html = build(run, steps=steps())
-    assert "Verifica non valutabile: aiuto testuale non disponibile: TYPE_TEXT non offerto." in html
+    assert ("Verifica non valutabile: aiuto testuale non disponibile: TYPE_TEXT scelto da Jev e rifiutato (nessuna "
+            "chiave per l&#x27;aiuto testuale).") in html  # TYPE_TEXT stays offered: Jev's pick of it is refused
     run["journey"]["verification"]["checks"]["not_assessable"] = "text_refused"  # the guard refused Jev's text
     _, html = build(run, steps=steps())
     assert "Verifica non valutabile: testo rifiutato dalla guardia di sicurezza: TYPE_TEXT non più offerto." in html
@@ -871,3 +888,104 @@ def test_text_helper_and_jev_fallback_reasons_are_shown_in_italian():
     for code in ("jev_blocked", "jev_done", "jev_error", "no_click_actions", "fallback_exhausted"):
         assert report.reason_label(code).startswith("fallback Jev")
     assert report.reason_label("jev_" + "Dettaglio dinamico") == "fallback Jev: Dettaglio dinamico"  # f"jev_{op}"
+
+
+def test_claude_finals_are_described_by_their_real_sample_counts(monkeypatch, tmp_path):
+    """judge --samples 1 (or finalize_judgments(samples_required=1)) leaves Claude's finals with one sample each: the
+    footer never calls them a majority, with or without Jev, and names the single ones beside a majority."""
+    run = load("audit_complete")
+    state = run["judgments"]
+    tasks = [t["task_id"] for t in state["tasks"]]
+    state["final"], three = [], set(tasks[: len(tasks) // 2])
+    state["verdicts"] = [v for v in state["verdicts"] if v["judge_id"] == "j1" or v["task_id"] in three]
+    judgments.finalize(run, samples_required=1)
+    data, html = build(run)
+    single = len(tasks) - len(three)
+    assert data["judgments"]["claude_samples"] == {"1": single, "3": len(three)}
+    assert data["judgments"]["single_sample"] == single
+    assert report.e(f"la maggioranza di 3 valutatori, che sono campioni dello stesso modello con lo stesso prompt: la "
+                    "maggioranza controlla la stabilità del giudizio, non un accordo tra valutatori indipendenti "
+                    f"({single} giudizi di un solo campione, senza maggioranza).") in html
+
+    state["final"], state["verdicts"] = [], [v for v in state["verdicts"] if v["judge_id"] == "j1"]
+    judgments.finalize(run, samples_required=1)
+    data, html = build(run)
+    assert data["judgments"]["claude_samples"] == {"1": len(tasks)}
+    assert report.e("I giudizi LLM usano etichette chiuse e citazioni verificate parola per parola sul testo della "
+                    "pagina, con un solo campione del modello per task: senza maggioranza non c'è alcun controllo "
+                    "della stabilità del giudizio, né un accordo tra valutatori indipendenti.") in html
+    assert "maggioranza di" not in html and "più valutatori" not in html
+
+    run, _ = mixed_run(monkeypatch, tmp_path, claude_judges=("j1",))  # Jev's rubrics, then one Claude sample each
+    data, html = build(run)
+    assert data["judgments"]["claude_samples"] == {"1": 6} and data["judgments"]["escalated_final"] == 1
+    assert report.e("; i giudizi di CCL.VALUE_PROP_CLARITY, DPR.CONFIRMSHAMING (e il task che Jev ha passato a "
+                    "Claude) sono di un solo campione, senza maggioranza (nessun controllo di stabilità), con "
+                    "citazioni verificate parola per parola sul testo della pagina. Modelli dei valutatori:") in html
+    assert "maggioranza di" not in html
+
+
+def test_report_names_who_judged_before_any_final_by_the_protocol():
+    run = load("audit_complete")
+    run["judgments"]["final"] = []  # tasks and verdicts, nothing finalised yet: no sample count to report
+    _, html = build(run)
+    assert "la maggioranza di più valutatori, che sono campioni dello stesso modello" in html
+
+
+def coverage_of(output, name):
+    """The unrounded coverage of a sub-index, recomputed from the KPI rows as scoring._sub_index does."""
+    members = [k for k in output["kpis"] if k["owner"] == name and k["weight"] > 0 and k["applicable"]]
+    assessed = sum(k["weight"] for k in members if k["assessed"] and k["normalized"] is not None)
+    return assessed / sum(k["weight"] for k in members)
+
+
+def test_one_share_formatter_never_rounds_up_to_a_threshold():
+    assert report.fmt_share is scoring.fmt_share  # report, CLI and ers() reasons share it
+    anchors = load_anchors()
+    assert scoring._stored(0.84953, anchors) == scoring._stored(0.8495, anchors) == 0.849  # never 0.85: grade A
+    assert scoring._stored(0.4996, anchors) == 0.499 and scoring._stored(0.18519, anchors) == 0.185
+    assert scoring._stored(0.9467, anchors) == 0.947  # no threshold in reach: rounded as before
+    assert report.fmt_confidence("B", 0.8495) == report.fmt_confidence("B", 0.849) == "B (copertura 84 %)"
+    assert report.fmt_confidence("A", 0.85) == "A (copertura 85 %)"
+    assert [scoring.fmt_share(v) for v in (0.185, 0.699, 0.7, 0.57, 0.596, 0.59, 0.499, 0.5, 1, 0, None)] == [
+        "18 %", "69 %", "70 %", "57 %", "59,6 %", "59 %", "49,9 %", "50 %", "100 %", "0 %", "n/d"]
+    assert scoring.fmt_share(0.649, below=0.65) == "64,9 %"  # a threshold of the caller's anchors
+
+
+def test_a_coverage_just_under_grade_a_reads_84_percent_with_grade_b():
+    run = load("audit_complete")  # the reviewer's case: these KPIs timed out, the coverage is 84.95 %
+    dropped = {"FAI.CHECKOUT_FIELDS", "FAI.GUEST_CHECKOUT", "FAI.FORCED_ACCOUNT", "FAI.AUTOCOMPLETE_ATTRS",
+               "FAI.CART_EDITABLE", "FAI.BREADCRUMBS", "FAI.PLP_RESULT_COUNT", "PTI.SHIPPING_COST_PRE_CHECKOUT",
+               "PTI.FUNNEL_PRICE_DELTA", "PTI.STRIKETHROUGH_LOWEST30"}
+    for row in run["observations"]:
+        if row["kpi_id"] in dropped:
+            row.update(assessed=False, value=None, reason="timeout")
+    scores = score_run(run)
+    overall, weights = scores["overall"], scores["overall"]["weights"]
+    exact = sum(weights[n] * coverage_of(overall, n) for n in weights) / sum(weights.values())
+    assert 0.8495 <= exact < 0.85 and overall["ers"]["grade"] == "B"
+    assert overall["ers"]["coverage"] == 0.849  # stored rounded down: 0.85 would read as grade A
+    data, html = report.build_report(run, scores)
+    assert "Confidenza <b>B</b> (copertura 84 %)" in html and "(copertura 85 %)" not in html
+    assert data["headline"]["coverage"] == 0.849
+
+
+def test_a_coverage_reads_the_same_in_the_unpublished_reason_and_its_card():
+    """A major sub-index at 2.5 / 13.5 = 18.52 %: the reason once said 19 % beside an 18 % card."""
+    run = load("audit_complete")
+    kept = {"FAI.CHECKOUT_FIELDS", "FAI.BREADCRUMBS"}  # weights 2 + 0.5
+    excluded = {"FAI.PDP_CTA_ABOVE_FOLD", "FAI.SEARCH_VISIBLE", "FAI.FORCED_ACCOUNT", "FAI.GUEST_CHECKOUT",
+                "FAI.PLP_FILTERS", "FAI.PLP_PAGINATION"}  # weights 9 out of 22.5: 13.5 stay applicable
+    for row in run["observations"]:
+        if row["kpi_id"].startswith("FAI.") and row["kpi_id"] not in kept:
+            reason = "not_applicable:out_of_stock" if row["kpi_id"] in excluded else "timeout"
+            row.update(assessed=False, value=None, reason=reason)
+    scores = score_run(run)
+    overall = scores["overall"]
+    assert coverage_of(overall, "FAI") == pytest.approx(2.5 / 13.5) and overall["sub_indices"]["FAI"]["coverage"] == (
+        0.185)
+    assert "Attrito previsto (18 %)" in overall["ers"]["reason"] and not overall["ers"]["published"]
+    _, html = report.build_report(run, scores)
+    assert report.e("Attrito previsto (18 %)") in html and "Attrito previsto (19 %)" not in html
+    card = html.split("<h3>Attrito previsto ", 1)[1].split("</div>", 1)[0]
+    assert "Confidenza n/d (copertura 18 %)" in card

@@ -39,7 +39,7 @@ def full_observations():
 
 
 def test_anchors_cover_exactly_the_kpi_registry():
-    assert ANCHORS["version"] == "anchors.v1"
+    assert ANCHORS["version"] == "anchors.v2"
     assert set(ANCHORS["kpis"]) == set(KPIS)
     assert set(ANCHORS["weights"]) == set(SUB_INDICES)
     assert sum(ANCHORS["weights"].values()) == 100
@@ -87,13 +87,14 @@ def test_published_anchors_and_provisional_flags():
     assert kpis["TRI.RATING_BAND"]["map"]["4.0-4.7"] == 100
     assert [x for x, _ in kpis["PERF.ACTION_RESPONSE_MS"]["points"]] == [100, 1000, 3000, 10000]
     assert kpis["FAI.ACTIONS_TO_GOAL"]["weight"] == 0
-    for published in ("PERF.LCP", "PERF.CLS", "FAI.CHECKOUT_FIELDS", "CCL.READABILITY", "FAI.LOSTNESS"):
+    for published in ("PERF.LCP", "PERF.CLS", "FAI.LOSTNESS"):
         assert kpis[published]["provisional"] is False
     for editorial in ("PERF.BYTES_TOTAL", "CCL.VISUAL_COMPLEXITY", "FAI.DEAD_CLICK_RATE", "TRI.RETURNS_CLARITY"):
         assert kpis[editorial]["provisional"] is True
-    # a published band transferred to a different quantity, or a guideline the research does not verify, is editorial
+    # a published band transferred to a different quantity, or a guideline the research does not verify, is editorial:
+    # Baymard's whole-checkout field counts applied to step 1 only, Gulpease points reused for Flesch (anchors.v2)
     for transferred in ("PERF.CLS_POST_INPUT", "PERF.INP_SYNTH", "PERF.TBT_APPROX", "FAI.CART_EDITABLE",
-                        "PTI.VAT_STATED"):
+                        "PTI.VAT_STATED", "FAI.CHECKOUT_FIELDS", "CCL.READABILITY"):
         assert kpis[transferred]["provisional"] is True, transferred
 
 

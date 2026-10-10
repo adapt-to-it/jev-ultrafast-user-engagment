@@ -20,13 +20,16 @@ Agent a guarded view of one tab in an isolated browser context with the device p
   is typed only into the fields the guard leaves (search, quantity, coupon); text that looks like an email address,
   a phone, card or account number, an IBAN, a fiscal code, a card security code, a date or a street address is
   refused (PERSONAL_TEXT, a best-effort net: a name cannot be told from a product word).
-- A browser mutation is never retried. After each action the runner waits until the page settles (no main-frame
-  load, no request in flight, 0.5 s without page-side activity; at least 1 s when nothing visible answered, the
-  dead-click window: a request holds the settle but is no answer), reads what changed since the action (vitals.js
-  since(mark)) and appends the step to steps.jsonl before the next observation is read. A stale decision (StalePage)
-  executes nothing and consumes no step. An input that may have happened (an error after it was sent) is logged as
-  uncertain and never sent again. Each step is one record, appended once it is measured: a kill of the process
-  during the settle loses at most that last record (a journey cannot be resumed, so nothing could be sent twice).
+- A browser mutation is never retried. Every executed step is appended to steps.jsonl twice, with one step number:
+  its execution line right after the input, before anything is read back (flags.unobserved; url_after, since and the
+  settle not known yet), then its measurement line. After each action the runner waits until the page settles (no
+  main-frame load, no request in flight, 0.5 s without page-side activity; at least 1 s when nothing visible
+  answered, the dead-click window: a request holds the settle but is no answer), reads what changed since the action
+  (vitals.js since(mark)) and appends the measurement line before the next observation is read. RunStore.read_steps
+  keeps the last line per step number, so a process stopped during the settle leaves the execution line as the
+  step's record: counted as an action, never as measured (a journey cannot be resumed, so nothing could be sent
+  twice). A stale decision (StalePage) executes nothing and consumes no step. An input that may have happened (an
+  error after it was sent) is logged as uncertain (both lines) and never sent again.
 - Visible feedback is a mutation, a navigation, a layout shift the input caused or a change of what an action can
   change (friction.effect); a request is not, a tracking beacon included: it is evidence only. vitals.js learns a
   self-updating node (a countdown, a carousel) from changes more than 2 s after the latest action, so with decisions
@@ -70,16 +73,20 @@ Agent a guarded view of one tab in an isolated browser context with the device p
   denied, so a failed outcome is confounded on whichever page it failed; the refused attempt,
   checks.text_withheld_at and the final page's dead clicks stay recorded, and a run whose pilot never chose to type is
   assessed as any other; nor is an outcome the oracle cannot read without a guess (the oracle's own reason stays).
-- finish() (close() for an abandoned run) stores what deciding cost: journey["model_calls"] {choose: decisions
-  (TypeSafe requests answered with a valid choice, or host choices), text: text helper calls that returned a value (0
-  for the host; a failed one is counted nowhere: its error ends the run, status error), stale_or_refused: decisions
-  that went stale or were refused before input (the guard, a withheld TYPE_TEXT; a DONE or BLOCKED that ends the run
-  is not counted), failed: TypeSafe decisions without a valid choice, i.e. any error model.choose raised (an HTTP or
-  connection error after post_json's own retries, which are not seen, an invalid answer, or an error before any
-  request, such as a key removed after start()), model: the TypeSafe model of the latest decision (typesafe only)},
-  journey["timing_ms"] {decision and text: latency of the calls that answered (a failed call adds none), site:
-  execution + settle of the executed steps, wall: start() to the end} and journey["usage"] (TypeSafe tokens summed; {}
-  for the host).
+- What deciding cost is stored after every decision and at the end (finish(), close() for an abandoned run), so a run
+  the server abandons while its thread still runs keeps what was spent until then: journey["model_calls"] {choose:
+  decisions (TypeSafe requests answered with a valid choice, or host choices), text: text helper calls that returned
+  a value (0 for the host), text_failed: text helper calls that raised, i.e. any error model.field_text raised (an HTTP
+  or connection error after post_json's own retries, an answer without a usable value such as {"text": null}, or an
+  error before any request; field_text is only wrapped to count it, and its error ends the run, status error),
+  stale_or_refused: decisions that went stale or were refused before input (the guard, a withheld TYPE_TEXT; a DONE
+  or BLOCKED that ends the run is not counted), failed: TypeSafe decisions without a valid choice, i.e. any error
+  model.choose raised (an HTTP or connection error after post_json's own retries, which are not seen, an invalid
+  answer, or an error before any request, such as a key removed after start()), model: the TypeSafe model of the
+  latest decision (typesafe only)}, journey["timing_ms"] {decision: latency of the TypeSafe calls that answered (a
+  failed one adds none), text: latency of every text helper call, failed ones included, site: execution + settle of
+  the executed steps, wall: start() to the latest write} and journey["usage"] (TypeSafe tokens summed; {} for the
+  host).
 
 Time attributed to the site is page-side (vitals.js clock): execution plus settle per step. The execution clock starts
 after the harness's freshness check (a snapshot.js read), right before the input is dispatched. Decision latency
@@ -92,6 +99,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 from urllib.parse import urlsplit
 
 from .. import agent as agent_loop
@@ -108,7 +116,7 @@ from .profiles import DEVICE_PROFILES, PROFILES_VERSION, close_context, new_cont
 from .safety import CheckoutGuard
 from .schemas import JourneyRecord, JourneyStep
 from .scoring import load_anchors
-from .settings import CREDENTIALS, EngagementSettings, has_credentials
+from .settings import CREDENTIALS, EngagementSettings, has_credentials, public_browser, redact_browser
 from .store import RunStore, iso_now
 from .transport import open_transport
 
@@ -136,8 +144,10 @@ PARTICLE = (r"(?i:(?:di|da|de|del|dal|dei|degli|della|delle|dello|dalla|dalle|da
             r"|(?:d|dell|dall|sant)['’])")
 HOUSE = r"(?:,\s*|\s+)\d{1,4}[a-zA-Z]?\b"  # "12", ", 12", "12a"
 # A best-effort net over the text itself (the field guard is the guarantee): a name cannot be told from a product word.
+# personal_text() matches the NFKC form of the text (a fullwidth ＠ or ．, a small ﹫, fullwidth digits read as ASCII).
 PERSONAL_TEXT = {
-    "an email address": re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}|[\w.+-]+\s*(?:[(\[{]at[)\]}]|\s(?:at|chiocciola)\s)"
+    "an email address": re.compile(r"[^\s@]+\s*@\s*[^\s@]+\.[^\s@]{2,}"  # blanks around the @ too
+                                   r"|[\w.+-]+\s*(?:[(\[{]at[)\]}]|\s(?:at|chiocciola)\s)"
                                    r"\s*[\w-]+(?:\s*(?:\.|[(\[{]dot[)\]}]|\s(?:dot|punto)\s)\s*[a-z]{2,})+", re.I),
     "a card, phone or account number": re.compile(r"(?:\d[\s./-]?){9,}"),
     "an IBAN": re.compile(r"\b[a-z]{2}\d{2}(?:\s?[a-z0-9]){11,30}\b", re.I),
@@ -236,10 +246,13 @@ def _tokens(decisions: list[dict], key: str) -> int | float:
 
 
 def personal_text(text: str | None) -> str | None:
-    """What the text looks like when it looks like personal or payment data (PERSONAL_TEXT), else None. An IBAN holds
+    """What the text looks like when it looks like personal or payment data (PERSONAL_TEXT), else None. The text is
+    read in its NFKC form, so compatibility characters spell what they show ("mario＠gmail．com", "mario﹫gmail.com",
+    fullwidth digits), and an email address may have blanks around its @ ("mario.rossi @ gmail.com"). An IBAN holds
     at least ten digits: a product code such as "XR12ABCDEF12345" is not one. A name is not recognised."""
+    text = unicodedata.normalize("NFKC", text or "")
     for what, pattern in PERSONAL_TEXT.items():
-        for match in pattern.finditer(text or ""):
+        for match in pattern.finditer(text):
             if what != "an IBAN" or sum(c.isdigit() for c in match.group(0)) >= 10:
                 return what
     return None
@@ -437,6 +450,7 @@ class JourneyRunner:
         self._choices: list[dict] = []  # the host's validated choices (HostPolicy.last): its decisions
         self._idle = 0  # decisions that went stale or were refused before input (_log_attempt)
         self._failed = 0  # errors model.choose raised: decisions without a valid choice (model_calls.failed)
+        self._text_failed: list[float] = []  # latency of each text helper call that raised (model_calls.text_failed)
         self._clock: float | None = None  # time.monotonic() at start(): timing_ms.wall
         self._notes: list[str] = []
         self._boundary = False
@@ -508,7 +522,7 @@ class JourneyRunner:
                 elif self._text_helper is None:  # TYPE_TEXT stays offered; a chosen one is refused before any input
                     text_policy = self._withhold_text
                 else:
-                    text_policy = None  # model.field_text, as the Agent uses it
+                    text_policy = self._field_text  # model.field_text, as the Agent uses it, measured
                 self.agent = Agent(url, goal, browser=self.proxy, policy=self._gated(self.host or self._jev),
                                    text_policy=text_policy)
             except BaseException as exc:
@@ -525,7 +539,8 @@ class JourneyRunner:
 
     def _settings_record(self, profile: str) -> dict:
         s = self.settings
-        return {"profiles": [profile], "browser": {"mode": s.browser, "product": None, "headless": s.headless},
+        return {"profiles": [profile], "browser": {"mode": public_browser(s.browser), "product": None,
+                                                   "headless": s.headless},
                 "locale": s.locale, "consent": "none", "anchors_version": load_anchors()["version"],
                 "rubrics_version": RUBRICS_VERSION, "profiles_version": PROFILES_VERSION, "repeats": 1,
                 "settle_timeout_s": s.settle_timeout_s, "screenshots": s.screenshots}
@@ -753,6 +768,7 @@ class JourneyRunner:
         try:
             stale, refused = self._decide_and_act()
             self._stop_checks()
+            self.journey.update(self._costs())  # after every decision: a run abandoned before finish() keeps them
             self._save()
         finally:
             self._observation_id += 1  # used up whatever happened: the host chooses on the observation returned here
@@ -856,6 +872,19 @@ class JourneyRunner:
             return agent_loop.choose(page, goal, history)
         except Exception:
             self._failed += 1
+            raise
+
+    def _field_text(self, context: dict):
+        """The Agent's text policy in a typesafe run with a text helper: model.field_text, looked up at call time
+        through the Agent's module as the Agent itself would call it, and only measured. A call that answered is the
+        Agent's own text_calls record (model_calls.text); one that raises, an HTTP or connection error, an answer with
+        no usable value ({"text": null}) or an error before any request, is counted with its latency
+        (model_calls.text_failed, timing_ms.text), then raised as is."""
+        started = time.perf_counter()
+        try:
+            return agent_loop.field_text(context)
+        except Exception:
+            self._text_failed.append(round((time.perf_counter() - started) * 1000, 1))
             raise
 
     def _withhold_text(self, context: dict):
@@ -975,7 +1004,8 @@ class JourneyRunner:
         if not self.tab.fresh(page, action):
             raise StalePage("Page changed since this decision. Observe again.")
         pending = {"action": action, "page": page, "text": text, "text_len": len(text) if text is not None else None,
-                   "page_type": self._page_type, "overlay": dict(self._overlay), "mark": self.collector.mark(self.tab)}
+                   "page_type": self._page_type, "overlay": dict(self._overlay), "mark": self.collector.mark(self.tab),
+                   "step": len(self.steps) + 1, "t_wall": iso_now()}
         started = time.perf_counter()
 
         def elapsed() -> float:  # a WAIT is the harness's own pause (_send sleeps), not site time
@@ -988,11 +1018,20 @@ class JourneyRunner:
         except (RuntimeError, OSError) as exc:  # the input may have happened: never retried, logged as uncertain
             pending.update(execution_ms=elapsed(), uncertain=f"{type(exc).__name__}: {str(exc)[:200]}",
                            finished=time.monotonic())
-            self._pending = pending
+            self._pending = pending  # first: a failing append is an error after the input, never a resend
+            self._log_execution(pending)
             raise
         pending.update(execution_ms=elapsed(), finished=time.monotonic())
-        self._pending = pending
+        self._pending = pending  # first: a failing append is an error after the input, never a resend
+        self._log_execution(pending)
         return result
+
+    def _log_execution(self, pending: dict) -> None:
+        """The execution line: the step as the input left it, appended before anything is read back (flags.unobserved).
+        Not kept in self.steps: _complete_step appends its measurement line with the same step number, which
+        RunStore.read_steps keeps instead."""
+        record = self._step_record(pending)
+        self.store.append_step(self.run_id, {**record, "flags": {**record["flags"], "unobserved": True}})
 
     def _send(self, action: dict, text: str | None):
         """Browser.act after its freshness check (_act runs it before the clock): the input itself, sent once."""
@@ -1010,7 +1049,7 @@ class JourneyRunner:
     def _observe(self, screenshot: bool = False) -> dict:
         completed = self._pending is not None
         if completed:
-            self._complete_step()  # execution is logged before its result is observed
+            self._complete_step()  # its execution line is in steps.jsonl already (_act); this appends its measurement
         raw = self.tab.observe(screenshot=screenshot)
         self._read_page(raw)
         page_type = self._guarded_type()
@@ -1199,26 +1238,37 @@ class JourneyRunner:
                 if isinstance(t := activity.get(key), (int, float)) and origin + t >= mark]
         return max(ends) if ends else None
 
-    def _complete_step(self) -> None:
-        """Settle, measure and log the pending action. Whatever fails while measuring, the step is logged."""
-        p, self._pending = self._pending, None
+    def _step_record(self, p: dict) -> JourneyStep:
+        """The record of the executed step `p` (_act's pending) before anything is read back: url_after,
+        page_changed, since and the settle unknown, no flags but uncertain (with its guard note) for an input that may
+        not have happened. The execution line is this record; the measurement line fills it in."""
         action, page = p["action"], p["page"]
-        url_before = page.get("url")
         step: JourneyStep = {
-            "step": len(self.steps) + 1, "t_wall": iso_now(), "operation": self._operation(action),
+            "step": p["step"], "t_wall": p["t_wall"], "operation": self._operation(action),
             "target": (self._attempt.get("decision") or {}).get("target"), "label": action.get("label"),
             "kind": action.get("kind"), "role": action.get("role"), "node": action.get("node"),
             "text_len": p["text_len"], "decision_latency_ms": self._decision_latency(), "policy": self.policy,
-            "url_before": url_before, "url_after": None, "page_changed": None, "page_type": p["page_type"],
+            "url_before": page.get("url"), "url_after": None, "page_changed": None, "page_type": p["page_type"],
             "since": {}, "execution_ms": p.get("execution_ms"), "settle_ms": None, "settle_reason": None,
             "overlay": p["overlay"], "flags": {}, "status": self.status, "guard_notes": [],
         }
+        if p.get("uncertain"):
+            step["flags"]["uncertain"] = True
+            step["guard_notes"].append(f"execution not confirmed: {p['uncertain']}")
+        return step
+
+    def _complete_step(self) -> None:
+        """Settle, measure and log the pending action: its measurement line, with the step number of the execution
+        line _act appended. Whatever fails while measuring, the measurement line is logged."""
+        p, self._pending = self._pending, None
+        page = p["page"]
+        url_before = page.get("url")
+        step = self._step_record(p)
+        if p["step"] != len(self.steps) + 1:  # nothing is logged between an input and its measurement
+            self._warn(f"step {p['step']} measured after {len(self.steps)} logged steps: the record order is off")
         flags = {"dead_click": False, "rage": False, "backtrack": False, "guard_blocked": False, "stale": False,
                  "external_nav": False, "new_tab": False, "new_document": False, "unexpected_nav": False,
-                 "state_changed": None}
-        if p.get("uncertain"):
-            flags["uncertain"] = True
-            step["guard_notes"].append(f"execution not confirmed: {p['uncertain']}")
+                 "state_changed": None, **step["flags"]}
         self._seen = None  # what the step led to, once measured: the next observation is compared with it
         try:
             settle = self._settle(p["finished"], self.min_wait_s, mark=p["mark"],
@@ -1364,22 +1414,27 @@ class JourneyRunner:
     def _costs(self) -> dict:
         """What deciding cost, kept apart from the site's time: model_calls, timing_ms and usage of the journey record.
         typesafe: the Agent's decisions (one TypeSafe request each), the TypeSafe calls that failed, the model of the
-        latest decision and the text helper calls; host: its validated choices, no text model call and no token
-        usage. stale_or_refused: the decisions _log_attempt logged (stale, or refused before input)."""
+        latest decision, the text helper calls that answered and those that raised (their latency counted too); host:
+        its validated choices, no text model call and no token usage. stale_or_refused: the decisions _log_attempt
+        logged (stale, or refused before input). Only reads counters that grow, so a reader without the lock (the
+        service marking an interrupted run) gets a consistent snapshot of the run so far."""
         state = self.agent.state if self.agent is not None else {}
         host = self.host is not None
-        decisions = self._choices if host else state.get("decisions") or []
-        texts = [] if host else state.get("text_calls") or []
+        decisions = list(self._choices if host else state.get("decisions") or [])
+        texts = [] if host else list(state.get("text_calls") or [])
+        failed_texts = [] if host else list(self._text_failed)
         site = sum(float(s.get("execution_ms") or 0.0) + float(s.get("settle_ms") or 0.0)
-                   for s in self.steps if friction.executed(s))
+                   for s in list(self.steps) if friction.executed(s))
         usage = {} if host else {key: _tokens(decisions, key) for key in ("input_tokens", "output_tokens")}
-        calls = {"choose": len(decisions), "text": len(texts), "stale_or_refused": self._idle, "failed": self._failed}
+        calls = {"choose": len(decisions), "text": len(texts), "text_failed": len(failed_texts),
+                 "stale_or_refused": self._idle, "failed": self._failed}
         if not host:  # the versioned model TypeSafe answered with (the report's pilot line), e.g. "jev-1.13.0"
             calls["model"] = decisions[-1].get("model") if decisions else None
+        text_ms = sum(t.get("latency_ms") or 0 for t in texts) + sum(failed_texts)
         return {
             "model_calls": calls,
             "timing_ms": {"decision": round(sum(d.get("latency_ms") or 0 for d in decisions)),
-                          "text": round(sum(t.get("latency_ms") or 0 for t in texts)), "site": round(site),
+                          "text": round(text_ms), "site": round(site),
                           "wall": round((time.monotonic() - self._clock) * 1000) if self._clock is not None else None},
             "usage": usage,
         }
@@ -1435,8 +1490,8 @@ class JourneyRunner:
         self.journey.setdefault("notes", []).append(message)
 
     def _error(self, exc: BaseException) -> None:
-        self.status = "error"
-        self._warn(f"{type(exc).__name__}: {str(exc)[:300]}")
+        self.status = "error"  # a cdp: browser's key never reaches the run (an error that quotes its URL)
+        self._warn(redact_browser(f"{type(exc).__name__}: {str(exc)[:300]}", self.settings.browser))
 
     def _save(self, *, run_status: str | None = None, observations=None, page=None, finished: bool = False,
               not_assessable: dict | None = None) -> None:

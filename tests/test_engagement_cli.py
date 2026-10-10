@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from jev_ultrafast import model as typesafe
-from jev_ultrafast.engagement import chrome, cli, judges, judgments
+from jev_ultrafast.engagement import chrome, cli, judges, judgments, report
 from jev_ultrafast.engagement.collectors import PageCollector
 from jev_ultrafast.engagement.scoring import NAMES
 from jev_ultrafast.engagement.store import RunStore, iso_now
@@ -563,3 +563,66 @@ def test_audit_with_the_jev_judge_needs_its_key_before_any_work(capsys, monkeypa
     monkeypatch.setattr(chrome, "sweep_stale_profiles", lambda root=None: pytest.fail("refused before any work"))
     assert cli.main(["audit", SHOP, "--judge", "jev"]) == 1
     assert "TYPESAFE_API_KEY" in capsys.readouterr().err and RunStore().list_runs() == []
+
+
+def test_report_kpis_say_not_applicable_and_name_units_in_italian(capsys):
+    """--format kpis follows report.html: a KPI that does not apply is "non applicabile (...)", never "non
+    valutabile"; units are the catalogue's Italian names (punteggio, conteggio, ...), never the registry's codes."""
+    run_id = stored_audit()  # no journey and no judgments: their KPIs do not apply
+    assert cli.main(["score", run_id]) == 0
+    capsys.readouterr()
+    assert cli.main(["report", run_id, "--format", "kpis", "--json"]) == 0
+    rows = {r["id"]: r for r in json.loads(capsys.readouterr().out)["kpis"]}
+    assert cli.main(["report", run_id, "--format", "kpis"]) == 0
+    lines = {line.split()[0]: line for line in capsys.readouterr().out.splitlines() if line.startswith("  ")}
+    assert set(lines) == set(rows)
+    skipped = {kpi for kpi, row in rows.items() if row.get("applicable") is False}
+    assert {"FAI.JOURNEY_SUCCESS", "TRI.RETURNS_CLARITY", "PTI.STRIKETHROUGH_LOWEST30"} <= skipped
+    for kpi in skipped:
+        assert "non applicabile" in lines[kpi] and "non valutabile" not in lines[kpi], lines[kpi]
+    assert "non applicabile (nessun percorso dell'agente in questa run)" in lines["FAI.JOURNEY_SUCCESS"]
+    assert "non applicabile (giudizi non richiesti)" in lines["TRI.RETURNS_CLARITY"]
+    assert "non applicabile: nessun prezzo barrato" in lines["PTI.STRIKETHROUGH_LOWEST30"]  # not "(non applicabile"
+    assert "non applicabile (" not in lines["PTI.STRIKETHROUGH_LOWEST30"]
+    assert " punteggio " in lines["PERF.CLS"] and " conteggio " in lines["PERF.REQUESTS"]
+    assert " rapporto " in lines["FAI.ACTIONS_RATIO"] and " etichetta " in lines["MPI.AUTHORITY"]
+    assert " confidenza " in lines["DPR.COUNTDOWN_RESET"] and " sì/no " in lines["TRI.HTTPS"]
+    assert " categoria " in lines["FAI.PLP_PAGINATION"] and "pulsante «carica altri»" in lines["FAI.PLP_PAGINATION"]
+    lcp = report.fmt_value(rows["PERF.LCP"]["value"], "ms")  # "2 900 ms": the value names its unit, once
+    assert f"{lcp}  " in lines["PERF.LCP"] and lines["PERF.LCP"].count(" ms") == 1
+    for line in lines.values():
+        assert not {"score", "count", "label", "confidence", "bool", "enum", "ratio"} & set(line.split()), line
+
+
+def test_run_summary_shows_reasons_and_warnings_in_italian(capsys):
+    cli._print_run({"run_id": "r", "status": "partial", "pages_total": 0, "pages": [],
+                    "not_assessable": [{"stage": "pdp", "profile": "desktop", "kpi_id": None,
+                                        "reason": "not_requested"},
+                                       {"stage": None, "profile": None, "kpi_id": None, "reason": None}],
+                    "warnings_total": 2,
+                    "warnings": ["mobile: plp found through the Jev fallback: not reproducible across runs",
+                                 "mobile: cart reached after a Jev pick (add_to_cart): not reproducible across runs"]})
+    out = capsys.readouterr().out
+    assert "  non valutabile: desktop · fase pagina prodotto: fase non richiesta\n" in out
+    assert "  non valutabile: run\n" in out and "not_requested" not in out and "None" not in out
+    assert ("avvisi: 2 (ultimo: mobile: fase carrello raggiunta dopo un elemento scelto da Jev con il fallback "
+            "(aggiunta al carrello): non riproducibile tra run diverse)") in out
+
+
+def test_score_summary_prints_the_llm_share_and_the_coverage_as_the_report_does(capsys):
+    from jev_ultrafast.engagement.scoring import score_run
+    from jev_ultrafast.engagement.service import EngagementService
+
+    run = copy.deepcopy(GOLDEN)  # coverage 84.95 %: grade B, never "copertura 85 %"
+    dropped = {"FAI.CHECKOUT_FIELDS", "FAI.GUEST_CHECKOUT", "FAI.FORCED_ACCOUNT", "FAI.AUTOCOMPLETE_ATTRS",
+               "FAI.CART_EDITABLE", "FAI.BREADCRUMBS", "FAI.PLP_RESULT_COUNT", "PTI.SHIPPING_COST_PRE_CHECKOUT",
+               "PTI.FUNNEL_PRICE_DELTA", "PTI.STRIKETHROUGH_LOWEST30"}
+    for row in run["observations"]:
+        if row["kpi_id"] in dropped:
+            row.update(assessed=False, value=None, reason="timeout")
+    summary = EngagementService._score_summary(run, score_run(run), {"report_html": "report.html"})
+    cli._print_score(summary)
+    out = capsys.readouterr().out
+    share = summary["ers"]["llm_share"]
+    assert 0 < share < 1 and f"Confidenza B (copertura 84 %) · quota LLM {report.fmt_share(share)}\n" in out
+    assert report.fmt_share(share).endswith(" %") and "copertura 85 %" not in out and "quota LLM 0," not in out

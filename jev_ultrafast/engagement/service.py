@@ -39,7 +39,7 @@ from . import judgments, report
 from .kpis import KPIS
 from .profiles import DEVICE_PROFILES
 from .schemas import STAGES, SUB_INDICES
-from .settings import EngagementSettings
+from .settings import EngagementSettings, redact_browser
 from .store import RunStore, iso_now
 
 log = logging.getLogger("jev_ultrafast.engagement.service")
@@ -117,6 +117,7 @@ class _Job:
     progress: list[str] = field(default_factory=list)
     thread: threading.Thread | None = None
     summarized: bool = False  # a typesafe journey whose finish summary was returned (wait=True, journey_finish)
+    runner: object | None = None  # a typesafe journey's JourneyRunner: what deciding cost goes into its interrupt mark
 
 
 @dataclass
@@ -204,6 +205,25 @@ def _abandoned(why: str):
             run["status"] = "partial" if run.get("pages") else "failed"
         run["finished_at"] = run.get("finished_at") or iso_now()
     return mark
+
+
+def _with_costs(mark, runner):
+    """mark, then, in a journey the mark left abandoned, what deciding cost until now (JourneyRunner._costs():
+    model_calls, timing_ms, usage), read at every application. The runner writes them after every decision; this adds
+    a decision whose step was still running when the run was interrupted. Read without the runner's lock, which
+    run_auto holds for the whole run (its counters only grow); a runner without _costs (a stand-in) or a failed read
+    leaves the runner's own last write."""
+    costs = getattr(runner, "_costs", None)
+
+    def apply(run, sealed=False):
+        mark(run, sealed)
+        journey = run.get("journey")
+        if callable(costs) and isinstance(journey, dict) and journey.get("status") == "abandoned":
+            try:
+                journey.update(costs())
+            except Exception:  # best effort: the runner's own write after its last decision stands
+                log.exception("reading what deciding cost in %s", run.get("run_id"))
+    return apply
 
 
 def _interrupted(kind: str, reason: str):
@@ -346,8 +366,9 @@ def _jev_readings(run: dict, final: set) -> list[dict]:
 
 def _pilot(journey: dict) -> dict:
     """Who chose the journey's steps and what deciding cost (the journey record's own fields; the cost ones exist
-    once the journey ended): policy (the resolved pilot), policy_requested, text_helper, model_calls, timing_ms
-    (decision time is never the site's), usage (TypeSafe tokens)."""
+    from the first decision on, written after every decision and at the end): policy (the resolved pilot),
+    policy_requested, text_helper, model_calls, timing_ms (decision time is never the site's), usage (TypeSafe
+    tokens)."""
     keys = ("policy", "policy_requested", "text_helper", "model_calls", "timing_ms", "usage")
     return {key: journey.get(key) for key in keys if key in journey or key == "policy"}
 
@@ -465,7 +486,7 @@ class EngagementService:
                 if isinstance(exc, KeyboardInterrupt):  # Ctrl-C, or SIGTERM/SIGHUP in the CLI (cli.Interrupted)
                     self._fail(run_id, f"interrupted: {str(exc) or 'Ctrl-C'} while the run was in progress")
                 else:
-                    self._fail(run_id, f"audit: {type(exc).__name__}: {str(exc)[:300]}")
+                    self._fail(run_id, redact_browser(f"audit: {type(exc).__name__}: {str(exc)[:300]}", browser))
                 if not isinstance(exc, Exception):
                     raise
             finally:  # owner.json goes first: whoever wakes on done sees the run fully released
@@ -719,7 +740,10 @@ class EngagementService:
             raise
         except Exception as exc:  # the runner closed everything and recorded the failure in its run
             where = f"; run {runner.run_id} records it" if runner.run_id else ""
-            raise RuntimeError(f"the journey could not start: {type(exc).__name__}: {str(exc)[:300]}{where}") from exc
+            plain = f"{type(exc).__name__}: {str(exc)[:300]}"
+            message = redact_browser(plain, browser)  # a cdp: URL's key never reaches the host, nor its traceback
+            cause = exc if message == plain else None
+            raise RuntimeError(f"the journey could not start: {message}{where}") from cause
         finally:
             with self._lock:
                 self._starting -= 1
@@ -740,7 +764,7 @@ class EngagementService:
             self._note_concurrency(run_id)
             self._ensure_reaper()
             return {**started, **pilot}
-        job = _Job("journey", store)
+        job = _Job("journey", store, runner=runner)
         with self._lock:
             self._jobs[run_id] = job
         self._note_concurrency(run_id)
@@ -903,7 +927,7 @@ class EngagementService:
                 continue
             if not (live.lock.acquire(timeout=lock_s) if force else live.lock.acquire(blocking=False)):
                 if force:  # a step still runs: keep whatever it writes abandoned; the browser goes with the process
-                    self._interrupt(run_id, live.store, _abandoned(why))
+                    self._interrupt(run_id, live.store, _with_costs(_abandoned(why), live.runner))
                     self._forget(run_id, live)
                     closed.append(run_id)
                 continue  # an act() is running: not idle
@@ -938,7 +962,7 @@ class EngagementService:
     def shutdown(self, join_s: float = 5.0, lock_s: float = 30.0) -> None:
         """Orderly end (stdin closed, the CLI): close every open journey (stopped ones verified, waiting at most
         lock_s for a step in progress), give running jobs join_s to end, mark the rest interrupted (an audit failed,
-        a typesafe journey abandoned)."""
+        a typesafe journey abandoned with what deciding cost until then: _with_costs)."""
         self._stop.set()
         self.reap(force=True, reason="the server shut down", lock_s=lock_s)
         deadline = time.monotonic() + join_s
@@ -946,7 +970,13 @@ class EngagementService:
             if job.thread is not None and job.thread.is_alive():
                 job.thread.join(max(0.0, deadline - time.monotonic()))
             if not job.done.is_set():
-                self._interrupt(run_id, job.store, _interrupted(job.kind, "the server shut down"))
+                self._interrupt(run_id, job.store, self._job_mark(job, "the server shut down"))
+
+    @staticmethod
+    def _job_mark(job: _Job, reason: str):
+        """The interrupt mark of a job: an audit failed, a typesafe journey abandoned with what deciding cost."""
+        mark = _interrupted(job.kind, reason)
+        return _with_costs(mark, job.runner) if job.runner is not None else mark
 
     def seal(self, reason: str = "the server was stopped") -> None:
         """Signal path, step 1, before the browsers are killed: no lock, no I/O. Refuse new runs and seal the store of
@@ -955,9 +985,9 @@ class EngagementService:
         self._stop.set()
         for job in list(self._jobs.values()):
             if not job.done.is_set():
-                job.store.seal(_interrupted(job.kind, reason))
+                job.store.seal(self._job_mark(job, reason))
         for live in list(self._journeys.values()):
-            live.store.seal(_abandoned(reason))
+            live.store.seal(_with_costs(_abandoned(reason), live.runner))
 
     def abort(self, reason: str = "the server was stopped") -> None:
         """Signal path, step 2, after the browsers were killed (the host kills this process within half a second):

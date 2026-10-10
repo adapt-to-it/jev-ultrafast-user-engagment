@@ -219,9 +219,14 @@ def _reads(lx: dict, action: dict, *keys: str) -> bool:
     return any(key in lx and lx[key].search(label) for key in keys)
 
 
+# The lexicon keys of a control that takes items out of the cart: one line ("Rimuovi", "Remove") or the whole cart
+# ("Svuota carrello", "Empty cart"). No Jev offer holds one, nor does cart_url() take one for the cart link.
+REMOVING = ("remove", "clear_cart")
+
+
 def unlabelled(lx: dict, *keys: str):
     """accept(action, page): an action whose label none of the lexicon keys reads (a Jev lookup's offer leaves the
-    controls that remove, buy now, check out, log in... out)."""
+    controls that remove or empty the cart, buy now, check out, log in... out)."""
     def accept(action: dict, page: dict) -> bool:
         return not _reads(lx, action, *keys)
     return accept
@@ -1234,11 +1239,12 @@ class Crawl:
         would be clicked: under a blocking consent banner (blocked) nothing that would be clicked, only a click of the
         shape that opens a page (shaped(): a button or a link, no checked state, no quantity, coupon or add-on: a
         mini-cart's paid add-on box would sit in the cart Jev's click opened), and never a click the lexicon reads as
-        adding, buying now, removing or checking out (a listing's in-card "Aggiungi al carrello" button changes the
-        cart, it opens no page). For the cart not even such a link, so a "buy now" that adds and jumps to the checkout
-        is never offered."""
+        adding, buying now, removing or emptying (REMOVING: "Rimuovi", "Svuota carrello", "Empty cart") or checking
+        out (a listing's in-card "Aggiungi al carrello" button changes the cart, it opens no page). For the cart not
+        even such a link, so a "buy now" that adds and jumps to the checkout is never offered; "Vai al carrello" and
+        "View cart" stay."""
         lx = self.tab.lexicon(record)
-        no_action, opens = unlabelled(lx, "add_to_cart", "buy_now", "remove", "checkout"), shaped(lx)
+        no_action, opens = unlabelled(lx, "add_to_cart", "buy_now", *REMOVING, "checkout"), shaped(lx)
 
         def accept(action: dict, page: dict) -> bool:
             how, target = _link(page, action)
@@ -1256,12 +1262,12 @@ class Crawl:
         """accept(action, page) for the add-to-cart lookup's offer: only a control of the shape that adds the item
         (shaped(): a button or a link, no checked state, no quantity, coupon or add-on: a paid add-on Jev ticked would
         be in the cart deception.py reads), never a control inside a product card's CTA (a related product's
-        "Aggiungi"), one the lexicon reads as buying now, checking out or removing, nor a link to another page whose
-        GET changes no cart (header cart link, breadcrumbs), to another site or with another scheme (mailto:, tel:);
-        a same-site cart-action link stays."""
+        "Aggiungi"), one the lexicon reads as buying now, checking out, removing or emptying the cart (REMOVING), nor
+        a link to another page whose GET changes no cart (header cart link, breadcrumbs), to another site or with
+        another scheme (mailto:, tel:); a same-site cart-action link stays."""
         in_card = own_controls([c for c in audit.get("ctas") or [] if isinstance(c, dict) and c.get("in_card")], audit)
         lx = self.tab.lexicon(record)
-        named, adds = unlabelled(lx, "buy_now", "checkout", "remove"), shaped(lx)
+        named, adds = unlabelled(lx, "buy_now", "checkout", *REMOVING), shaped(lx)
 
         def accept(action: dict, page: dict) -> bool:
             if in_card(action, page) or not named(action, page) or not adds(action, page):
@@ -1278,12 +1284,13 @@ class Crawl:
         javascript:) or links to a same-site checkout URL (guest_path's rule and the guard's own checkout-entry
         exception: the header, the footer and an account page are never offered; mailto:, tel: neither), outside any
         product card (audit's in-card CTAs: a cross-sell card's "Acquista ora" re-adds or opens its product), whose
-        label the lexicon never reads as logging in, registering, removing or adding, nor as a utility control
-        ("Svuota carrello", "Aggiorna carrello", "Calcola spedizione", "Il tuo account") unless it also reads it as a
-        way on ("proceed": "Procedi alla spedizione", "Conferma carrello"; "guest": "Checkout senza account")."""
+        label the lexicon never reads as logging in, registering, removing or emptying the cart (REMOVING: "Rimuovi",
+        "Svuota", "Clear bag", whatever else the label says) or adding, nor as a utility control ("Aggiorna carrello",
+        "Calcola spedizione", "Il tuo account") unless it also reads it as a way on ("proceed": "Procedi alla
+        spedizione", "Conferma carrello"; "guest": "Checkout senza account")."""
         lx = self.tab.lexicon(record)
         in_card = own_controls([c for c in audit.get("ctas") or [] if isinstance(c, dict) and c.get("in_card")], audit)
-        named, cta = unlabelled(lx, "login", "register", "remove", "add_to_cart"), shaped(lx)
+        named, cta = unlabelled(lx, "login", "register", *REMOVING, "add_to_cart"), shaped(lx)
 
         def accept(action: dict, page: dict) -> bool:
             if not cta(action, page) or not named(action, page) or in_card(action, page):
@@ -1542,9 +1549,10 @@ class Crawl:
 
     def cart_url(self, product: PageRecord) -> str | None:
         """The cart link audit.js found (now, else at load), else an observed link labelled as the cart (not one that
-        adds or removes: "Aggiungi al carrello", "Rimuovi dal carrello"); never the product page itself (a "#"
-        mini-cart toggle resolves to it), never a URL whose GET changes the cart: its cart-action query keys are
-        dropped and a cart-action path is skipped (clean_cart_url). A candidate without a query comes first."""
+        adds, removes or empties: "Aggiungi al carrello", "Rimuovi dal carrello", "Svuota carrello"); never the
+        product page itself (a "#" mini-cart toggle resolves to it), never a URL whose GET changes the cart: its
+        cart-action query keys are dropped and a cart-action path is skipped (clean_cart_url). A candidate without a
+        query comes first."""
         base = product.get("final_url") or product.get("url") or ""
         hrefs = []
         for audit in (self.tab.fresh_audit(), _audit(product)):
@@ -1556,7 +1564,7 @@ class Crawl:
         for action in page.get("actions") or []:
             label = " ".join(str(action.get("label") or "").split())
             if action.get("role") == "link" and "cart" in lx and lx["cart"].search(label) and not any(
-                    key in lx and lx[key].search(label) for key in ("add_to_cart", "buy_now", "remove")):
+                    key in lx and lx[key].search(label) for key in ("add_to_cart", "buy_now", *REMOVING)):
                 hrefs.append(_href(page, action))
         here = {_url(u) for u in (base, product.get("url"), page.get("url")) if u}
         urls = []

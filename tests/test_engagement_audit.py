@@ -104,7 +104,7 @@ def test_the_clean_audit_reaches_every_stage_on_both_profiles(clean):
             (f"{profile}-{stage}-1", "checkout" if stage == "checkout_entry" else stage) for stage in STAGES]
         assert run["settings"]["applied_profiles"][profile]["name"] == profile
     settings = run["settings"]
-    assert settings["anchors_version"] == "anchors.v1" and settings["profiles_version"] == "profiles.v1"
+    assert settings["anchors_version"] == "anchors.v2" and settings["profiles_version"] == "profiles.v1"
     assert settings["browser"]["transport"] == "direct" and settings["browser"]["product"]
     assert any("mobile: add to cart" in m for m in clean["messages"]) and clean["messages"][-1] == "done: complete"
     assert clean["store"].path(clean["run_id"]).joinpath("snapshots", "mobile-pdp-1.json").exists()
@@ -2098,7 +2098,8 @@ def test_a_variant_option_the_lexicon_misses_is_jev_s_pick_of_the_option_audit_j
 def test_a_checkout_cta_the_lexicon_misses_is_jev_s_pick_among_what_the_guard_allows(monkeypatch, jev):
     """The cart offers a guest path (forms.guest_option) but no control the lexicon reads as "guest": that is never a
     Jev lookup (rule d needs the lexicon's "guest" control); the checkout CTA is, over the clicks the guard allows
-    minus removing, logging in, registering and adding ("Paga ora", "Rimuovi", "Accedi", "Registrati" never)."""
+    minus removing or emptying the cart, logging in, registering and adding ("Paga ora", "Rimuovi", "Accedi",
+    "Registrati" never, nor the cart's bare "Svuota")."""
     monkeypatch.setattr(Tab, "await_effect", lambda self, origin, **kw: "navigated")
     stand_in = jev(checkout_entry="Concludi")
     shop = CartShop(controls=["Paga ora", "Rimuovi", "Accedi", "Registrati", "Svuota", "Concludi"])
@@ -2109,7 +2110,7 @@ def test_a_checkout_cta_the_lexicon_misses_is_jev_s_pick_among_what_the_guard_al
             "classification": {"type": "cart"}, "audit": shop.audit()}
     crawl.checkout(cart)
     assert collector.browser.acted == ["Concludi"] and [p["stage"] for p in crawl.pages] == ["checkout_entry"]
-    assert [e["label"] for e in stand_in.bodies[0]["state"]["elements"]] == ["Svuota", "Concludi"]
+    assert [e["label"] for e in stand_in.bodies[0]["state"]["elements"]] == ["Concludi"]
     assert stand_in.asked == ["checkout_entry"] and set(GOALS) == {"plp", "pdp", "cart", "add_to_cart",
                                                                  "select_variant", "checkout_entry"}
     probe = cart["probes"]["checkout_entry"]
@@ -3000,6 +3001,71 @@ def test_the_cart_and_add_to_cart_lookups_offer_only_the_shape_of_a_control_that
                for stage in ("plp", "pdp", "cart")}
     assert offered == {stage: ["Mettilo nella sporta", "Vedi la sporta"] for stage in ("plp", "pdp", "cart")}
     assert [a["label"] for a in page["actions"] if crawl.add_offer(product, {})(a, page)] == ["Mettilo nella sporta"]
+
+
+# Controls that empty the whole cart, and the ways to the cart and on that every offer keeps (per page language; the
+# Italian lexicon merges English).
+CLEARING = {"it": ["Svuota carrello", "Svuota il carrello", "Svuota", "Azzera il carrello", "Empty cart"],
+            "en": ["Empty cart", "Clear cart", "Empty basket", "Clear bag", "Clear basket", "Clear your cart", "Empty"]}
+OPENING = {"it": ["Vai al carrello", "Visualizza carrello"], "en": ["View cart", "Go to cart"]}
+WAY_ON = {"it": "Concludi", "en": "Continue to shipping"}
+
+
+@pytest.mark.parametrize("lang", ["it", "en"])
+def test_no_lookup_offers_a_control_that_empties_the_cart(lang):
+    """A control that empties the cart ("Svuota carrello", a cart's bare "Svuota", "Empty cart", "Clear bag") is read
+    as removing (crawler.REMOVING, the lexicon's "clear_cart") and never offered to Jev: not by the cart lookup (a
+    mini-cart's "Svuota carrello" pick would empty the cart the audit then reads), the add-to-cart lookup or the
+    checkout lookup, as a button or as a link whose cart-action keys the cart lookup would drop. The cart lookup still
+    offers the way to the cart ("Vai al carrello", "View cart") and the checkout lookup the way on. The guard allows
+    every one of them: the offers leave them out."""
+    lexicon = compile_lexicon(lexicon_for(lang))
+    assert all(lexicon["clear_cart"].search(label) for label in CLEARING[lang])
+    assert not [label for label in [*OPENING[lang], WAY_ON[lang], "Svuotamento magazzino", "Aggiorna carrello",
+                                    "Update cart", "Clear filters"] if lexicon["clear_cart"].search(label)]
+    controls = [(label, "button", None) for label in [*CLEARING[lang], *OPENING[lang], WAY_ON[lang]]] + [
+        (label, "link", "/carrello/" if label in OPENING[lang] else "/carrello/?empty_cart=1")
+        for label in [*CLEARING[lang], *OPENING[lang]]]
+    page = {"url": f"{SHOP}p/aurora", "scroll": {"y": 0},
+            "actions": [{"id": f"e{n}", "kind": "click", "label": label, "role": role, "node": n}
+                        for n, (label, role, _) in enumerate(controls)],
+            "guards": {str(n): [None] * GUARD_HREF + [href] for n, (_, _, href) in enumerate(controls)}}
+    in_cart = {**page, "url": f"{SHOP}carrello"}
+    assert GUARD.filter_actions(page, "pdp")[0] == page["actions"]
+    assert GUARD.filter_actions(in_cart, "cart")[0] == page["actions"]
+    crawl = crawl_of(ScriptedShop(lang=lang))
+    product = record({"lexicon_lang": lang}, url=page["url"], kind="pdp")
+    cart = record({"lexicon_lang": lang}, url=in_cart["url"], kind="cart")
+
+    def offered(accept, on):
+        return [(a["label"], a["role"]) for a in on["actions"] if accept(a, on)]
+
+    for accept, on in ((crawl.link_offer("cart", product, False), page), (crawl.add_offer(product, {}), page),
+                       (crawl.checkout_offer(cart, {}), in_cart)):
+        assert not [label for label, _ in offered(accept, on) if label in CLEARING[lang]]
+    assert offered(crawl.link_offer("cart", product, False), page) == [
+        *((label, "button") for label in [*OPENING[lang], WAY_ON[lang]]), *((label, "link") for label in OPENING[lang])]
+    assert offered(crawl.checkout_offer(cart, {}), in_cart) == [(WAY_ON[lang], "button")]
+
+
+@pytest.mark.parametrize("lang", ["it", "en"])
+def test_the_cart_lookup_never_asks_jev_about_a_control_that_empties_the_cart(jev, lang):
+    """An open mini-cart with an "empty the cart" button: the cart lookup's one request offers the way to the cart
+    only, and Jev's pick is that one; with nothing else on the page nothing is asked (no request, no click)."""
+    clear, view = CLEARING[lang][0], OPENING[lang][0]
+    stand_in = jev(cart=view)
+    crawl = crawl_of(ScriptedShop(lang=lang))
+    product = record({"lexicon_lang": lang}, url=f"{SHOP}p/aurora", kind="pdp")
+    drawer = {"url": f"{SHOP}p/aurora", "title": "Aurora", "text": "", "guards": {}, "actions": [
+        {"id": "e1", "kind": "click", "label": clear, "role": "button", "node": 1},
+        {"id": "e2", "kind": "click", "label": view, "role": "button", "node": 2}]}
+    action, probe = jev_pick(drawer, GUARD, "pdp", GOALS["cart"], crawl.link_offer("cart", product, False))
+    assert [e["label"] for e in stand_in.bodies[0]["state"]["elements"]] == [view]
+    assert (action["label"], probe["label"], probe["reason"]) == (view, view, None)
+    alone = {**drawer, "actions": drawer["actions"][:1]}
+    assert jev_pick(alone, GUARD, "pdp", GOALS["cart"], crawl.link_offer("cart", product, False)) == (
+        None, {"reason": "no_click_actions"})
+    assert stand_in.asked == ["cart"]
 
 
 class LateBannerCart(NoCtaCart):

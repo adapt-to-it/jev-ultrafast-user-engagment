@@ -7,7 +7,7 @@ to_dict() is this input shape. run.json stores the schema shape instead (RunReco
 import math
 import re
 from dataclasses import asdict, dataclass, field, fields
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from .profiles import DEVICE_PROFILES
 from .schemas import STAGES
@@ -30,12 +30,51 @@ def has_credentials(url: str) -> bool:
     return "@" in urlsplit(url).netloc
 
 
+def public_browser(browser: str) -> str:
+    """The browser setting as runs store it and progress messages show it. A cdp: DevTools URL keeps its scheme, host,
+    port and path and loses its userinfo (user:password@), query and fragment, where hosted browsers carry an API key
+    or a token (wss://...?apiKey=..., ?token=...); auto, launch and harness are returned as they are. The stored
+    value names the endpoint, it is not one to reconnect with."""
+    if not isinstance(browser, str) or not browser.startswith("cdp:"):
+        return browser
+    try:
+        parts = urlsplit(browser[4:])
+    except ValueError:
+        return "cdp:(DevTools URL not shown)"
+    return f"cdp:{parts.scheme}://{parts.netloc.rpartition('@')[2]}{parts.path}"
+
+
+def redact_browser(text, browser: str):
+    """text (an error or progress message) without the credentials public_browser drops from a cdp: browser value,
+    wherever they appear: the whole URL becomes its public form, then its userinfo, query and fragment, the user, the
+    password and each query value (a bare query item whole), as written and percent-decoded, become "[redacted]"
+    (pieces of four characters or more: shorter ones would garble the message). Anything but a str, or a browser
+    value without such credentials, leaves the text as it is."""
+    if not isinstance(text, str) or not isinstance(browser, str) or public_browser(browser) == browser:
+        return text
+    raw = browser[4:]
+    text = text.replace(raw, public_browser(browser)[4:])
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return text
+    userinfo = parts.netloc.rpartition("@")[0]
+    pieces = [userinfo, *userinfo.split(":"), parts.query, parts.fragment]
+    for item in parts.query.split("&"):
+        name, sep, value = item.partition("=")
+        pieces.append(value if sep else name)
+    secrets = {s for piece in pieces for s in (piece, unquote(piece)) if len(s) >= 4}
+    for secret in sorted(secrets, key=len, reverse=True):
+        text = text.replace(secret, "[redacted]")
+    return text
+
+
 @dataclass
 class EngagementSettings:
     url: str
     profiles: list[str] = field(default_factory=lambda: ["mobile", "desktop"])
     stages: list[str] = field(default_factory=lambda: list(STAGES))
-    browser: str = "auto"  # auto | launch | harness | cdp:<ws-or-http-url>
+    browser: str = "auto"  # auto | launch | harness | cdp:<ws-or-http-url> (stored as public_browser shows it)
     headless: bool = True
     locale: str = "it"
     consent: str = "auto"  # auto | reject | accept | none

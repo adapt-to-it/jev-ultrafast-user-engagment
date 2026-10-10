@@ -371,8 +371,10 @@ def _print_report(result: dict, fmt: str) -> None:
         return
     if fmt == "kpis":  # report.html's KPI table: Italian values and units, "non applicabile" apart
         for row in result.get("kpis") or []:
-            print(f"  {row['id']:32} {_kpi_cell(row):>14}  {unit_name(row.get('unit')):10}  "
-                  f"normalizzato {_num(row.get('normalized'))}")
+            cell, unit = _kpi_cell(row), unit_name(row.get("unit"))
+            if cell.endswith(f" {unit}"):  # "2 900 ms": the value already names it
+                unit = ""
+            print(f"  {row['id']:32} {cell:>14}  {unit:10}  normalizzato {_num(row.get('normalized'))}")
         print(f"Rapporto: {result['report_html']}")
         return
     headline = result.get("headline") or {}

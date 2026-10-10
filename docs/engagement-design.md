@@ -217,7 +217,7 @@ Besides loading pages, an audit sends clicks on observed controls only: a varian
 
 ## 8. Scoring maths
 
-`scoring.py` is pure functions over observations and `anchors.json` (`anchors.v1`).
+`scoring.py` is pure functions over observations and `anchors.json` (`anchors.v2`).
 
 **Per KPI.** Each KPI has a weight, a direction and either piecewise-linear `points` `[[value, score], ...]` (clamped to the first and last score) or a `map` for booleans and labels (a null score means not applicable). `provisional` marks anchors that are editorial rather than published; the flag changes no score. Rows are aggregated with the KPI's rule from `kpis.py` (`wmedian` with PDP and PLP weighted 2, `median`, `max`, `min`, `mean`, `sum`, `any`, `all`, `first`, `best`). A KPI observed on two or more profiles is aggregated per profile and the overall value is the profile that scores lowest: a shopper uses one device. An `any` KPI leaves out a profile whose false rests on an unobserved page, so a missing stage never makes a KPI worse.
 
@@ -251,7 +251,7 @@ The sum runs over sub-indices that have a score. The geometric mean is non-compe
 
 A worked example with invented sub-index scores (FAI 70, TRI 80, PTI 60, CCL 75, PERF 55, MPI 40) gives a weighted arithmetic mean of 65.6 and `ERS_raw` 64.3; with PERF 20 the arithmetic mean is 59.3 and `ERS_raw` 53.6, which is the non-compensatory effect. One confirmed countdown reset (DPR 90) multiplies the first by 0.73. These numbers reproduce with `scoring.dpr` and `scoring.ers`; they are an illustration, not data of a shop.
 
-**Versions.** `anchors.v1`, `rubrics.v2`, `profiles.v1`, `checks.v1`, `deception.v1`, `report.v1` and `engagement.v1`. `rubrics.v2` is the version that added each rubric's `judge` routing; a change to the routing or to a rubric's labels bumps it. `run.json` carries `schema_version` and its `settings` snapshot the anchors, rubrics, profiles, checks and deception versions (not the report's); `report.json` has `report_version` and a `versions` block with the schema, anchors, rubrics, profiles and report versions (not the checks or deception versions). Anchors, weights, rubrics (their `judge` routing included) and profiles are data: change a value, bump its version, and keep `docs/engagement-kpi.md` in step (`tests/test_engagement_docs.py` enforces ids, anchor points, units, stages and severities).
+**Versions.** `anchors.v2`, `rubrics.v2`, `profiles.v1`, `checks.v1`, `deception.v1`, `report.v1` and `engagement.v1`. `anchors.v2` is `anchors.v1` with `FAI.CHECKOUT_FIELDS` and `CCL.READABILITY` flagged provisional (published thresholds transferred to a different quantity); no point or weight changed, so v1 and v2 scores compare. `rubrics.v2` is the version that added each rubric's `judge` routing; a change to the routing or to a rubric's labels bumps it. `run.json` carries `schema_version` and its `settings` snapshot the anchors, rubrics, profiles, checks and deception versions (not the report's); `report.json` has `report_version` and a `versions` block with the schema, anchors, rubrics, profiles and report versions (not the checks or deception versions). Anchors, weights, rubrics (their `judge` routing included) and profiles are data: change a value, bump its version, and keep `docs/engagement-kpi.md` in step (`tests/test_engagement_docs.py` enforces ids, anchor points, units, stages and severities).
 
 ## 9. Journeys
 

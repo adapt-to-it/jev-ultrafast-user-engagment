@@ -27,7 +27,7 @@
   },
   "locale": "it",
   "consent": "auto",
-  "anchors_version": "anchors.v1",
+  "anchors_version": "anchors.v2",
   "rubrics_version": "rubrics.v2",
   "profiles_version": "profiles.v1",
   "repeats": 1

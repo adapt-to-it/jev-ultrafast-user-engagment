@@ -195,18 +195,27 @@ class RunStore:
             os.fsync(f.fileno())
 
     def read_steps(self, run_id: str) -> list[dict]:
-        """Complete steps in order. A line torn by a crash mid-append is skipped."""
+        """Complete steps in file order. A line torn by a crash mid-append is skipped. A step appended twice
+        (execution, then measurement: a journey's executed step) is returned once, as its last complete line, in the
+        place of its first; records without an integer step number (the crawler's) are all kept."""
         path = self.path(run_id) / "steps.jsonl"
         if not path.exists():
             return []
-        steps = []
+        steps, at = [], {}  # at: step number -> its index in steps
         for line in path.read_text(encoding="utf-8", errors="replace").split("\n"):
             try:
                 step = json.loads(line) if line.strip() else None
             except ValueError:
                 continue
-            if isinstance(step, dict):
-                steps.append(step)
+            if not isinstance(step, dict):
+                continue
+            number = step.get("step")
+            if isinstance(number, int) and not isinstance(number, bool):
+                if number in at:
+                    steps[at[number]] = step
+                    continue
+                at[number] = len(steps)
+            steps.append(step)
         return steps
 
     def write_json(self, run_id: str, rel: str, payload) -> str:
