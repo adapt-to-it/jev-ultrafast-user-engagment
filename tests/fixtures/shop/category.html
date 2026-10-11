@@ -38,7 +38,9 @@
     <h1>Scarpe da corsa</h1>
     <p>Ammortizzate, reattive o da gara: modelli selezionati e provati su strada dal nostro team di runner.</p>
     <div class="plp">
-      <aside class="filters" aria-label="Filtri">
+      <!-- on a phone the filters sit behind this toggle, closed, and the products come first (as on most shops) -->
+      <button type="button" class="filter-toggle" aria-controls="filtri" aria-expanded="false">Filtri</button>
+      <aside class="filters" id="filtri" aria-label="Filtri">
         <h2>Filtra i prodotti</h2>
         <fieldset>
           <legend>Taglia</legend>
@@ -280,6 +282,12 @@
       </div>
     </div>
   </footer>
+  <script>
+    document.querySelector('.filter-toggle').addEventListener('click', e => {
+      const open = document.getElementById('filtri').classList.toggle('open');
+      e.currentTarget.setAttribute('aria-expanded', String(open));
+    });
+  </script>
   <script src="shop.js"></script>
 </body>
 </html>

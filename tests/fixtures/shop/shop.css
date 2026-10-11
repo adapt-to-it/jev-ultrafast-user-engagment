@@ -115,6 +115,14 @@ main.wrap { min-height: 100vh; }
 .share a { display: inline-block; width: 18px; height: 18px; font-size: 10px; line-height: 18px; text-align: center; background: #dde3ea;
   text-decoration: none; margin-right: 2px; }
 
+/* phones: the filters are closed behind their toggle, so the products are on the first screen */
+.filter-toggle { display: none; }
+@media (max-width: 899px) {
+  .filter-toggle { display: block; min-height: 44px; padding: 0 16px; font: inherit; font-weight: 600; background: #ffffff;
+    border: 1px solid #c9d1db; border-radius: 10px; }
+  .plp .filters:not(.open) { display: none; }
+}
+
 @media (min-width: 900px) {
   .plp { grid-template-columns: 240px 1fr; }
   .pdp { grid-template-columns: 1fr 1fr; align-items: start; }
