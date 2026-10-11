@@ -212,11 +212,16 @@ def test_the_stale_retry_scrolls_to_the_same_element_and_still_takes_the_shift_b
                            rect=control["rect"], clear=True)
     assert (clicked["executed"], clicked["stale_reobserved"], sent) == (True, 1, [ADD, ADD])
     assert mobile.value("document.title") == "MAIN"
+    before = mobile.value("performance.timeOrigin")
     mobile.value("location.reload()")  # a new document starts without the memo: the rect finds the element again
-    deadline = time.monotonic() + 5.0
-    while mobile.value("document.readyState") != "complete" and time.monotonic() < deadline:
+    deadline = time.monotonic() + 5.0  # the new document (another timeOrigin), loaded: the old one also said complete
+    while time.monotonic() < deadline and not (
+            mobile.value("performance.timeOrigin") not in (None, before)
+            and mobile.value("document.readyState") == "complete"):
         time.sleep(0.05)
+    assert mobile.value("performance.timeOrigin") != before
     assert mobile.value("window.__jevScrollTarget === undefined") is True
+    assert mobile.value("document.querySelector('main').scrollTop") == 0
     assert mobile.scroll_to(control["rect"]) == first
 
 
