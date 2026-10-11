@@ -36,6 +36,14 @@
   - above the fold = centro dell'elemento nella prima schermata (`checks.v2`);
   - la rotella di `browser.py` scorre anche su mobile (verificato, fissato da un test, nessuna modifica).
   - Revisione verificata in tre giri (20 rilievi confermati da due verificatori e corretti), poi gate completo.
+- Prove live sul Mac (11 ottobre, pomeriggio e sera; artefatti locali, nessun numero qui finché non è committato uno
+  `smoke_summary.json`):
+  - lo scroll verificato fa raggiungere il checkout dello shop locale (`via checkout_cta`);
+  - fixture: sul profilo mobile la categoria aveva più di due schermate di filtri prima dei prodotti e Jev, dopo uno
+    scroll, rispondeva BLOCKED; ora i filtri sono chiusi dietro "Filtri" sui telefoni (desktop invariato);
+  - con l'obiettivo generico "Aggiungi al carrello un prodotto" Jev risponde BLOCKED già sulla home in tutte le prove
+    (limite di Jev, non un difetto del harness); con "Aggiungi al carrello un paio di scarpe da corsa" arriva al
+    carrello e l'oracolo passa: è il nuovo obiettivo di default dello smoke sulla fixture.
 
 ## Da fare (all'utente)
 1. Prova live con la chiave TypeSafe in locale: `uv run python scripts/smoke_engagement.py` (fixture locale) e

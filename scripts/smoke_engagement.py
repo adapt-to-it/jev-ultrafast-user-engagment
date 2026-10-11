@@ -77,7 +77,9 @@ from jev_ultrafast.questions import MAX_STEPS
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 SYSTEMONE = judges.SYSTEMONE
-FIXTURE_GOAL = "Aggiungi al carrello un prodotto"
+# names the product type, as a shopper would: with the bare "Aggiungi al carrello un prodotto" Jev answered BLOCKED on
+# the fixture's home page in every live probe (docs/research/STATUS.md), while this goal reached the cart
+FIXTURE_GOAL = "Aggiungi al carrello un paio di scarpe da corsa"
 SLOW_MS, BIG_TOKENS = 1500, 20_000  # a warning, never a failure
 PHASES = ("audit", "judge", "repeat", "journey")
 ASKS_TYPESAFE = ("judge", "repeat", "journey")  # skipped once TypeSafe refused the key (the audit asks only on a miss)
