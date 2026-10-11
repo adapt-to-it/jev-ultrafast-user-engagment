@@ -15,7 +15,11 @@
     html.window main { height: auto; overflow: visible; }
     .top { display: flex; justify-content: space-between; height: 48px; padding: 0 16px; align-items: center; }
     .buybox { padding: 0 16px; }
-    .filler { height: 1180px; }
+    /* fixed heights, one line each: the layout (and the shift the tests expect) does not depend on the platform's
+       fonts, which wrap the title differently */
+    .buybox h1 { height: 48px; margin: 0; font-size: 24px; line-height: 48px; white-space: nowrap; overflow: hidden; }
+    .buybox .price { height: 24px; margin: 0; white-space: nowrap; }
+    .filler { height: 1287px; }
     .atc { display: block; box-sizing: border-box; width: 300px; height: 48px; margin: 0; border: 0;
            background: #0b6b3a; color: #ffffff; font: 700 16px/48px system-ui, sans-serif; }
     .related { padding: 0 16px; }
@@ -28,7 +32,11 @@
     .card button { width: 100px; height: 36px; font-size: 12px; }
     .bottom { height: 900px; }
   </style>
-  <script>if (new URLSearchParams(location.search).has('window')) document.documentElement.classList.add('window');</script>
+  <script>
+    if (new URLSearchParams(location.search).has('window')) document.documentElement.classList.add('window');
+    // a reload starts at the top: Chrome's scroll restoration would move main back, late and not always
+    history.scrollRestoration = 'manual';
+  </script>
 </head>
 <body data-page="product">
   <main>
