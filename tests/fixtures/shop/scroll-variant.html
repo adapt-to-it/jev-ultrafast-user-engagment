@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scarpa da corsa Aurora | Passo Svelto</title>
+  <link rel="icon" href="data:,">
+  <style>
+    /* an app shell (main scrolls, the window never does; "?window": the same page scrolled by the window) whose size
+       group, below the first screen, has no option selected: the crawler picks one before adding to the cart */
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    html.window, html.window body { height: auto; overflow: visible; }
+    body { font: 16px/1.5 system-ui, sans-serif; color: #1d232b; background: #ffffff; }
+    main { height: 100vh; overflow: auto; scroll-behavior: smooth; }
+    html.window main { height: auto; overflow: visible; }
+    .top { display: flex; justify-content: space-between; height: 48px; padding: 0 16px; align-items: center; }
+    .buybox { padding: 0 16px; }
+    .filler { height: 1200px; }
+    .sizes { margin: 0 0 8px; padding: 8px; border: 1px solid #e2e7ee; }
+    .sizes button { width: 48px; height: 40px; margin: 2px; }
+    .sizes button[aria-pressed="true"] { background: #1d232b; color: #ffffff; }
+    .atc { display: block; box-sizing: border-box; width: 300px; height: 48px; margin: 0; border: 0;
+           background: #0b6b3a; color: #ffffff; font: 700 16px/48px system-ui, sans-serif; }
+    .bottom { height: 900px; }
+  </style>
+  <script>if (new URLSearchParams(location.search).has('window')) document.documentElement.classList.add('window');</script>
+</head>
+<body data-page="product">
+  <main>
+    <header class="top"><a href="index.html">Passo Svelto</a><a href="cart.html">Il mio carrello</a></header>
+    <section class="buybox">
+      <h1>Scarpa da corsa Aurora</h1>
+      <p class="price">49,90 €</p>
+      <div class="filler"></div>
+      <fieldset class="sizes">
+        <legend>Taglia</legend>
+        <button type="button" aria-pressed="false">40</button><button type="button" aria-pressed="false">41</button><button type="button" aria-pressed="false">42</button><button type="button" aria-pressed="false">43</button>
+      </fieldset>
+      <!-- a loose add-on line by the size group, in no product card: audit.js reads it as a price of the page -->
+      <p>Calze tecniche abbinate 9,90 €</p>
+      <button class="atc" id="add" type="button">Aggiungi al carrello</button>
+    </section>
+    <div class="bottom"></div>
+  </main>
+  <script>
+    document.querySelectorAll('.sizes button').forEach(b => b.addEventListener('click', () => {
+      document.querySelectorAll('.sizes button').forEach(o => o.setAttribute('aria-pressed', String(o === b)));
+    }));
+    document.getElementById('add').addEventListener('click', () => { document.title = 'MAIN'; });
+  </script>
+</body>
+</html>

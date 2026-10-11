@@ -398,6 +398,10 @@ def text_model() -> str | None       # TEXT_MODEL (default TEXT_HELPER) if TEXT_
 #   guard_blocked + text_withheld, note TEXT_WITHHELD, warning "text_helper_unavailable: ..."), then fill actions are
 #   withheld; checks.text_withheld_at = {url, label, step[, refusal]}. A guard-refused text -> "text_refused".
 # verification.checks.not_assessable (no passing oracle) may be "text_helper_unavailable" or "text_refused".
+# Consent step (settings.consent, before the first observation): a start page where the run stops (guard.should_stop
+#   on its type, URL or observed payment fields) gets no click, PageRecord.consent.reason "checkout_boundary"; a step
+#   that left the tab on another site, with no pilot step after it -> not_assessable "consent_left_shop" (oracle_passed
+#   kept, run partial, run.not_assessable record); a pilot's own click to another site stays passed False.
 # journey record (additive keys of schemas.JourneyRecord), written by finish() / close():
 #   policy (resolved), policy_requested (service writes it), text_helper (model name | None | "host"),
 #   model_calls {choose, text, stale_or_refused, failed[, model]}, timing_ms {decision, text, site, wall},
@@ -411,7 +415,8 @@ EngagementService.run_journey(url, goal, oracle, oracle_params=None, profile="mo
     #   text_helper, next: "wait_run(...)"}; wait=True returns the finish summary. host: {run_id, status, observation,
     #   policy, policy_requested}. journey_act on a typesafe run raises "not open".
     # _finish_summary / journey_finish: policy, policy_requested, text_helper, model_calls, timing_ms, usage, and a
-    #   `next` that names a host journey when Jev could not take a single decision (nothing executed).
+    #   `next` that names a host journey when Jev could not take a single decision (no pilot step executed;
+    #   the consent step's clicks are no steps), with the run's own settings.consent (consent='<policy>').
 EngagementService.judge_with_jev(run_id, *, model=None, use_cache=True, budget_s=None) -> dict
     # {run_id, backend: "jev", available, typesafe_key, reason, model, samples: 1, requests, latency_ms, input_tokens,
     #  accepted, reused, escalated {reason: n}, errors, errors_total, error_groups [{error, pages, tasks}],

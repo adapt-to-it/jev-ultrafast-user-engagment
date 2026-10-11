@@ -1,7 +1,8 @@
 // One read-only pass over the whole document (light DOM plus open shadow roots), evaluated as
 // `(AUDIT_JS)(lexicon)` where lexicon is lexicon.lexicon_for(locale). Returns schemas.AuditPayload.
-// Conventions: rects are page coordinates {x, y, w, h} in CSS px; above_fold means rect.y < innerHeight at scroll 0;
-// shares and coverage are fractions 0..1; every list is capped; texts are visible text, whitespace-collapsed.
+// Conventions: rects are page coordinates {x, y, w, h} in CSS px; above_fold means the rect's centre lies on the first
+// screen at scroll 0 (0 <= x + w/2 < innerWidth and 0 <= y + h/2 < innerHeight); shares and coverage are fractions
+// 0..1; every list is capped; texts are visible text, whitespace-collapsed.
 // Nothing here clicks, types or changes the page, and field values are never read (only quantities in cart rows).
 // Words come from the lexicon; the only fixed tokens are formats (prices, times, dates) and generic markup names.
 (lexicon) => {
@@ -64,9 +65,15 @@
   });
   const box = e => { const r = rectOf(e); return {x: Math.round(r.left + SX), y: Math.round(r.top + SY), w: Math.round(r.width), h: Math.round(r.height)}; };
   // Parked beside the viewport (a closed off-canvas menu or cart drawer, translateX(±100%)): the page never scrolls
-  // there, so the shopper cannot see it without opening it. Above the fold means on the first screen, in both axes.
+  // there, so the shopper cannot see it without opening it.
   const offCanvas = e => { const r = rectOf(e); return r.right <= 0 || r.left >= VW; };
-  const fold = e => rectOf(e).top + SY < VH && !offCanvas(e);
+  // Above the fold: the box's centre on the first screen, in both axes, at scroll 0 (page coordinates), the test
+  // snapshot.js and browser.py apply to a control clickable without scrolling. A button with only its top edge on
+  // screen is below the fold; a box parked off-canvas has its centre outside [0, VW).
+  const fold = e => {
+    const r = rectOf(e), cx = r.left + SX + r.width / 2, cy = r.top + SY + r.height / 2;
+    return cx >= 0 && cx < VW && cy >= 0 && cy < VH;
+  };
   const area = e => { const r = rectOf(e); return Math.round(r.width * r.height); };
   const text = e => clean(e.innerText !== undefined ? e.innerText : e.textContent);
   // A <label> that wraps its control: the label's own words, not the options of the select inside it.

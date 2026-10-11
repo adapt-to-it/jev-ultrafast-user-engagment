@@ -13,6 +13,7 @@ import importlib.metadata
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -43,6 +44,8 @@ from jev_ultrafast.engagement.service import (
     _failed,
     _jev_undecided,
     _JobStore,
+    _ps_start_time,
+    _start_time,
 )
 from jev_ultrafast.engagement.store import RunStore, iso_now
 from jev_ultrafast.engagement.transport import DirectTransport
@@ -168,6 +171,9 @@ def test_tools_carry_names_annotations_and_the_rules_the_host_reads(service):
     assert "never a selector" in by_name["journey_act"].input_schema["properties"]["target"]["description"].lower()
     policy = by_name["run_journey"].input_schema["properties"]["policy"]
     assert policy["default"] == "auto" and policy["enum"] == ["auto", "host", "typesafe"]
+    for name in ("audit_shop", "run_journey"):  # one cookie banner policy, the same default, for audit and journey
+        consent = by_name[name].input_schema["properties"]["consent"]
+        assert consent["default"] == "auto" and consent["enum"] == ["auto", "reject", "accept", "none"], name
     assert by_name["judge_with_jev"].input_schema["required"] == ["run_id"]
     for phrase in ("never measured engagement", "predicted friction", "risk signals", "never place orders",
                    "offered element index"):
@@ -782,6 +788,34 @@ def test_a_run_that_never_started_is_not_waited_for(service):
     assert svc.get_run(fresh)["status"] == "created"
 
 
+def test_without_proc_the_start_time_comes_from_ps():
+    """macOS has no /proc: the owner's start time is the date ps prints, the same for one process every time and
+    another for a process started later, so a reused pid is still told apart; None for a pid that does not exist."""
+    if shutil.which("ps") is None:
+        pytest.skip("no ps on this machine")
+    time.sleep(1.1)  # ps prints to the second: the child starts in another second than this process
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        mine, again = _ps_start_time(os.getpid()), _ps_start_time(os.getpid())
+        assert mine and mine == again and _ps_start_time(child.pid) not in (None, mine)
+    finally:
+        child.kill()
+        child.wait()
+    assert _ps_start_time(child.pid) is None
+
+
+def test_the_ps_start_time_does_not_depend_on_the_callers_time_zone(monkeypatch):
+    """ps prints local time: an owner recorded under one TZ and read under another (a terminal's export, a laptop
+    that changed zone) must still be the same process, never a reused pid."""
+    if shutil.which("ps") is None:
+        pytest.skip("no ps on this machine")
+    seen = set()
+    for zone in ("UTC", "Europe/Rome", "Asia/Tokyo", "America/New_York"):
+        monkeypatch.setenv("TZ", zone)
+        seen.add(_ps_start_time(os.getpid()))
+    assert len(seen) == 1 and None not in seen
+
+
 def test_runs_of_a_process_that_died_are_marked_failed_not_waited_for(service, monkeypatch):
     if os.name != "posix":
         pytest.skip("owner liveness is only checked on POSIX")
@@ -815,13 +849,17 @@ def test_runs_of_a_process_that_died_are_marked_failed_not_waited_for(service, m
     assert svc.store.load(journey)["status"] == "failed"
     with pytest.raises(ValueError, match="still running"):
         svc.score_run(alive)
-    assert sorted(svc.recover_orphans()) == sorted([reused, landed])  # a live pid with another start time: reused
+    # a live pid with another start time is reused, where the start time can be read (/proc, or ps on macOS)
+    readable = _start_time(os.getpid()) is not None
+    assert sorted(svc.recover_orphans()) == sorted([reused, landed] if readable else [landed])
     run = svc.store.load(landed)
     assert run["status"] == "partial" and run["journey"]["status"] == "abandoned" and run["finished_at"]
     assert run["errors"] == [f"interrupted: owning process {dead} is gone"]
     assert f"abandoned: owning process {dead} is gone; closed without verification" in run["warnings"]
     assert svc.get_run(alive)["status"] == svc.get_run(elsewhere)["status"] == "running"
-    assert not any((svc.store.path(r) / "owner.json").exists() for r in (audit, journey, reused, landed))
+    assert not any((svc.store.path(r) / "owner.json").exists()
+                   for r in (audit, journey, landed, *([reused] if readable else [])))
+    assert readable or (svc.store.path(reused) / "owner.json").exists()  # unreadable: a live pid stays the owner
     with pytest.raises(ValueError, match="was interrupted"):
         svc.score_run(audit, [landed])  # an interrupted audit is never scored
     finished = store.new_run("audit", SHOP, {})
@@ -903,7 +941,8 @@ def test_audit_and_host_journey_on_the_fixture_shop(chromium, shop_server, servi
 
         journey = await call(client, "run_journey", url=url, profile="desktop", oracle="cart_contains_item_under_price",
                              goal="Aggiungi al carrello un paio di scarpe da corsa che costi meno di 50 euro",
-                             oracle_params={"max_price": "50"}, optimal_steps=5, optimal_pages=4)
+                             oracle_params={"max_price": "50"}, optimal_steps=5, optimal_pages=4,
+                             consent="none")  # the host rejects the bar itself: an ordinary pilot step
         run_id, observation = journey["run_id"], journey["observation"]
         assert journey["status"] == "running" and observation["observation_id"] == 1
         first = observation["observation_id"]
@@ -1546,6 +1585,63 @@ class PilotRunner(FakeRunner):
         return result
 
 
+class ConsentRunner(PilotRunner):
+    """PilotRunner that keeps the settings it was built with and, as JourneyRunner.start does with a consent policy
+    other than "none", records the consent step: its outcome on the start page, its click in steps.jsonl (source
+    "consent", no step number)."""
+
+    built: list = []
+
+    def __init__(self, settings, *, store, transport_factory=None):
+        super().__init__(settings, store=store, transport_factory=transport_factory)
+        self.settings = settings
+        ConsentRunner.built.append(settings)
+
+    def start(self, url, goal, *, oracle, policy="host", **kwargs):
+        started = super().start(url, goal, oracle=oracle, policy=policy)
+        consent = self.settings.consent
+        outcome = {"policy": consent, "choice": "reject", "via": "first_layer", "clicks": 1,
+                   "reason": "reject offered", "label": "Rifiuta tutti"}
+        self.store.update(self.run_id, lambda run: run.update(pages=[
+            {"page_id": "mobile-journey-start", **({"consent": outcome} if consent != "none" else {})}]))
+        if consent != "none":
+            self.store.append_step(self.run_id, {"source": "consent", "purpose": "consent_reject",
+                                                 "operation": "CLICK", "label": "Rifiuta tutti",
+                                                 "status": "executed"})
+        return started
+
+
+def test_run_journey_takes_the_consent_policy_with_the_audits_default(service, monkeypatch):
+    """run_journey's consent (MCP tool and service) reaches the runner's settings, "auto" when omitted, as the
+    audit's; a value outside the closed set is refused before any runner exists. The consent step's click is no
+    journey step: get_run's steps_logged leaves it out and its page row shows the choice."""
+    monkeypatch.setattr(journey_module, "JourneyRunner", ConsentRunner)
+    ConsentRunner.built = []
+    svc = service()
+    server = build_server(svc)
+
+    async def scenario(client):
+        default = await call(client, "run_journey", url=SHOP, goal="Trova scarpe", oracle="cart_not_empty")
+        none = await call(client, "run_journey", url=SHOP, goal="Trova scarpe", oracle="cart_not_empty",
+                          consent="none")
+        with pytest.raises(ToolFailed):
+            await call(client, "run_journey", url=SHOP, goal="Trova scarpe", oracle="cart_not_empty",
+                       consent="maybe")
+        return default, none
+    default, none = session(server, scenario)
+    assert [s.consent for s in ConsentRunner.built] == ["auto", "none"]
+    summary = svc.get_run(default["run_id"])
+    assert summary["journey"]["steps_logged"] == 0 and summary["pages"][0]["consent"] == "reject"
+    assert "consent" not in svc.get_run(none["run_id"])["pages"][0]
+    for run_id in (default["run_id"], none["run_id"]):
+        svc.journey_finish(run_id, "done")
+    svc.run_journey(SHOP, "Trova scarpe", "cart_not_empty", consent="reject")
+    assert ConsentRunner.built[-1].consent == "reject"
+    with pytest.raises(ValueError, match="consent must be one of"):
+        svc.run_journey(SHOP, "Trova scarpe", "cart_not_empty", consent="maybe")
+    assert len(ConsentRunner.built) == 3
+
+
 def test_run_journey_auto_lets_jev_pilot_when_the_server_has_its_key(service, monkeypatch):
     """policy "auto" (the default): without TYPESAFE_API_KEY the host drives (observation returned); with it Jev
     pilots in the background: next names wait_run then journey_finish, journey_act is refused, and journey_finish
@@ -1640,7 +1736,8 @@ def test_jev_pilots_a_journey_on_the_fixture_shop_by_default(chromium, shop_serv
 
     async def scenario(client):
         started = await call(client, "run_journey", url=url, goal="Aggiungi al carrello un prodotto",
-                             oracle="cart_not_empty", profile="desktop")
+                             oracle="cart_not_empty", profile="desktop",
+                             consent="none")  # jev_pilot rejects the bar itself: an ordinary pilot step
         assert started["policy"] == "typesafe" and started["next"].startswith("wait_run(")
         for _ in range(5):
             waited = await call(client, "wait_run", run_id=started["run_id"], timeout_s=60)
@@ -1664,8 +1761,11 @@ def test_jev_pilots_a_journey_on_the_fixture_shop_by_default(chromium, shop_serv
 def test_a_refused_key_ends_the_jev_journey_before_any_step_and_names_the_host_journey(
         chromium, shop_server, service, monkeypatch):
     """Ruling on an invalid or expired TypeSafe key: policy auto still chooses Jev (presence, never a probe); the
-    first decision's HTTP 401 costs one request, nothing is executed, and journey_finish says so (status error,
-    journey_error, choose 0, failed 1, steps 0) with next naming a host journey, which the host then drives."""
+    first decision's HTTP 401 costs one request, no pilot step is executed (steps.jsonl holds the consent step's
+    click only), and journey_finish says so (status error, journey_error, choose 0, failed 1, steps 0) with next
+    naming a host journey, which the host then drives (its own consent step clicks the bar again). next names the
+    run's own consent policy (here accept, not the tool's default auto): a host journey started without it would
+    reject the bar this run accepted, so its consent step would not repeat this one's."""
     monkeypatch.setattr(PageCollector, "net_quiet_s", 0.8)
     monkeypatch.setattr(PageCollector, "lcp_quiet_s", 0.8)
     monkeypatch.setenv("TYPESAFE_API_KEY", "revoked-key")
@@ -1681,7 +1781,7 @@ def test_a_refused_key_ends_the_jev_journey_before_any_step_and_names_the_host_j
     url = shop_server.url("shop/index.html")
     since = len(shop_server.requests)
     journey = {"url": url, "goal": "Aggiungi al carrello un prodotto", "oracle": "cart_not_empty",
-               "profile": "desktop"}
+               "profile": "desktop", "consent": "accept"}
 
     async def scenario(client):
         started = await call(client, "run_journey", **journey)
@@ -1700,9 +1800,32 @@ def test_a_refused_key_ends_the_jev_journey_before_any_step_and_names_the_host_j
     assert finished["model_calls"]["choose"] == 0 and finished["model_calls"]["failed"] == 1
     assert any("HTTP 401" in warning for warning in finished["warnings"])
     assert finished["next"].startswith("run_journey(the same url, goal, oracle, oracle_params and profile, "
-                                       "policy='host'): Jev could not decide")
+                                       "consent='accept', policy='host'): Jev could not decide")
+    # what the hint says was executed is what the evidence holds: the consent step's click, no pilot step
+    assert "no pilot step was executed (only the consent step's clicks" in finished["next"]
+    (click,) = svc.store.read_steps(started["run_id"])
+    assert click["source"] == "consent" and click["status"] == "executed" and "step" not in click
+    assert click["purpose"] == "consent_accept"
+    (again,) = svc.store.read_steps(hosted["run_id"])  # its own consent step, under the same policy: the same click
+    assert (again["source"], again["purpose"], again["label"]) == ("consent", "consent_accept", click["label"])
+    assert {svc.store.load(run_id)["settings"]["consent"] for run_id in (started["run_id"], hosted["run_id"])} == {
+        "accept"}
     assert hosted["policy"] == "host" and hosted["observation"]["elements"] and len(sent) == 1
     assert not [r for r in shop_server.requests[since:] if r["method"] != "GET" or r["path"].startswith("/pay")]
+
+
+def test_the_host_journey_hint_names_the_runs_own_consent_policy(service):
+    """The fallback's next carries the consent policy the failed run used (run.json settings.consent), never the
+    tool's default by omission; a run record without it (older runs) reads as auto, the default it ran with."""
+    svc = service()
+    journey = {"policy": "typesafe", "status": "error",
+               "model_calls": {"choose": 0, "text": 0, "stale_or_refused": 0, "failed": 1}}
+    result = {"run_id": "20261010T120000000000Z_journey_shop.example", "status": "error", "steps": 0,
+              "verification": {"passed": None, "checks": {"not_assessable": "journey_error"}}}
+    for settings, consent in (({"consent": "none"}, "none"), ({"consent": "reject"}, "reject"), ({}, "auto")):
+        summary = svc._finish_summary(result, run={"settings": settings, "journey": journey})
+        assert summary["next"].startswith("run_journey(the same url, goal, oracle, oracle_params and profile, "
+                                          f"consent='{consent}', policy='host'): Jev could not decide"), summary
 
 
 def test_only_a_jev_journey_that_decided_nothing_names_the_host_journey():
@@ -1815,7 +1938,8 @@ def test_a_jev_journey_abandoned_at_shutdown_keeps_what_deciding_cost(chromium, 
     monkeypatch.setattr(typesafe, "post_json", post)
     monkeypatch.setattr(journey_module.JourneyRunner, "_send", held)
     svc = service(transport_factory=lambda: DirectTransport(chromium.ws_url))
-    started = svc.run_journey(shop_server.url("shop/resi.html"), "Premi Conta", "cart_not_empty", profile="desktop")
+    started = svc.run_journey(shop_server.url("shop/resi.html"), "Premi Conta", "cart_not_empty", profile="desktop",
+                              consent="none")  # the steps file holds the three decisions only
     run_id = started["run_id"]
     assert started["policy"] == "typesafe" and entered.wait(60)
     svc.shutdown(join_s=0.2)
@@ -1919,6 +2043,86 @@ def test_the_smoke_never_reuses_a_cached_jev_verdict(service, monkeypatch, tmp_p
     assert again["judge"]["accepted_in_run"] == judged["accepted"] > 0  # this call's, never the cached ones
     assert svc.store.load(control)["judgments"] == before["judgments"]  # nothing stored
     assert svc.store.load(control)["model_calls"] == before["model_calls"]
+
+
+def test_the_smoke_passes_its_consent_option_and_records_the_journeys_consent_step(service, monkeypatch, capsys):
+    """--consent (default auto) goes to the audit and to the journey; the summary keeps the journey's consent step
+    next to it (choice, reason, clicks, via), and the step's click is printed apart from the pilot's steps."""
+    smoke = smoke_module()
+    assert smoke.parse_args([]).consent == "auto" and smoke.parse_args(["--consent", "none"]).consent == "none"
+    with pytest.raises(SystemExit):
+        smoke.parse_args(["--consent", "maybe"])
+    monkeypatch.setattr(journey_module, "JourneyRunner", ConsentRunner)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+    audits = []
+
+    def audit_shop(self, url, profiles=None, stages=None, browser="auto", locale="it", consent="auto", repeats=1,
+                   **kwargs):
+        audits.append(consent)
+        raise RuntimeError("no audit in this test")
+    monkeypatch.setattr(EngagementService, "audit_shop", audit_shop)
+    svc = service()
+    for consent, outcome in (("reject", {"choice": "reject", "reason": "reject offered", "clicks": 1,
+                                         "via": "first_layer"}), ("none", None)):
+        ConsentRunner.built = []
+        args = smoke.parse_args(["--consent", consent])
+        with pytest.raises(RuntimeError, match="no audit"):
+            smoke.run_audit(svc, SHOP, args, False, {})
+        summary = {}
+        journey = smoke.run_journey(svc, SHOP, args, None, summary)
+        assert audits[-1] == consent and ConsentRunner.built[-1].consent == consent
+        assert journey["consent"] == outcome and summary["journey"]["policy"] == "typesafe"
+        out = capsys.readouterr().out
+        assert f"consent {consent}" in out and ("consent step: not run" in out) is (outcome is None)
+
+
+def test_the_smoke_summary_names_no_home_directory(tmp_path, monkeypatch):
+    """smoke_summary.json gets committed as evidence: its paths are relative to the working directory, or start at
+    "~" outside it, so the file never carries the user's home (/Users/<name>/...)."""
+    smoke = smoke_module()
+    home = tmp_path / "home" / "someone"
+    (home / "repo").mkdir(parents=True)
+    monkeypatch.setattr(smoke.Path, "home", lambda: home)
+    monkeypatch.chdir(home / "repo")
+    assert smoke.shown_path(home / "repo" / "artifacts" / "smoke-fixture") == "artifacts/smoke-fixture"
+    assert smoke.shown_path("artifacts/smoke-real/judge-cache-x") == "artifacts/smoke-real/judge-cache-x"
+    assert smoke.shown_path(home / "elsewhere" / "report.html") == "~/elsewhere/report.html"
+    assert smoke.shown_path(tmp_path / "other") == (tmp_path / "other").resolve().as_posix()  # neither: as it is
+    error = f"RuntimeError: Chromium exited with code 1: {home}/.cache/ms-playwright/chrome\nlog"
+    scrubbed = smoke.without_home({"errors": {"journey": error}, "checks": [{"detail": error}], "n": 1,
+                                   "other": f"{home}x/file"})  # another user's home is not this one
+    assert scrubbed == {"errors": {"journey": "RuntimeError: Chromium exited with code 1: ~/.cache/ms-playwright/"
+                                              "chrome\nlog"},
+                        "checks": [{"detail": "RuntimeError: Chromium exited with code 1: ~/.cache/ms-playwright/"
+                                              "chrome\nlog"}], "n": 1, "other": f"{home}x/file"}
+
+
+def test_the_smoke_records_what_jev_chose_without_page_text():
+    """Each choose request (journey decision, crawler lookup) records the operation, every operation's probability
+    and the chosen offered element: a journey that ended BLOCKED can be read from the summary alone."""
+    smoke = smoke_module()
+    body = {"state": {"page": {"url": "http://shop.test/", "title": "Shop", "text": "page text never copied"},
+                      "elements": [{"index": "1", "label": "Scarpe da corsa"}, {"index": "2", "label": "Accetta"}]},
+            "questions": {"operation": {"type": "choice", "criteria": {"CLICK": "c", "BLOCKED": "b"}},
+                          "click_target": {"type": "choice", "criteria": {"1": {"element": "[1] Scarpe da corsa"},
+                                                                          "2": {"element": "[2] Accetta"}}}}}
+    blocked = {"answers": {"operation": {"choice": "BLOCKED", "probabilities": {"CLICK": 0.4, "BLOCKED": 0.6},
+                                         "confidence": 0.6},
+                           "click_target": {"choice": "2", "probabilities": {"1": 0.3, "2": 0.7}}}}
+    assert smoke._choice(body, blocked) == {"operation": "BLOCKED", "probabilities": {"BLOCKED": 0.6, "CLICK": 0.4}}
+    click = {"answers": {"operation": {"choice": "CLICK", "probabilities": {"CLICK": 0.9, "BLOCKED": 0.1}},
+                         "click_target": {"choice": "1", "probabilities": {"1": 0.94, "2": 0.06}}}}
+    chosen = smoke._choice(body, click)
+    assert chosen == {"operation": "CLICK", "probabilities": {"CLICK": 0.9, "BLOCKED": 0.1},
+                      "target": "[1] Scarpe da corsa", "target_probability": 0.94}
+    assert "page text" not in json.dumps(chosen)
+    assert smoke._choice({"state": {"tasks": []}}, click) is None  # a judge request
+    assert smoke._choice(body, {"answers": {}}) is None and smoke._choice(body, None) is None
+    recorder = smoke.Recorder(None)
+    recorder._post = lambda url, key, request: blocked
+    recorder.phase = "journey"
+    recorder.post(smoke.SYSTEMONE, "k", body)
+    assert recorder.calls[0]["choice"]["operation"] == "BLOCKED" and "page text" not in json.dumps(recorder.calls)
 
 
 def test_the_smoke_counts_a_text_request_without_a_value_as_the_run_does():

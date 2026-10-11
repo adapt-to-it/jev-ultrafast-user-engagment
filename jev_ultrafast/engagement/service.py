@@ -28,6 +28,7 @@ import logging
 import os
 import re
 import socket
+import subprocess
 import threading
 import time
 from collections import Counter
@@ -133,12 +134,29 @@ class _Live:
 # ---------------------------------------------------------------- run owners (owner.json)
 
 
-def _start_time(pid: int) -> int | None:
-    """The process start time in clock ticks since boot (/proc/<pid>/stat field 22), None without /proc."""
+def _start_time(pid: int) -> int | str | None:
+    """The process start time, only ever compared for equality on the machine that recorded it: clock ticks since
+    boot (/proc/<pid>/stat field 22) where /proc exists (Linux), else the start date `ps -o lstart=` prints (macOS
+    and the BSDs, to the second, in UTC and the C locale); None when neither can be read."""
     try:
         return int(Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()[19])
     except (OSError, ValueError, IndexError):
+        pass
+    if Path("/proc/self/stat").exists():  # /proc works here: no entry for pid means no such process
         return None
+    return _ps_start_time(pid)
+
+
+def _ps_start_time(pid: int) -> str | None:
+    """The start date `ps -o lstart=` prints for pid ("Sat Oct 10 14:17:44 2026"), None when ps is missing, fails or
+    knows no such process. In UTC and the C locale: ps prints local time, so two processes with another TZ (a
+    terminal's export, a laptop that changed zone) would otherwise read one live owner as a reused pid."""
+    try:
+        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=2,
+                             env={**os.environ, "LC_ALL": "C", "TZ": "UTC0"})
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return " ".join(out.stdout.split()) or None
 
 
 def _own(store: RunStore, run_id: str) -> None:
@@ -374,13 +392,14 @@ def _pilot(journey: dict) -> dict:
 
 
 REPORT_JOURNEY = ("run_id", "goal", "oracle", "oracle_params", "profile", "policy", "policy_requested", "text_helper",
-                  "status", "steps", "optimal_steps", "model_calls", "timing_ms", "usage", "started_at", "finished_at")
+                  "status", "steps", "optimal_steps", "model_calls", "timing_ms", "usage", "started_at", "finished_at",
+                  "consent")
 
 
 def _report_journey(journey) -> dict:
     """A merged journey of report.json for get_report's summary, by name (a dict cut at its first keys would drop the
-    run id, the steps and what deciding cost): the fields of _journey_brief plus the steps count and the tokens, and
-    the verdict as passed plus why it could not be assessed."""
+    run id, the steps and what deciding cost): the fields of _journey_brief plus the steps count, the tokens and the
+    consent step's outcome, and the verdict as passed plus why it could not be assessed."""
     if not isinstance(journey, dict):
         return _compact(journey)
     verification = journey.get("verification") if isinstance(journey.get("verification"), dict) else {}
@@ -403,8 +422,10 @@ def _error_groups(errors) -> list[dict]:
 
 def _jev_undecided(summary: dict) -> bool:
     """A Jev journey that stopped before its first step because TypeSafe gave no decision (a refused or expired key,
-    an unreachable provider): nothing was executed, so a host journey with the same goal repeats no browser action. A
-    browser failure (no failed request) or a failure after some steps does not qualify."""
+    an unreachable provider): no pilot step was executed (the consent step's clicks on the start page's banner, if
+    any, are no pilot steps), so a host journey with the same goal and consent policy (the summary's next names it)
+    repeats no pilot action; only its own consent step clicks the banner again, in its fresh context. A browser
+    failure (no failed request) or a failure after some steps does not qualify."""
     calls = summary.get("model_calls") if isinstance(summary.get("model_calls"), dict) else {}
     checks = (summary.get("verification") or {}).get("checks") or {}
     return (summary.get("policy") == "typesafe" and summary.get("status") == "error"
@@ -694,9 +715,12 @@ class EngagementService:
                 "scope": report.scope_line(overall, run.get("kind"))}
 
     def _journey_brief(self, run: dict) -> dict:
+        from .friction import pilot
+
         journey = run["journey"]
         verification = journey.get("verification") or {}
-        steps = [s for s in self.store.read_steps(run["run_id"]) if s.get("operation") != "NAVIGATION"]
+        steps = [s for s in self.store.read_steps(run["run_id"])  # the pilot's records, not the consent step's
+                 if s.get("operation") != "NAVIGATION" and pilot(s)]
         return {"goal": _clip(journey.get("goal") or "", 200), "oracle": journey.get("oracle"),
                 "oracle_params": journey.get("oracle_params"), "profile": journey.get("profile"),
                 **_pilot(journey), "status": journey.get("status"), "steps_logged": len(steps),
@@ -708,13 +732,16 @@ class EngagementService:
     def run_journey(self, url: str, goal: str, oracle: str, oracle_params: dict | None = None,
                     profile: str = "mobile", policy: str = "auto", max_steps: int = 40, browser: str = "auto",
                     optimal_steps: int | None = None, optimal_pages: int | None = None, *, locale: str = "it",
-                    wait: bool = False, headless: bool = True, screenshots: bool = True) -> dict:
+                    consent: str = "auto", wait: bool = False, headless: bool = True,
+                    screenshots: bool = True) -> dict:
         """policy "auto" (default): "typesafe" when TYPESAFE_API_KEY is set, else "host" (resolve_policy; the run's
         journey records policy and policy_requested). "host": open the start page and return {run_id, status,
         observation, policy, policy_requested}; the host then calls journey_act and journey_finish. "typesafe": Jev
         (the original agent loop: model.choose, one TypeSafe request per decision) chooses until the journey stops, in
         a background thread ({run_id, status "running", policy, policy_requested, text_helper, next}: poll wait_run,
-        then journey_finish), or in this thread with wait=True (the finish summary)."""
+        then journey_finish), or in this thread with wait=True (the finish summary). consent (auto, reject, accept,
+        none; default auto, as the audit's): the policy the runner applies to the start page's cookie banner before the
+        first observation, with the audit's chain; its clicks are no pilot actions (JourneyRunner.start)."""
         from .journey import JourneyRunner
         from .oracles import parse_params
 
@@ -723,7 +750,7 @@ class EngagementService:
         if profile not in DEVICE_PROFILES:
             raise ValueError(f"profile must be one of {list(DEVICE_PROFILES)}")
         settings = EngagementSettings(url=url, profiles=[profile], browser=browser, locale=locale, headless=headless,
-                                      screenshots=screenshots, artifacts_dir=str(self.store.root))
+                                      consent=consent, screenshots=screenshots, artifacts_dir=str(self.store.root))
         with self._lock:
             self._refuse_when_stopping()
             running = sum(1 for job in self._jobs.values() if job.kind == "journey" and not job.done.is_set())
@@ -895,9 +922,15 @@ class EngagementService:
             "next": f"score_run(<audit run_id>, journey_run_ids=['{result['run_id']}'])",
         }
         if _jev_undecided(summary):  # the skill's fallback: the host pilots the same journey once
-            summary["next"] = ("run_journey(the same url, goal, oracle, oracle_params and profile, policy='host'): Jev "
-                               "could not decide (see warnings) and nothing was executed; you pilot it with "
-                               "journey_act, and score_run takes that journey's run id instead of this one")
+            # the run's own consent policy, named: the tool's default (auto) is not necessarily what this run used, and
+            # the host journey's consent step repeats this one's clicks only under the same policy
+            consent = (run.get("settings") or {}).get("consent") or "auto"
+            summary["next"] = ("run_journey(the same url, goal, oracle, oracle_params and profile, "
+                               f"consent={consent!r}, policy='host'): Jev could not decide (see warnings) and no pilot "
+                               "step was executed (only the consent step's clicks on the start page's banner, if any, "
+                               "which the host journey's own consent step repeats in its fresh context under the same "
+                               "consent policy); you pilot it with journey_act, and score_run takes that journey's run "
+                               "id instead of this one")
         return summary
 
     def _ensure_reaper(self) -> None:

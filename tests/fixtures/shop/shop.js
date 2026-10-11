@@ -73,9 +73,26 @@
   }
 
   // ------------------------------------------------------------- consent: symmetric bar (clean), accept-only modal (dark)
+  // a consent manager that reloads the page once it stored the choice (Iubenda's reloadOnConsent, CookieYes,
+  // Complianz): "?consent_reload=<ms>" after a timer (0: at once), "?consent_post=<ms>" once its POST, which the
+  // server holds <ms>, has returned; "?slow=<ms>": one image the server holds <ms>, so every load of the page lasts that;
+  // "?consent_manage=page" (or "tab"): the dark modal's "Personalizza" is a link to the privacy page (in a new tab);
+  // "offsite": to the privacy page on localhost, another registrable domain than 127.0.0.1 (a CMP's or policy page off
+  // the shop)
+  const reload = () => {
+    if (params.has('consent_reload')) setTimeout(() => location.reload(), Number(params.get('consent_reload')) || 0);
+    else if (params.has('consent_post')) {
+      fetch('/consent?delay=' + (Number(params.get('consent_post')) || 0), {method: 'POST', body: '{}'}).then(() => location.reload());
+    }
+  };
+  if (params.has('slow')) {
+    const img = new Image(1, 1);
+    Object.assign(img, {alt: '', src: 'img/shoe-a.svg?delay=' + (Number(params.get('slow')) || 0)});
+    document.body.append(img);
+  }
   const consent = () => {
     if (store.get('ps-consent', null)) return;
-    const done = choice => { store.set('ps-consent', {choice, at: Date.now()}); document.querySelectorAll('[data-consent-ui]').forEach(e => e.remove()); };
+    const done = choice => { store.set('ps-consent', {choice, at: Date.now()}); document.querySelectorAll('[data-consent-ui]').forEach(e => e.remove()); reload(); };
     const manage = box => {
       box.innerHTML = `<h2 id="consent-title">Preferenze cookie</h2>
         <label class="addon"><input type="checkbox" checked disabled> Cookie tecnici (sempre attivi)</label>
@@ -111,7 +128,10 @@
       box.innerHTML = `<h2 id="consent-title">La tua esperienza, su misura</h2>
         <p>Usiamo i cookie per offrirti offerte personalizzate e pubblicità su misura. Continuando accetti l'uso dei cookie.</p>
         <button class="btn btn-loud btn-block" data-choice="all">Accetta e continua</button>
-        <button class="tiny" data-choice="manage">Personalizza</button>`;
+        ${params.has('consent_manage') ? `<a class="tiny" href="${params.get('consent_manage') === 'offsite'
+          ? new URL('privacy.html', location.href.replace('//127.0.0.1', '//localhost')).href : 'privacy.html'}"${
+          params.get('consent_manage') === 'tab' ? ' target="_blank"' : ''}>Personalizza</a>`
+          : '<button class="tiny" data-choice="manage">Personalizza</button>'}`;
       document.body.append(backdrop, box);
       box.addEventListener('click', e => {
         const choice = e.target.closest('[data-choice]')?.dataset.choice;

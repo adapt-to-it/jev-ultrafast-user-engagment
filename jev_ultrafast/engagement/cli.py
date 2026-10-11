@@ -188,7 +188,8 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--profiles", type=_choices(list(DEVICE_PROFILES)), default=list(DEVICE_PROFILES),
                        help="es. mobile,desktop")
     audit.add_argument("--stages", type=_choices(STAGES), default=list(STAGES), help=f"es. {','.join(STAGES)}")
-    audit.add_argument("--consent", choices=("auto", "reject", "accept", "none"), default="auto")
+    audit.add_argument("--consent", choices=("auto", "reject", "accept", "none"), default="auto",
+                       help="banner dei cookie (auto rifiuta quando si può); vale anche per il journey di --goal")
     audit.add_argument("--repeats", type=_integer(1, 5), default=1, help="caricamenti per pagina (mediane), 1-5")
     audit.add_argument("--max-pages", type=_integer(1))
     audit.add_argument("--judge", choices=("none", *JUDGES), default="none",
@@ -201,6 +202,8 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("journey", parents=[common, browser, journey], help="journey con policy typesafe")
     run.add_argument("url", type=_shop_url)
     run.add_argument("--profile", choices=list(DEVICE_PROFILES), default="mobile")
+    run.add_argument("--consent", choices=("auto", "reject", "accept", "none"), default="auto",
+                     help="banner dei cookie della pagina iniziale, gestito prima della prima decisione")
 
     judge = sub.add_parser("judge", parents=[common], help="giudizi LLM sui task di una run di audit")
     judge.add_argument("run_id")
@@ -289,7 +292,8 @@ def _journey_options(args, parser) -> dict | None:
     if not os.environ.get("TYPESAFE_API_KEY"):
         raise Failure(NO_TYPESAFE)
     return {"goal": args.goal, "oracle": args.oracle, "oracle_params": params, "policy": args.policy,
-            "max_steps": args.max_steps, "optimal_steps": args.optimal_steps, "optimal_pages": args.optimal_pages}
+            "max_steps": args.max_steps, "optimal_steps": args.optimal_steps, "optimal_pages": args.optimal_pages,
+            "consent": args.consent}  # audit --goal: the audit's own --consent
 
 
 # ---------------------------------------------------------------- human output (Italian)

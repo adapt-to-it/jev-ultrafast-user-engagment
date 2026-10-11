@@ -110,7 +110,8 @@ class Snippet(TypedDict):
 class AuditPayload(TypedDict, total=False):
     """Output of audit.js: one Runtime.evaluate over the whole document (not only the viewport).
 
-    Rects are page coordinates {x, y, w, h}; `above_fold` means rect.y < viewport height at scroll 0.
+    Rects are page coordinates {x, y, w, h}; `above_fold` means the rect's centre lies on the first screen at scroll 0
+    (0 <= x + w/2 < viewport width and 0 <= y + h/2 < viewport height): a box with only an edge on screen is not.
     Sections are dicts so audit.js can grow without breaking readers; readers must use .get().
     """
 
@@ -178,7 +179,9 @@ class PageRecord(TypedDict, total=False):
     probes: dict  # active probes run by the crawler, e.g. {"search_autocomplete": {typed, options, latency_ms}};
     #               "jev_fallback": {stage, purpose, goal, model, latency_ms, usage, operation, target, label, href,
     #               probability, confidence, executed, reason} when Jev chose the element of a stage the lexicon missed
-    consent: dict  # {"choice": "reject"|"accept"|"none", "reason": str} when the crawler handled a consent banner
+    consent: dict  # {"choice": "reject"|"accept"|"none", "reason": str} when the crawler handled a consent banner;
+    #                a journey's start page also: url_after (the consent step left the tab on another page) and
+    #                closed_tabs (URLs of tabs the step opened, closed in it), only when they happened
     notes: list[str]
     repeat_of: NotRequired[str]  # settings.repeats > 1: page_id of the first load of the same URL (checks.py reports
     #                              the median over a page and its repeats, one row per distinct page)
@@ -326,8 +329,9 @@ class JourneyRecord(TypedDict, total=False):
     status: str  # running | done | blocked | stopped_at_checkout_boundary | budget_exhausted | error
     verification: dict | None  # {"passed": bool | None, "checks": {...}}; None only with checks["not_assessable"]
     #                            ("bot_challenge", "journey_error", "navigation_error", "page_unreadable",
-    #                            "text_helper_unavailable", "cart_unreadable", "final_page_unreadable",
-    #                            "cart_price_ambiguous", "cart_items_unreadable", "cart_price_unreadable") or
+    #                            "text_helper_unavailable", "text_refused", "consent_left_shop", "cart_unreadable",
+    #                            "final_page_unreadable", "cart_price_ambiguous", "cart_items_unreadable",
+    #                            "cart_price_unreadable") or
     #                            checks["error"];
     #                            checks["navigation_error"] = {url, error}: the journey ended on a page that did
     #                            not load

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Carrello | Passo Svelto</title>
+  <link rel="icon" href="data:,">
+  <style>
+    /* a mobile cart whose checkout CTA sits in a sticky bottom bar (no inner scroller: only the window scrolls), and
+       an in-flow link with the same label higher up */
+    body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1d232b; background: #ffffff; }
+    h1 { margin: 0; padding: 16px; font-size: 24px; line-height: 32px; }
+    .line { margin: 0; padding: 0 16px; }
+    .gap { height: 560px; }
+    .inline { display: block; margin: 0 16px; line-height: 40px; }
+    .long { height: 1800px; }
+    .bar { position: sticky; bottom: 0; height: 64px; padding: 8px 16px; box-sizing: border-box;
+           background: #ffffff; border-top: 1px solid #e2e7ee; }
+    .checkout { display: block; height: 48px; background: #0b6b3a; color: #ffffff; text-align: center;
+                line-height: 48px; text-decoration: none; font-weight: 700; }
+    footer { height: 600px; background: #f4f6f8; }
+  </style>
+</head>
+<body data-page="cart">
+  <main>
+    <h1>Il tuo carrello</h1>
+    <p class="line">Scarpa Aurora, taglia 42, quantità 1: 89,90 €.</p>
+    <div class="gap"></div>
+    <a class="inline" href="checkout.html?from=inline">Procedi all'acquisto</a>
+    <div class="long"></div>
+    <div class="bar"><a class="checkout" href="checkout.html">Procedi all'acquisto</a></div>
+  </main>
+  <footer><p class="line">Spedizione gratuita sopra i 49 €.</p></footer>
+</body>
+</html>

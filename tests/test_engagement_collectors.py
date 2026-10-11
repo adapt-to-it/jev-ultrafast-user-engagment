@@ -518,7 +518,8 @@ def test_home_audit(run):
     assert {"Trail", "Abbigliamento", "Accessori", "Offerte"} <= {c["label"] for c in audit["nav"]["categories"]}
     consent = [o for o in audit["overlays"] if o["kind"] == "consent"]
     assert len(consent) == 1 and consent[0]["accept_labels"] and consent[0]["reject_labels"]
-    assert consent[0]["accept_area"] == consent[0]["reject_area"] and not consent[0]["blocking"]
+    # the same CSS for both buttons; the rounded areas may differ by a pixel between Chrome builds (20848 vs 20849)
+    assert abs(consent[0]["accept_area"] - consent[0]["reject_area"]) <= 2 and not consent[0]["blocking"]
     trust = audit["trust"]
     assert trust["contact"] == {**trust["contact"], "email": True, "phone": True, "address": True}
     assert "01234567897" in trust["vat_id"] and trust["policy_count"] == 4
@@ -2718,6 +2719,62 @@ def test_closed_off_canvas_drawers_are_not_on_the_first_screen(lab):
                         "/p/aurora")
     assert opened["search"]["present"] and opened["search"]["above_fold"]
     assert opened["targets"]["interactive"] > 3
+
+
+# Placed from the viewport the page gets (desktop 1366x768, mobile 390x844): an add-to-cart showing only its top 2 px,
+# a buy-now cut at the bottom with its centre on screen, two prices in a clipped strip across the right edge (centre
+# inside, centre beyond) and a cart drawer parked off-canvas.
+EDGES = """<!doctype html><html lang="it"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Scarpa Aurora</title>
+<style>body{margin:0;font-family:sans-serif}.btn{position:absolute;left:16px;width:220px;height:48px;border:0;
+background:#c00;color:#fff;font-size:18px}.strip{position:absolute;top:200px;left:0;width:100%;height:40px;
+overflow:hidden}.strip span{position:absolute;top:0;width:150px}
+.drawer{position:fixed;top:0;right:0;width:85%;height:100%;background:#fff;transform:translateX(100%)}</style></head>
+<body><main><h1>Scarpa Aurora</h1><div class="price">89,00 €</div>
+<div class="strip"><span id="inside">9,00 €</span><span id="beyond">4,00 €</span></div>
+<button class="btn" id="peek">Aggiungi al carrello</button><button class="btn" id="cut">Compra ora</button></main>
+<aside class="drawer"><h2>Carrello</h2><p>Totale <b>129,00 €</b></p><button class="btn">Procedi al checkout</button>
+</aside>
+<script>
+const at = (id, prop, px) => { document.getElementById(id).style[prop] = px + 'px'; };
+at('peek', 'top', innerHeight - 2); at('cut', 'top', innerHeight - 30);
+at('inside', 'left', innerWidth - 120); at('beyond', 'left', innerWidth - 40);
+</script></body></html>"""
+
+
+@pytest.fixture(params=["desktop", "mobile"])
+def screen(request, chromium, shop_server):
+    """The lab tab on each device profile."""
+    transport = DirectTransport(chromium.ws_url)
+    context = new_context(transport)
+    collector = PageCollector(transport, None, None, profile=request.param, context_id=context, screenshots=False)
+    collector.net_quiet_s = collector.lcp_quiet_s = 0.3
+    browser = collector.open(shop_server.url("shop/resi.html"))
+    yield collector, browser
+    browser.close()
+    close_context(transport, context)
+    transport.close()
+
+
+def test_above_the_fold_means_the_centre_on_the_first_screen(screen):
+    """above_fold is the box's centre on the first screen in both axes at scroll 0, the test snapshot.js applies to a
+    control clickable without scrolling: 2 px of a button peeking above the bottom edge are not enough (the top-edge
+    rule said yes), a box cut by an edge with its centre inside is above the fold, an off-canvas drawer never is."""
+    audit = page_audit(screen, EDGES, "/p/aurora")
+    width, height = audit["viewport"]["w"], audit["viewport"]["h"]
+    assert (width, height) == ((1366, 768) if screen[0].profile == "desktop" else (390, 844))
+    ctas = {c["label"]: c for c in audit["ctas"]}
+    peek, cut = ctas["Aggiungi al carrello"], ctas["Compra ora"]
+    assert peek["rect"]["y"] == height - 2 and not peek["above_fold"]
+    assert cut["rect"]["y"] + cut["rect"]["h"] > height and cut["above_fold"]
+    pdp = audit["pdp"]
+    assert pdp["add_to_cart"]["present"] and not pdp["add_to_cart"]["above_fold"] and pdp["buy_now"]["above_fold"]
+    assert "Procedi al checkout" not in ctas  # parked off-canvas: no CTA at all
+    prices = {p["text"]: p for p in audit["prices"]}
+    assert prices["9,00 €"]["rect"]["x"] + prices["9,00 €"]["rect"]["w"] > width and prices["9,00 €"]["above_fold"]
+    assert prices["4,00 €"]["rect"]["x"] < width and not prices["4,00 €"]["above_fold"]  # centre beyond the edge
+    assert not prices["129,00 €"]["above_fold"]  # in the drawer
+    assert pdp["price"]["text"] == "89,00 €" and pdp["price"]["above_fold"]
 
 
 DECLARED_EN = """<!doctype html><html lang="en-US"><head><meta charset="utf-8"><title>Scarpa Aurora</title></head><body>
