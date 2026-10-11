@@ -2414,10 +2414,11 @@ def test_a_consent_step_that_leaves_the_start_page_says_so(journey, shop_server)
 def test_a_consent_step_that_leaves_the_shop_makes_the_outcome_not_assessable(journey, shop_server):
     """The same modal whose "Personalizza" links to a page on another site (a CMP's or a policy page off the shop):
     the chain presses it, the first observation is that site's page and the run ends there (left_shop) before the
-    pilot is asked anything. The oracle's failure on that page is the consent step's, not the shop's: FAI.JOURNEY_SUCCESS
-    is not assessed (consent_left_shop, the oracle's reading kept as evidence) and the run is partial. Before, the
-    journey read as the shop failing the goal with zero pilot decisions, and score_run merged that failure into the
-    ERS. A pilot's own click to another site stays a failed goal (test_another_site_ends_the_journey_...)."""
+    pilot is asked anything. The oracle's failure on that page is the consent step's, not the shop's:
+    FAI.JOURNEY_SUCCESS is not assessed (consent_left_shop, the oracle's reading kept as evidence) and the run is
+    partial. Before, the journey read as the shop failing the goal with zero pilot decisions, and score_run merged
+    that failure into the ERS. A pilot's own click to another site stays a failed goal
+    (test_another_site_ends_the_journey_...)."""
     make, store = journey
     runner = make("auto")
     started = runner.start(shop_server.url("shop/index.html?dark=1&consent_manage=offsite"),
@@ -2501,7 +2502,8 @@ def test_a_checkout_start_page_gets_no_consent_click(journey, shop_server, monke
     lets through on a checkout page as a link away: the tab left the checkout, the first observation was the privacy
     page and the run went on past the first checkout page."""
     if rule == "url":
-        from jev_ultrafast.engagement import collectors, journey as runner_module, pagetypes
+        from jev_ultrafast.engagement import collectors, pagetypes
+        from jev_ultrafast.engagement import journey as runner_module
 
         def blind(audit, url, **kwargs):
             return {**pagetypes.classify(audit, url, **kwargs), "type": "other"}

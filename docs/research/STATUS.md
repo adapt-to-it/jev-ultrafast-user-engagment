@@ -1,4 +1,4 @@
-# Stato del lavoro (10 ottobre 2026)
+# Stato del lavoro (11 ottobre 2026)
 
 ## Fatto
 - Catalogo KPI (`docs/engagement-kpi.md`), audit deterministico multi-pagina, journey, scoring, giudizi, report,
@@ -25,6 +25,17 @@
      reso esplicito come guardia. Quarto giro raggiunto: il ciclo si chiude qui come da piano.
 - Gate finale: `ruff` pulito, suite `pytest` completa, `node --check` sui quattro JS, `uv build`,
   `claude plugin validate .` e `--strict`, `jev_ultrafast/model.py` e `questions.py` invariati rispetto al fork.
+- Dopo le prove sul Mac (11 ottobre):
+  - test macOS (orario di avvio via `ps`, aree con tolleranza) e `smoke_summary.json` con percorsi relativi e scelte di
+    Jev;
+  - passo di consenso nei journey prima della prima osservazione (`settings.consent`, default `auto`, la catena
+    dell'audit, `source: "consent"`, mai un'azione del pilota né Jev; niente click su una pagina di checkout; un click
+    che porta su un altro sito rende l'esito non valutabile, `consent_left_shop`), esposto in servizio, MCP, CLI e smoke;
+  - scroll del crawler verificato prima di cercare un controllo (istantaneo, sull'elemento stesso anche in uno
+    scroller interno, diagnostica `scroll` nei probe), dopo il CTA del carrello non trovato su mobile;
+  - above the fold = centro dell'elemento nella prima schermata (`checks.v2`);
+  - la rotella di `browser.py` scorre anche su mobile (verificato, fissato da un test, nessuna modifica).
+  - Revisione verificata in tre giri (20 rilievi confermati da due verificatori e corretti), poi gate completo.
 
 ## Da fare (all'utente)
 1. Prova live con la chiave TypeSafe in locale: `uv run python scripts/smoke_engagement.py` (fixture locale) e
